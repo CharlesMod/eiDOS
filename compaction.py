@@ -17,7 +17,7 @@ from memory import (
     append_observation,
 )
 from llm import complete
-from prompts import COMPACTION_SYSTEM, COMPACTION_USER
+from prompts import COMPACTION_SYSTEM, COMPACTION_USER, COMPACTION_PERSONALITY_CLAUSE
 
 logger = logging.getLogger("kairos.compaction")
 
@@ -33,7 +33,7 @@ def should_compact(config: Config, ticks_since_last: int) -> bool:
     return False
 
 
-def compact(config: Config) -> None:
+def compact(config: Config, persona: dict = None) -> None:
     """Run a compaction pass: snapshot memory, call LLM, atomic rewrite.
 
     Reads all recent observations (with a generous budget for compaction)
@@ -66,8 +66,15 @@ def compact(config: Config) -> None:
     # Format observations for the prompt
     obs_text = _format_observations(observations)
 
+    # Build system prompt with optional personality clause
+    system_content = COMPACTION_SYSTEM
+    if persona and config.persona_enabled:
+        traits = ", ".join(persona.get("traits", [])) or "developing"
+        mood = persona.get("mood", "neutral")
+        system_content += COMPACTION_PERSONALITY_CLAUSE.format(traits=traits, mood=mood)
+
     messages = [
-        {"role": "system", "content": COMPACTION_SYSTEM},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": COMPACTION_USER.format(
             memory=current_memory or "(empty — first compaction)",
             observations=obs_text or "(no observations)",
@@ -85,7 +92,7 @@ def compact(config: Config) -> None:
                        total_chars, config.compaction_context_max_chars)
         _log_compaction_overrun(config, total_chars)
 
-    new_memory = complete(messages, config, temperature=0.3, max_tokens=1024)
+    new_memory = complete(messages, config, temperature=0.3, max_tokens=config.compaction_max_tokens)
 
     # Some models occasionally return empty content for chat completions.
     # Keep at least the existing memory to avoid destructive compaction.

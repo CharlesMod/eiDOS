@@ -61,6 +61,13 @@ Produce a new memory document that:
 
 Output ONLY the new memory content. No preamble, no explanation, no markdown fences."""
 
+COMPACTION_PERSONALITY_CLAUSE = """
+
+The agent's personality traits are: {traits}. Its current mood is: {mood}.
+When writing the memory, maintain a concise but slightly personal voice
+that reflects these traits. Keep it professional and useful — personality
+is seasoning, not the meal."""
+
 COMPACTION_USER = """\
 ## Current working memory
 {memory}

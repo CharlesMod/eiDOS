@@ -2,12 +2,33 @@
 
 import json
 import logging
+import time
 import urllib.request
 import urllib.error
 
 from config import Config
 
 logger = logging.getLogger("kairos.llm")
+
+
+def _log_interaction(config: Config, messages, payload, response_data, content, elapsed_s):
+    """Append request/response summary to workspace/llm_log.jsonl."""
+    try:
+        entry = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "elapsed_s": round(elapsed_s, 2),
+            "model": payload.get("model", ""),
+            "temperature": payload.get("temperature"),
+            "max_tokens": payload.get("max_tokens"),
+            "messages": [{"role": m["role"], "content": m["content"][:500]} for m in messages],
+            "response_content": (content or "")[:1000],
+            "usage": response_data.get("usage", {}),
+        }
+        log_path = config.workspace / "llm_log.jsonl"
+        with open(log_path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
 
 
 class LLMError(Exception):
@@ -54,6 +75,7 @@ def complete(
         method="POST",
     )
 
+    start = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=config.llm_request_timeout_s) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -70,6 +92,8 @@ def complete(
         raise LLMError(f"Request timed out after {config.llm_request_timeout_s}s")
     except OSError as e:
         raise LLMError(f"Network error: {e}") from e
+
+    elapsed = time.monotonic() - start
 
     try:
         msg = data["choices"][0]["message"]
@@ -91,12 +115,13 @@ def complete(
         if not content and reasoning:
             logger.warning("llm returned empty content but %d chars of reasoning — "
                            "max_tokens likely exhausted during thinking", len(reasoning))
-            # Return the reasoning so the caller has *something* to work with
+            _log_interaction(config, messages, payload, data, reasoning, elapsed)
             return reasoning
 
         if not content:
             raise LLMError(f"Empty response content. Full response: {data}")
 
+        _log_interaction(config, messages, payload, data, content, elapsed)
         return content
     except (KeyError, IndexError) as e:
         raise LLMError(f"Unexpected response format: {data}") from e

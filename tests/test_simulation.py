@@ -28,6 +28,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
 
+# --- Live mode detection ---
+LIVE = os.environ.get("KAIROS_TEST_LIVE") == "1"
+if LIVE:
+    from config import load_config as _load_config
+    from llm import complete as _real_complete
+    _live_config = _load_config("config.toml")
+
 from config import Config
 from context import assemble_context
 from compaction import should_compact, compact
@@ -86,18 +93,24 @@ def _sandboxed_config(tmp_dir: str, **overrides) -> Config:
 class _ScriptedLLM:
     """A mock LLM that returns pre-scripted responses in order, then cycles.
 
-    Optionally injected side-effects per call index (raise, delay, etc.).
+    In --live mode, ignores scripted responses and calls the real LM Studio
+    endpoint.  Tests with side_effects or mock_only auto-skip in live mode.
     """
 
-    def __init__(self, responses, *, side_effects=None):
+    def __init__(self, responses, *, side_effects=None, mock_only=False):
         """
         responses:    list[str]  — raw text the LLM would return
         side_effects: dict[int, Exception]  — index→exception to raise
+        mock_only:    bool — if True + LIVE, skip the test
         """
         self._responses = responses
         self._side_effects = side_effects or {}
+        self._live = LIVE
         self.call_count = 0
         self.call_log = []          # [(messages, kwargs)]
+
+        if self._live and (self._side_effects or mock_only):
+            pytest.skip("Mock-only test — skipped in live mode")
 
     def __call__(self, messages, config, **kwargs):
         idx = self.call_count
@@ -106,6 +119,14 @@ class _ScriptedLLM:
 
         if idx in self._side_effects:
             raise self._side_effects[idx]
+
+        if self._live:
+            start = time.monotonic()
+            resp = _real_complete(messages, config, **kwargs)
+            elapsed = time.monotonic() - start
+            print(f"  [llm #{self.call_count}] {elapsed:.1f}s {len(resp)}ch",
+                  flush=True)
+            return resp
 
         return self._responses[idx % len(self._responses)]
 
@@ -271,6 +292,13 @@ class SimulationTestBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="kairos_sim_")
         self.config = _sandboxed_config(self.tmp)
+        self.live = LIVE
+
+        if self.live:
+            # Copy LLM settings from real config so calls hit LM Studio
+            for attr in vars(_live_config):
+                if attr.startswith('llm_'):
+                    setattr(self.config, attr, getattr(_live_config, attr))
 
         # Write default goal + memory
         self.config.goal_path.write_text("Test goal: do autonomous work.")
@@ -451,7 +479,7 @@ class TestLLMTimeoutAndErrors(SimulationTestBase):
             "",                                          # empty
             "   \n\n  ",                                # whitespace only
         ]
-        llm = _ScriptedLLM(garbage)
+        llm = _ScriptedLLM(garbage, mock_only=True)
 
         results = _run_ticks(self.config, llm, 5)
 
@@ -500,7 +528,7 @@ class TestLoopDetection(SimulationTestBase):
     def test_loop_detected_after_repeated_calls(self):
         """Same tool+args repeated 3x triggers loop detection."""
         same_resp = _make_tool_response("remember", {"note": "stuck"})
-        llm = _ScriptedLLM([same_resp])
+        llm = _ScriptedLLM([same_resp], mock_only=True)
 
         results = _run_ticks(self.config, llm, 5)
 
@@ -515,7 +543,7 @@ class TestLoopDetection(SimulationTestBase):
     def test_loop_warning_in_context(self):
         """When loop is detected, context includes the warning."""
         same_resp = _make_tool_response("remember", {"note": "stuck"})
-        llm = _ScriptedLLM([same_resp])
+        llm = _ScriptedLLM([same_resp], mock_only=True)
 
         results = _run_ticks(self.config, llm, 5)
 
@@ -532,7 +560,7 @@ class TestLoopDetection(SimulationTestBase):
             _make_tool_response("remember", {"note": f"note_{i}"})
             for i in range(10)
         ]
-        llm = _ScriptedLLM(responses)
+        llm = _ScriptedLLM(responses, mock_only=True)
 
         results = _run_ticks(self.config, llm, 10)
 
@@ -552,7 +580,7 @@ class TestLoopDetection(SimulationTestBase):
             _make_tool_response("remember", {"note": "new idea"}),
             _make_tool_response("remember", {"note": "another"}),
         ]
-        llm = _ScriptedLLM(responses)
+        llm = _ScriptedLLM(responses, mock_only=True)
         results = _run_ticks(self.config, llm, 7)
 
         # Tick 4 detects loop
@@ -565,7 +593,7 @@ class TestLoopDetection(SimulationTestBase):
     def test_parse_errors_counted_for_loop(self):
         """Multiple parse errors in a row should also trigger loop."""
         garbage = "Just thinking out loud, no tool call."
-        llm = _ScriptedLLM([garbage])
+        llm = _ScriptedLLM([garbage], mock_only=True)
 
         results = _run_ticks(self.config, llm, 5)
 
@@ -781,14 +809,17 @@ class TestMediumSimulation(SimulationTestBase):
         self.config.compaction_tick_threshold = 50
         self.config.obs_max_lines = 200
 
+        n_ticks = 30 if self.live else 720
+
         responses = [
             _make_tool_response("remember", {"note": f"hour_tick_{i}"})
-            for i in range(720)
+            for i in range(n_ticks)
         ]
         mock_compact_llm = MagicMock(
             return_value="# Compacted\nProgress summary after many ticks.")
 
         llm = _ScriptedLLM(responses)
+        compact_llm = llm if self.live else mock_compact_llm
 
         # We run ticks manually to inject the compact mock
         goal_start = time.time()
@@ -796,12 +827,12 @@ class TestMediumSimulation(SimulationTestBase):
         ticks_since_compaction = 0
         compaction_count = 0
 
-        for tick in range(1, 721):
+        for tick in range(1, n_ticks + 1):
             loop_detected = (len(recent_hashes) >= self.config.loop_detect_window
                              and len(set(recent_hashes)) == 1)
 
             if should_compact(self.config, ticks_since_compaction):
-                with patch("compaction.complete", mock_compact_llm):
+                with patch("compaction.complete", compact_llm):
                     compact(self.config)
                 ticks_since_compaction = 0
                 compaction_count += 1
@@ -830,13 +861,13 @@ class TestMediumSimulation(SimulationTestBase):
 
             ticks_since_compaction += 1
 
-        self.assertGreater(compaction_count, 0,
-                           "Compaction should fire during 720-tick run")
+        if not self.live:
+            self.assertGreater(compaction_count, 0,
+                               "Compaction should fire during 720-tick run")
         # Observations file should not have blown up
         lines = count_observation_lines(self.config)
         self.assertLessEqual(lines, self.config.obs_max_lines + 100)
-        # LLM was called 720 times for ticks + compaction calls
-        self.assertEqual(llm.call_count, 720)
+        self.assertEqual(llm.call_count, n_ticks)
 
 
 class TestLongSimulation(SimulationTestBase):
@@ -848,9 +879,9 @@ class TestLongSimulation(SimulationTestBase):
     @pytest.mark.slow
     def test_day_simulation_stability(self):
         """Agent runs for a simulated day without crashing or memory leaks."""
-        n_ticks = 17280
+        n_ticks = 30 if self.live else 17280
         self.config.compaction_token_threshold = 5000
-        self.config.compaction_tick_threshold = 100
+        self.config.compaction_tick_threshold = 100 if not self.live else 15
         self.config.obs_max_lines = 500
         self.config.context_obs_max_count = 30
 
@@ -863,6 +894,7 @@ class TestLongSimulation(SimulationTestBase):
 
         mock_compact = MagicMock(
             return_value="# Compacted\nDay-long operation summary.")
+        compact_llm = llm if self.live else mock_compact
 
         goal_start = time.time() - 86400  # pretend we started 24h ago
         recent_hashes = collections.deque(maxlen=self.config.loop_detect_window)
@@ -875,7 +907,7 @@ class TestLongSimulation(SimulationTestBase):
                              and len(set(recent_hashes)) == 1)
 
             if should_compact(self.config, ticks_since_compaction):
-                with patch("compaction.complete", mock_compact):
+                with patch("compaction.complete", compact_llm):
                     compact(self.config)
                 ticks_since_compaction = 0
                 compaction_count += 1
@@ -906,10 +938,11 @@ class TestLongSimulation(SimulationTestBase):
             ticks_since_compaction += 1
 
         # Invariant checks
-        self.assertGreater(compaction_count, 10,
-                           "Many compactions expected over 17280 ticks")
-        self.assertGreater(rotation_count, 0,
-                           "At least one rotation expected")
+        if not self.live:
+            self.assertGreater(compaction_count, 10,
+                               "Many compactions expected over 17280 ticks")
+            self.assertGreater(rotation_count, 0,
+                               "At least one rotation expected")
         lines = count_observation_lines(self.config)
         self.assertLessEqual(lines, self.config.obs_max_lines + 200,
                              "Live observations should stay bounded")
@@ -922,9 +955,9 @@ class TestLongSimulation(SimulationTestBase):
     @pytest.mark.slow
     def test_multi_day_file_count(self):
         """3 days of operation — verify file counts stay manageable."""
-        n_ticks = 51840  # 3 days at 5s ticks
+        n_ticks = 30 if self.live else 51840  # 3 days at 5s ticks
         self.config.compaction_token_threshold = 8000
-        self.config.compaction_tick_threshold = 200
+        self.config.compaction_tick_threshold = 200 if not self.live else 15
         self.config.obs_max_lines = 1000
 
         base_responses = [
@@ -934,13 +967,14 @@ class TestLongSimulation(SimulationTestBase):
         llm = _ScriptedLLM(base_responses)
         mock_compact = MagicMock(
             return_value="# Memory\n3-day summary.")
+        compact_llm = llm if self.live else mock_compact
 
         goal_start = time.time() - 3 * 86400
         ticks_since_compaction = 0
 
         for tick in range(1, n_ticks + 1):
             if should_compact(self.config, ticks_since_compaction):
-                with patch("compaction.complete", mock_compact):
+                with patch("compaction.complete", compact_llm):
                     compact(self.config)
                 ticks_since_compaction = 0
 
@@ -1054,7 +1088,7 @@ class TestGoalCompletion(SimulationTestBase):
                                 {"summary": "done!", "evidence": "file created"}),
             _make_tool_response("remember", {"note": "should not reach"}),
         ]
-        llm = _ScriptedLLM(responses)
+        llm = _ScriptedLLM(responses, mock_only=True)
 
         results = _run_ticks(self.config, llm, 4)
 
@@ -1064,7 +1098,7 @@ class TestGoalCompletion(SimulationTestBase):
 
     def test_goal_complete_missing_summary(self):
         resp = _make_tool_response("goal_complete", {"evidence": "no summary"})
-        llm = _ScriptedLLM([resp])
+        llm = _ScriptedLLM([resp], mock_only=True)
         results = _run_ticks(self.config, llm, 1)
         self.assertFalse(results[0]["result"].success)
 
@@ -1192,7 +1226,7 @@ class TestAdversarialLLMResponses(SimulationTestBase):
             _make_tool_response("bash", {"cmd": "; shutdown"}),
             _make_tool_response("bash", {"cmd": "echo ok && rm -rf /"}),
         ]
-        llm = _ScriptedLLM(dangerous_responses)
+        llm = _ScriptedLLM(dangerous_responses, mock_only=True)
 
         results = _run_ticks(self.config, llm, 30)
 
@@ -1233,7 +1267,7 @@ class TestAdversarialLLMResponses(SimulationTestBase):
                 responses.append(_make_tool_response(
                     "remember", {"note": f"safe_{i}"}))
 
-        llm = _ScriptedLLM(responses)
+        llm = _ScriptedLLM(responses, mock_only=True)
         results = _run_ticks(self.config, llm, 100)
 
         blocked = [r for r in results
@@ -1448,7 +1482,7 @@ class TestAskSupervisor(SimulationTestBase):
     def test_question_logged(self):
         resp = _make_tool_response("ask_supervisor",
                                     {"question": "Should I continue?"})
-        llm = _ScriptedLLM([resp])
+        llm = _ScriptedLLM([resp], mock_only=True)
         results = _run_ticks(self.config, llm, 1)
 
         self.assertTrue(results[0]["result"].success)
@@ -1464,7 +1498,7 @@ class TestAskSupervisor(SimulationTestBase):
                                 {"question": f"Question {i}?"})
             for i in range(5)
         ]
-        llm = _ScriptedLLM(responses)
+        llm = _ScriptedLLM(responses, mock_only=True)
         _run_ticks(self.config, llm, 5)
 
         q_path = self.config.workspace / "pending_questions.jsonl"
@@ -1483,7 +1517,7 @@ class TestUnknownTools(SimulationTestBase):
     def test_unknown_tool_handled(self):
         resp = _make_tool_response("deploy_nuclear_missile",
                                     {"target": "mars"})
-        llm = _ScriptedLLM([resp])
+        llm = _ScriptedLLM([resp], mock_only=True)
         results = _run_ticks(self.config, llm, 1)
 
         self.assertFalse(results[0]["result"].success)
@@ -1495,7 +1529,7 @@ class TestUnknownTools(SimulationTestBase):
             _make_tool_response("hack_pentagon", {"level": "max"}),
             _make_tool_response("remember", {"note": "also valid"}),
         ]
-        llm = _ScriptedLLM(responses)
+        llm = _ScriptedLLM(responses, mock_only=True)
         results = _run_ticks(self.config, llm, 3)
 
         self.assertTrue(results[0]["result"].success)

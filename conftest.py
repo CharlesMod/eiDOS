@@ -1,13 +1,33 @@
-"""Pytest configuration — custom markers and hooks."""
+"""Pytest configuration — custom markers, hooks, and --live flag."""
 
+import logging
+import os
 import time
 
 _session_start = None
 _RPI4_MULTIPLIER = 7.0
 
 
+def pytest_addoption(parser):
+    parser.addoption("--live", action="store_true", default=False,
+                     help="Run tests against real LM Studio endpoint")
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: long-running simulation tests (deselect with -m 'not slow')")
+    config.addinivalue_line("markers", "live: tests that call real LM Studio endpoint (deselect with -m 'not live')")
+    if config.getoption("--live", default=False):
+        os.environ["KAIROS_TEST_LIVE"] = "1"
+        # Show LLM token usage in terminal
+        llm_logger = logging.getLogger("kairos.llm")
+        llm_logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("  %(name)s %(message)s"))
+        llm_logger.addHandler(handler)
+
+
+def pytest_unconfigure(config):
+    os.environ.pop("KAIROS_TEST_LIVE", None)
 
 
 def pytest_sessionstart(session):

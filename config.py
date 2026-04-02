@@ -35,6 +35,7 @@ class Config:
     # Compaction
     compaction_token_threshold: int = 8000
     compaction_tick_threshold: int = 20
+    compaction_max_tokens: int = 4096
 
     # Output
     output_truncation_chars: int = 2000
@@ -81,6 +82,9 @@ class Config:
 
     # Paths
     workspace_dir: str = "workspace"
+
+    # Persona
+    persona_enabled: bool = True
 
     # Mock mode
     mock_mode: bool = False
@@ -146,6 +150,7 @@ def load_config(path: str = "config.toml") -> Config:
         comp = data.get("compaction", {})
         config.compaction_token_threshold = comp.get("token_threshold", config.compaction_token_threshold)
         config.compaction_tick_threshold = comp.get("tick_threshold", config.compaction_tick_threshold)
+        config.compaction_max_tokens = comp.get("max_tokens", config.compaction_max_tokens)
 
         out = data.get("output", {})
         config.output_truncation_chars = out.get("truncation_chars", config.output_truncation_chars)
@@ -178,6 +183,9 @@ def load_config(path: str = "config.toml") -> Config:
         config.compaction_obs_max_chars = comp_ctx.get("obs_max_chars", config.compaction_obs_max_chars)
         config.compaction_memory_max_chars = comp_ctx.get("memory_max_chars", config.compaction_memory_max_chars)
         config.compaction_context_max_chars = comp_ctx.get("context_max_chars", config.compaction_context_max_chars)
+
+        persona = data.get("persona", {})
+        config.persona_enabled = persona.get("enabled", config.persona_enabled)
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

@@ -26,6 +26,19 @@ from memory import (
     write_memory,
 )
 from parser import parse_tool_call
+from persona import (
+    load_persona,
+    save_persona,
+    record_tick,
+    record_compaction,
+    record_goal_complete,
+    record_error_recovery,
+    compute_traits,
+    compute_mood,
+    check_titles,
+    format_prefix,
+    format_status_line,
+)
 from rotation import rotate_if_needed, cleanup_old_archives
 from safety import check_ram, kill_child_processes
 from session import human_present, take_workspace_snapshot, workspace_diff
@@ -73,8 +86,23 @@ def main():
     # Crash recovery
     recover(config)
 
+    # Load persona
+    persona = None
+    if config.persona_enabled:
+        persona = load_persona(config.workspace)
+        compute_traits(persona)
+        pfx = format_prefix(persona)
+        print(f"{pfx} Online. {format_status_line(persona)}")
+
     # Main loop
-    run_loop(config)
+    run_loop(config, persona)
+
+
+def _pfx(persona, config):
+    """Return persona prefix or fallback."""
+    if config.persona_enabled and persona:
+        return format_prefix(persona)
+    return "[kairos]"
 
 
 def recover(config: Config):
@@ -118,7 +146,7 @@ def recover(config: Config):
         print(f"[kairos] Cleaned {deleted} old archive(s)")
 
 
-def run_loop(config: Config):
+def run_loop(config: Config, persona=None):
     """Main tick loop with session detection and compaction."""
     global _shutdown_requested
 
@@ -129,15 +157,19 @@ def run_loop(config: Config):
     standby = False
     standby_snapshot = None
     goal_complete = False
+    last_tick_failed = False
+    ticks_since_goal_complete = None  # None = never
+    loop_start = time.monotonic()
 
-    print(f"[kairos] Starting tick loop (interval={config.tick_interval_s}s, mock={config.mock_mode})")
+    pfx = _pfx(persona, config)
+    print(f"{pfx} Starting tick loop (interval={config.tick_interval_s}s, mock={config.mock_mode})")
 
     while not _shutdown_requested and not goal_complete:
         # --- Session detection (skip in mock mode) ---
         if not config.mock_mode:
             if human_present():
                 if not standby:
-                    print("[kairos] Human detected — entering standby")
+                    print(f"{pfx} Human detected — entering standby")
                     standby_snapshot = take_workspace_snapshot(config)
                     append_observation(config, {
                         "tick": tick_number,
@@ -150,7 +182,7 @@ def run_loop(config: Config):
                 continue
             elif standby:
                 # Human left — resume after grace period
-                print(f"[kairos] Human gone — resuming in {config.grace_period_s}s")
+                print(f"{pfx} Human gone — resuming in {config.grace_period_s}s")
                 time.sleep(config.grace_period_s)
                 standby = False
 
@@ -164,7 +196,7 @@ def run_loop(config: Config):
                             "success": True,
                             "output": diff,
                         })
-                        print(f"[kairos] Workspace changes detected on resume")
+                        print(f"{pfx} Workspace changes detected on resume")
                     standby_snapshot = None
 
         # --- Check for goal ---
@@ -178,13 +210,16 @@ def run_loop(config: Config):
 
         # --- Compaction check ---
         if should_compact(config, ticks_since_compaction):
-            print(f"[kairos] Running compaction (dream)...")
+            print(f"{pfx} Dreaming... consolidating memories.")
             try:
-                compact(config)
+                compact(config, persona=persona)
                 ticks_since_compaction = 0
-                print("[kairos] Compaction complete")
+                if persona and config.persona_enabled:
+                    record_compaction(persona)
+                    pfx = _pfx(persona, config)
+                print(f"{pfx} Memories consolidated.")
             except LLMError as e:
-                print(f"[kairos] Compaction failed: {e}")
+                print(f"{pfx} Compaction failed: {e}")
                 append_observation(config, {
                     "tick": tick_number,
                     "tool": "dream",
@@ -202,7 +237,7 @@ def run_loop(config: Config):
                 "success": False,
                 "output": f"RAM pressure ({ram_pct:.0f}%), killed {killed} child process(es)",
             })
-            print(f"[kairos] RAM pressure: {ram_pct:.0f}%, killed children")
+            print(f"{pfx} RAM pressure: {ram_pct:.0f}%, killed children")
 
         # --- Loop detection ---
         loop_detected = False
@@ -224,7 +259,7 @@ def run_loop(config: Config):
         # Log context size for monitoring
         ctx_chars = sum(len(m["content"]) for m in messages)
         ctx_tokens_est = int(ctx_chars / config.chars_per_token)
-        print(f"[kairos] Tick {tick_number}: ctx={ctx_chars} chars ~{ctx_tokens_est} tokens")
+        print(f"{pfx} Tick {tick_number}: ctx={ctx_chars} chars ~{ctx_tokens_est} tokens")
 
         # --- Mock mode: print context ---
         if config.mock_mode:
@@ -241,7 +276,7 @@ def run_loop(config: Config):
         try:
             response = complete(messages, config)
         except LLMError as e:
-            print(f"[kairos] LLM error on tick {tick_number}: {e}")
+            print(f"{pfx} LLM error on tick {tick_number}: {e}")
             append_observation(config, {
                 "tick": tick_number,
                 "tool": "llm_error",
@@ -266,9 +301,12 @@ def run_loop(config: Config):
                 "success": False,
                 "output": f"No valid tool call in response. Raw: {response[:500]}",
             })
-            print(f"[kairos] Tick {tick_number}: no valid tool call parsed")
+            print(f"{pfx} Tick {tick_number}: no valid tool call parsed")
             # Hash as empty for loop detection
             recent_hashes.append("__no_tool__")
+            if persona and config.persona_enabled:
+                record_tick(persona, None, False)
+                last_tick_failed = True
         else:
             # --- Execute tool ---
             result = execute_tool(call, config)
@@ -288,6 +326,14 @@ def run_loop(config: Config):
                 print(f"\n--- TOOL RESULT ({call.tool} | {status}) ---")
                 print(result.output[:1000])
 
+            # --- Persona update ---
+            if persona and config.persona_enabled:
+                record_tick(persona, call.tool, result.success)
+                if result.success and last_tick_failed:
+                    record_error_recovery(persona)
+                last_tick_failed = not result.success
+                pfx = _pfx(persona, config)
+
             # --- Loop detection hash ---
             call_hash = hashlib.md5(
                 json.dumps({"tool": call.tool, "args": call.args}, sort_keys=True).encode()
@@ -296,7 +342,24 @@ def run_loop(config: Config):
 
             # --- Goal complete check ---
             if call.tool == "goal_complete" and result.success:
-                print(f"[kairos] Goal declared complete: {call.args.get('summary', '')}")
+                summary = call.args.get('summary', '')
+                if persona and config.persona_enabled:
+                    old_level = persona["level"]
+                    record_goal_complete(persona, summary)
+                    compute_traits(persona)
+                    new_titles = check_titles(persona)
+                    ticks_since_goal_complete = 0
+                    compute_mood(persona, ticks_since_goal=0)
+                    pfx = _pfx(persona, config)
+                    lvl_msg = ""
+                    if persona["level"] > old_level:
+                        lvl_msg = f", now Lv.{persona['level']}!"
+                    print(f"{pfx} Goal achieved! \"{summary}\" — XP +100{lvl_msg}")
+                    for t in new_titles:
+                        print(f"{pfx} Earned title: {t}")
+                    save_persona(config.workspace, persona)
+                else:
+                    print(f"[kairos] Goal declared complete: {summary}")
                 append_observation(config, {
                     "tick": tick_number,
                     "tool": "system",
@@ -309,6 +372,18 @@ def run_loop(config: Config):
         if tick_number % 50 == 0:
             rotate_if_needed(config)
 
+        # --- Persona periodic save (every 10 ticks) ---
+        if persona and config.persona_enabled and tick_number % 10 == 0:
+            compute_traits(persona)
+            check_titles(persona)
+            persona["uptime_total_s"] = persona.get("uptime_total_s", 0) + int(time.monotonic() - loop_start)
+            save_persona(config.workspace, persona)
+
+        # --- Mood update ---
+        if persona and config.persona_enabled:
+            if ticks_since_goal_complete is not None:
+                ticks_since_goal_complete += 1
+
         # --- Sleep ---
         tick_number += 1
         ticks_since_compaction += 1
@@ -317,7 +392,15 @@ def run_loop(config: Config):
             time.sleep(config.tick_interval_s)
 
     # --- Shutdown ---
-    print("[kairos] Shutting down...")
+    if persona and config.persona_enabled:
+        persona["uptime_total_s"] = persona.get("uptime_total_s", 0) + int(time.monotonic() - loop_start)
+        compute_traits(persona)
+        check_titles(persona)
+        save_persona(config.workspace, persona)
+        pfx = _pfx(persona, config)
+        print(f"{pfx} Shutting down. See you next time.")
+    else:
+        print("[kairos] Shutting down...")
     append_observation(config, {
         "tick": tick_number,
         "tool": "system",

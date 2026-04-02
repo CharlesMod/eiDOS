@@ -16,6 +16,7 @@ loop_detect_window = 3
 [compaction]
 token_threshold = 8000
 tick_threshold = 20
+max_tokens = 4096             # thinking models need headroom for reasoning + content
 # Generous budgets for distillation — compaction needs to see everything
 obs_max_chars = 16000       # observation chars fed to compaction LLM call
 memory_max_chars = 6000     # memory chars fed to compaction LLM call
@@ -57,6 +58,9 @@ env_max_chars = 800
 interventions_max_chars = 2000
 max_total_chars = 24000     # total tick context budget (~6800 tokens)
 chars_per_token = 3.5       # rough estimate for Qwen3
+
+[persona]
+enabled = true
 
 [paths]
 workspace = "workspace"
