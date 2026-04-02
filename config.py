@@ -1,0 +1,192 @@
+"""Configuration loading for Kairos. TOML config + env var overrides."""
+
+import dataclasses
+import os
+import sys
+from pathlib import Path
+from typing import List
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
+
+
+@dataclasses.dataclass
+class Config:
+    # LLM
+    llm_url: str = "http://127.0.0.1:8080"
+    llm_model: str = "local"
+    llm_temperature: float = 0.6
+    llm_max_tokens: int = 2048
+    llm_request_timeout_s: int = 300
+    llm_top_p: float = 0.95
+    llm_top_k: int = 20
+    llm_min_p: float = 0.0
+    llm_presence_penalty: float = 1.5
+
+    # Tick
+    tick_interval_s: int = 300
+    loop_detect_window: int = 3
+
+    # Compaction
+    compaction_token_threshold: int = 8000
+    compaction_tick_threshold: int = 20
+
+    # Output
+    output_truncation_chars: int = 2000
+
+    # Safety
+    cmd_timeout_s: int = 120
+    disk_min_gb: float = 1.0
+    ram_max_pct: float = 85.0
+    protected_patterns: List[str] = dataclasses.field(default_factory=lambda: [
+        r"rm\s+-rf\s+/",
+        r"systemctl\s+(stop|disable|kill)\s+.*kairos",
+        r"pkill.*kairos",
+        r"kill.*kairos",
+        r"shutdown",
+        r"reboot",
+        r"halt",
+        r"mkfs",
+        r"dd\s+.*of=/dev/",
+    ])
+
+    # Session
+    grace_period_s: int = 60
+
+    # Rotation
+    obs_max_lines: int = 5000
+    obs_archive_days: int = 14
+
+    # Context budgets (chars) — per-section limits for normal ticks
+    context_obs_max_chars: int = 4000
+    context_obs_max_count: int = 20
+    context_goal_max_chars: int = 2000
+    context_memory_max_chars: int = 4000
+    context_env_max_chars: int = 800
+    context_interventions_max_chars: int = 2000
+    context_max_total_chars: int = 24000  # ~6800 tokens total input budget
+
+    # Compaction context budgets (chars) — generous for distillation
+    compaction_obs_max_chars: int = 16000
+    compaction_memory_max_chars: int = 6000
+    compaction_context_max_chars: int = 40000  # ~11400 tokens — room for full distillation
+
+    # Token estimation
+    chars_per_token: float = 3.5  # rough estimate for Qwen3
+
+    # Paths
+    workspace_dir: str = "workspace"
+
+    # Mock mode
+    mock_mode: bool = False
+
+    @property
+    def workspace(self) -> Path:
+        return Path(self.workspace_dir)
+
+    @property
+    def goal_path(self) -> Path:
+        return self.workspace / "goal.md"
+
+    @property
+    def memory_path(self) -> Path:
+        return self.workspace / "memory.md"
+
+    @property
+    def observations_path(self) -> Path:
+        return self.workspace / "observations.jsonl"
+
+    @property
+    def interventions_dir(self) -> Path:
+        return self.workspace / "interventions"
+
+    @property
+    def snapshots_dir(self) -> Path:
+        return self.workspace / "snapshots"
+
+    @property
+    def outputs_dir(self) -> Path:
+        return self.workspace / "outputs"
+
+    @property
+    def jobs_path(self) -> Path:
+        return self.workspace / "jobs.json"
+
+
+def load_config(path: str = "config.toml") -> Config:
+    """Load config from TOML file, then apply env var overrides."""
+    config = Config()
+
+    # Load TOML if it exists
+    config_path = Path(path)
+    if config_path.exists():
+        with open(config_path, "rb") as f:
+            data = tomllib.load(f)
+
+        llm = data.get("llm", {})
+        config.llm_url = llm.get("url", config.llm_url)
+        config.llm_model = llm.get("model", config.llm_model)
+        config.llm_temperature = llm.get("temperature", config.llm_temperature)
+        config.llm_max_tokens = llm.get("max_tokens", config.llm_max_tokens)
+        config.llm_request_timeout_s = llm.get("request_timeout_s", config.llm_request_timeout_s)
+        config.llm_top_p = llm.get("top_p", config.llm_top_p)
+        config.llm_top_k = llm.get("top_k", config.llm_top_k)
+        config.llm_min_p = llm.get("min_p", config.llm_min_p)
+        config.llm_presence_penalty = llm.get("presence_penalty", config.llm_presence_penalty)
+
+        tick = data.get("tick", {})
+        config.tick_interval_s = tick.get("interval_s", config.tick_interval_s)
+        config.loop_detect_window = tick.get("loop_detect_window", config.loop_detect_window)
+
+        comp = data.get("compaction", {})
+        config.compaction_token_threshold = comp.get("token_threshold", config.compaction_token_threshold)
+        config.compaction_tick_threshold = comp.get("tick_threshold", config.compaction_tick_threshold)
+
+        out = data.get("output", {})
+        config.output_truncation_chars = out.get("truncation_chars", config.output_truncation_chars)
+
+        safety = data.get("safety", {})
+        config.cmd_timeout_s = safety.get("cmd_timeout_s", config.cmd_timeout_s)
+        config.disk_min_gb = safety.get("disk_min_gb", config.disk_min_gb)
+        config.ram_max_pct = safety.get("ram_max_pct", config.ram_max_pct)
+        if "protected_patterns" in safety:
+            config.protected_patterns = safety["protected_patterns"]
+
+        sess = data.get("session", {})
+        config.grace_period_s = sess.get("grace_period_s", config.grace_period_s)
+
+        rot = data.get("rotation", {})
+        config.obs_max_lines = rot.get("obs_max_lines", config.obs_max_lines)
+        config.obs_archive_days = rot.get("archive_days", config.obs_archive_days)
+
+        ctx = data.get("context", {})
+        config.context_obs_max_chars = ctx.get("obs_max_chars", config.context_obs_max_chars)
+        config.context_obs_max_count = ctx.get("obs_max_count", config.context_obs_max_count)
+        config.context_goal_max_chars = ctx.get("goal_max_chars", config.context_goal_max_chars)
+        config.context_memory_max_chars = ctx.get("memory_max_chars", config.context_memory_max_chars)
+        config.context_env_max_chars = ctx.get("env_max_chars", config.context_env_max_chars)
+        config.context_interventions_max_chars = ctx.get("interventions_max_chars", config.context_interventions_max_chars)
+        config.context_max_total_chars = ctx.get("max_total_chars", config.context_max_total_chars)
+        config.chars_per_token = ctx.get("chars_per_token", config.chars_per_token)
+
+        comp_ctx = data.get("compaction", {})
+        config.compaction_obs_max_chars = comp_ctx.get("obs_max_chars", config.compaction_obs_max_chars)
+        config.compaction_memory_max_chars = comp_ctx.get("memory_max_chars", config.compaction_memory_max_chars)
+        config.compaction_context_max_chars = comp_ctx.get("context_max_chars", config.compaction_context_max_chars)
+
+        paths = data.get("paths", {})
+        config.workspace_dir = paths.get("workspace", config.workspace_dir)
+
+    # Env var overrides (highest precedence)
+    if url := os.environ.get("KAIROS_LLM_URL"):
+        config.llm_url = url
+    if os.environ.get("KAIROS_MOCK") == "1":
+        config.mock_mode = True
+        config.tick_interval_s = 5
+
+    return config
