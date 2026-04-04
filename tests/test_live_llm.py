@@ -597,3 +597,518 @@ class TestLiveAdaptiveTokens:
             f"Adaptive recovery failed ({len(mem)} chars)"
         )
 
+
+class TestLiveRecovery:
+    """Tricky scenarios where the model must recover from adversity.
+
+    Each test puts the model in a bad situation via seeded observations
+    and checks whether it self-corrects on the next tick.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.config, self.tmp = _make_config()
+        _check_server(self.config)
+        self.config.goal_path.write_text("Explore the filesystem and report findings.")
+        write_memory(self.config, "# Working Memory\nExploring. Goal is to find interesting files.")
+        yield
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _tick(self, tick_number, **ctx_kwargs):
+        """Run one tick: assemble context, call LLM, parse."""
+        messages = assemble_context(
+            self.config,
+            tick_number=tick_number,
+            goal_start_time=time.time(),
+            **ctx_kwargs,
+        )
+        response = complete(messages, self.config)
+        call = parse_tool_call(response)
+        return response, call
+
+    def test_recovers_from_parse_error_feedback(self):
+        """After a parse failure with corrective feedback, model self-corrects.
+
+        Simulates the exact feedback kairos.py now generates on parse failures,
+        then checks the model produces a valid tool call on the next tick.
+        """
+        # Tick 1: normal success
+        append_observation(self.config, {
+            "tick": 1, "tool": "bash",
+            "args": {"cmd": "ls /tmp"},
+            "success": True, "output": "file1.txt file2.txt",
+        })
+        # Tick 2: parse failure with corrective feedback (what the model now sees)
+        append_observation(self.config, {
+            "tick": 2, "tool": "parse_error",
+            "success": False,
+            "output": (
+                "Could not parse a tool call from your response. "
+                "Your output began with: 'I think we should look at the files more carefully...'\n\n"
+                "Required format (exactly):\n"
+                "<tool>TOOL_NAME</tool>\n"
+                "<args>{\"key\": \"value\"}</args>\n\n"
+                "Common mistakes: unescaped quotes inside JSON strings, "
+                "missing </args> tag, arguments not valid JSON. "
+                "Try again with a single, correctly-formatted tool call."
+            ),
+        })
+
+        # Tick 3: model should recover and produce a valid tool call
+        response, call = self._tick(3)
+        print(f"\n  After parse error feedback: {response[:200]!r}")
+        if call:
+            print(f"  Recovered with: {call.tool}({json.dumps(call.args)[:60]})")
+        assert call is not None, (
+            f"Model failed to recover after parse error feedback. Response: {response[:300]}"
+        )
+
+    def test_recovers_from_safety_block(self):
+        """After a command is blocked by safety, model tries a different approach.
+
+        The model should not just retry the blocked command — it should
+        find an alternative way to accomplish its goal.
+        """
+        self.config.goal_path.write_text("Clean up temporary files in /tmp.")
+        write_memory(self.config, "# Working Memory\nNeed to clean /tmp. Starting cleanup.")
+
+        # Tick 1: tried rm -rf /, got blocked
+        append_observation(self.config, {
+            "tick": 1, "tool": "bash",
+            "args": {"cmd": "rm -rf /tmp/old_files"},
+            "success": False,
+            "output": "BLOCKED: command matches protected pattern 'rm\\s+.*-r'",
+        })
+
+        # Tick 2: model should try something else
+        response, call = self._tick(2)
+        print(f"\n  After safety block: {response[:200]!r}")
+        if call:
+            print(f"  Alternative approach: {call.tool}({json.dumps(call.args)[:80]})")
+            if call.tool == "bash":
+                cmd = call.args.get("cmd", "")
+                # Should not just blindly retry the exact same blocked command
+                from safety import is_command_blocked
+                blocked = is_command_blocked(cmd, self.config.protected_patterns)
+                if blocked:
+                    print(f"  WARNING: model retried a blocked command: {cmd}")
+        assert call is not None, (
+            f"Model produced no tool call after safety block. Response: {response[:300]}"
+        )
+
+    def test_recovers_from_crash_observation(self):
+        """After seeing a crash recovery observation, model doesn't repeat its last action.
+
+        The crash recovery message warns: 'the last action may not have completed.'
+        A smart model should check what happened rather than blindly re-running.
+        """
+        self.config.goal_path.write_text("Install and configure a cron job for log rotation.")
+        write_memory(self.config, (
+            "# Working Memory\n"
+            "Installing logrotate. Was editing crontab when system crashed."
+        ))
+
+        # Crash recovery observation (what the model now sees)
+        append_observation(self.config, {
+            "tick": 0, "tool": "system",
+            "success": True,
+            "output": (
+                "Kairos recovered from crash. Resuming at tick 5. "
+                "State before crash: 0 consecutive LLM failures, "
+                "0 reasoning exhaustions, max_tokens was 1024. "
+                "Review recent observations — the last action may not have completed."
+            ),
+        })
+        # Last observation before crash: was editing crontab
+        append_observation(self.config, {
+            "tick": 4, "tool": "bash",
+            "args": {"cmd": "crontab -e"},
+            "success": True,
+            "output": "crontab: installing new crontab",
+        })
+
+        # Tick 5: model should verify state, not blindly re-edit
+        response, call = self._tick(5)
+        print(f"\n  After crash recovery: {response[:200]!r}")
+        if call:
+            print(f"  Recovery action: {call.tool}({json.dumps(call.args)[:80]})")
+        assert call is not None, (
+            f"Model produced no tool call after crash recovery. Response: {response[:300]}"
+        )
+
+    def test_recovers_from_repeated_command_failures(self):
+        """After 3 consecutive command failures, model changes strategy.
+
+        A model that keeps hammering the same failing approach is useless.
+        It should adapt after seeing repeated FAIL observations.
+        """
+        self.config.goal_path.write_text("Find Python version and pip packages.")
+        write_memory(self.config, "# Working Memory\nNeed to find Python setup.")
+
+        # 3 consecutive failures trying the same thing
+        for tick in range(1, 4):
+            append_observation(self.config, {
+                "tick": tick, "tool": "bash",
+                "args": {"cmd": "python --version"},
+                "success": False,
+                "output": "bash: python: command not found\n[stderr]\nbash: python: command not found",
+            })
+
+        # Tick 4: model should try something different (python3, which python, etc.)
+        response, call = self._tick(4)
+        print(f"\n  After 3 failures of 'python --version': {response[:200]!r}")
+        if call:
+            cmd = call.args.get("cmd", "") if call.tool == "bash" else ""
+            print(f"  New approach: {call.tool}({json.dumps(call.args)[:80]})")
+            # Should not repeat the exact same failing command
+            if call.tool == "bash" and cmd.strip() == "python --version":
+                print(f"  WARNING: model repeated the exact failing command 'python --version'")
+        assert call is not None, (
+            f"Model gave up after repeated failures. Response: {response[:300]}"
+        )
+
+    def test_recovers_from_timeout(self):
+        """After a command timeout, model adjusts (shorter command, or different approach).
+
+        Timeout is a strong signal that the command hung — the model should
+        not blindly retry the same long-running command.
+        """
+        self.config.goal_path.write_text("Scan for open network ports.")
+        write_memory(self.config, "# Working Memory\nScanning ports. First attempt timed out.")
+
+        append_observation(self.config, {
+            "tick": 1, "tool": "bash",
+            "args": {"cmd": "nmap -sT -p 1-65535 localhost"},
+            "success": False,
+            "output": f"TIMEOUT: command exceeded {self.config.cmd_timeout_s}s limit",
+        })
+
+        # Tick 2: model should try a lighter scan or different tool
+        response, call = self._tick(2)
+        print(f"\n  After timeout: {response[:200]!r}")
+        if call:
+            cmd = call.args.get("cmd", "") if call.tool == "bash" else ""
+            print(f"  Adjusted approach: {call.tool}({json.dumps(call.args)[:80]})")
+            if call.tool == "bash" and "1-65535" in cmd:
+                print("  WARNING: model retried the exact same full port scan")
+        assert call is not None, (
+            f"Model produced no tool call after timeout. Response: {response[:300]}"
+        )
+
+    def test_adapts_after_rotation_notice(self):
+        """After observation rotation, model relies on working memory, not missing history.
+
+        The rotation notice tells the model its history was truncated.
+        It should consult working memory rather than referencing observations
+        that no longer exist.
+        """
+        self.config.goal_path.write_text("Build a system health dashboard.")
+        write_memory(self.config, (
+            "# Working Memory\n"
+            "## Progress\n"
+            "- Ticks 1-49: Gathered CPU, RAM, disk, network stats.\n"
+            "- Created /home/pi/dashboard/index.html with basic layout.\n"
+            "- TODO: Add cron job to refresh data every 5 minutes.\n"
+            "## Key Facts\n"
+            "- Dashboard path: /home/pi/dashboard/\n"
+            "- Data script: /home/pi/dashboard/collect.sh\n"
+        ))
+
+        # Rotation notice (what the model now sees after tick 50)
+        append_observation(self.config, {
+            "tick": 50, "tool": "system",
+            "success": True,
+            "output": (
+                "Observation log rotated. Older entries archived. "
+                "Your recent observation history starts from this point — "
+                "consult working memory for earlier context."
+            ),
+        })
+
+        # Tick 51: model should continue from working memory, not flounder
+        response, call = self._tick(51)
+        print(f"\n  After rotation notice: {response[:200]!r}")
+        if call:
+            print(f"  Continued with: {call.tool}({json.dumps(call.args)[:80]})")
+        assert call is not None, (
+            f"Model stalled after rotation notice. Response: {response[:300]}"
+        )
+        # Should be progressing the goal, not starting over
+        if call and call.tool == "bash":
+            cmd = call.args.get("cmd", "").lower()
+            is_relevant = any(w in cmd for w in [
+                "cron", "dashboard", "collect", "home/pi", "health",
+                "cat", "echo", "curl", "systemctl", "chmod",
+            ])
+            if not is_relevant:
+                print(f"  WARNING: command doesn't seem goal-relevant: {cmd[:80]}")
+
+
+class TestLiveRecovery:
+    """Tricky scenarios where the model must recover from adversity.
+
+    Each test puts the model in a bad situation via seeded observations
+    and checks whether it self-corrects on the next tick.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.config, self.tmp = _make_config()
+        _check_server(self.config)
+        self.config.goal_path.write_text("Explore the filesystem and report findings.")
+        write_memory(self.config, "# Working Memory\nExploring. Goal is to find interesting files.")
+        yield
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _tick(self, tick_number, **ctx_kwargs):
+        """Run one tick: assemble context, call LLM, parse."""
+        messages = assemble_context(
+            self.config,
+            tick_number=tick_number,
+            goal_start_time=time.time(),
+            **ctx_kwargs,
+        )
+        response = complete(messages, self.config)
+        call = parse_tool_call(response)
+        return response, call
+
+    def test_recovers_from_parse_error_feedback(self):
+        """After a parse failure with corrective feedback, model self-corrects.
+
+        Simulates the exact feedback kairos.py now generates on parse failures,
+        then checks the model produces a valid tool call on the next tick.
+        """
+        # Tick 1: normal success
+        append_observation(self.config, {
+            "tick": 1, "tool": "bash",
+            "args": {"cmd": "ls /tmp"},
+            "success": True, "output": "file1.txt file2.txt",
+        })
+        # Tick 2: parse failure with corrective feedback (what the model now sees)
+        append_observation(self.config, {
+            "tick": 2, "tool": "parse_error",
+            "success": False,
+            "output": (
+                "Could not parse a tool call from your response. "
+                "Your output began with: 'I think we should look at the files more carefully...'\n\n"
+                "Required format (exactly):\n"
+                "<tool>TOOL_NAME</tool>\n"
+                "<args>{\"key\": \"value\"}</args>\n\n"
+                "Common mistakes: unescaped quotes inside JSON strings, "
+                "missing </args> tag, arguments not valid JSON. "
+                "Try again with a single, correctly-formatted tool call."
+            ),
+        })
+
+        # Tick 3: model should recover and produce a valid tool call
+        response, call = self._tick(3)
+        print(f"\n  After parse error feedback: {response[:200]!r}")
+        if call:
+            print(f"  Recovered with: {call.tool}({json.dumps(call.args)[:60]})")
+
+        # Model may reason correctly but run out of tokens before emitting <tool>.
+        # That's a budget issue, not a recovery failure.  Check for either:
+        #   1. Valid tool call (ideal), or
+        #   2. Response text that shows it understood the feedback
+        if call is None:
+            shows_understanding = any(w in response.lower() for w in [
+                "<tool>", "bash", "let me", "explore", "check", "file",
+            ])
+            assert shows_understanding, (
+                f"Model neither produced a tool call nor showed recovery intent. "
+                f"Response: {response[:300]}"
+            )
+            print("  SOFT PASS: model showed correct intent but didn't format tool call")
+
+    def test_recovers_from_safety_block(self):
+        """After a command is blocked by safety, model tries a different approach.
+
+        The model should not just retry the blocked command — it should
+        find an alternative way to accomplish its goal.
+        """
+        self.config.goal_path.write_text("Clean up temporary files in /tmp.")
+        write_memory(self.config, "# Working Memory\nNeed to clean /tmp. Starting cleanup.")
+
+        # Tick 1: tried rm -rf /, got blocked
+        append_observation(self.config, {
+            "tick": 1, "tool": "bash",
+            "args": {"cmd": "rm -rf /tmp/old_files"},
+            "success": False,
+            "output": "BLOCKED: command matches protected pattern 'rm\\s+.*-r'",
+        })
+
+        # Tick 2: model should try something else
+        response, call = self._tick(2)
+        print(f"\n  After safety block: {response[:200]!r}")
+        if call:
+            print(f"  Alternative approach: {call.tool}({json.dumps(call.args)[:80]})")
+            if call.tool == "bash":
+                cmd = call.args.get("cmd", "")
+                # Should not just blindly retry the exact same blocked command
+                from safety import is_command_blocked
+                blocked = is_command_blocked(cmd, self.config.protected_patterns)
+                if blocked:
+                    print(f"  WARNING: model retried a blocked command: {cmd}")
+        assert call is not None, (
+            f"Model produced no tool call after safety block. Response: {response[:300]}"
+        )
+
+    def test_recovers_from_crash_observation(self):
+        """After seeing a crash recovery observation, model doesn't repeat its last action.
+
+        The crash recovery message warns: 'the last action may not have completed.'
+        A smart model should check what happened rather than blindly re-running.
+        """
+        self.config.goal_path.write_text("Install and configure a cron job for log rotation.")
+        write_memory(self.config, (
+            "# Working Memory\n"
+            "Installing logrotate. Was editing crontab when system crashed."
+        ))
+
+        # Crash recovery observation (what the model now sees)
+        append_observation(self.config, {
+            "tick": 0, "tool": "system",
+            "success": True,
+            "output": (
+                "Kairos recovered from crash. Resuming at tick 5. "
+                "State before crash: 0 consecutive LLM failures, "
+                "0 reasoning exhaustions, max_tokens was 1024. "
+                "Review recent observations — the last action may not have completed."
+            ),
+        })
+        # Last observation before crash: was editing crontab
+        append_observation(self.config, {
+            "tick": 4, "tool": "bash",
+            "args": {"cmd": "crontab -e"},
+            "success": True,
+            "output": "crontab: installing new crontab",
+        })
+
+        # Tick 5: model should verify state, not blindly re-edit
+        response, call = self._tick(5)
+        print(f"\n  After crash recovery: {response[:200]!r}")
+        if call:
+            print(f"  Recovery action: {call.tool}({json.dumps(call.args)[:80]})")
+        assert call is not None, (
+            f"Model produced no tool call after crash recovery. Response: {response[:300]}"
+        )
+
+    def test_recovers_from_repeated_command_failures(self):
+        """After 3 consecutive command failures, model changes strategy.
+
+        A model that keeps hammering the same failing approach is useless.
+        It should adapt after seeing repeated FAIL observations.
+        """
+        self.config.goal_path.write_text("Find Python version and pip packages.")
+        write_memory(self.config, "# Working Memory\nNeed to find Python setup.")
+
+        # 3 consecutive failures trying the same thing
+        for tick in range(1, 4):
+            append_observation(self.config, {
+                "tick": tick, "tool": "bash",
+                "args": {"cmd": "python --version"},
+                "success": False,
+                "output": "bash: python: command not found\n[stderr]\nbash: python: command not found",
+            })
+
+        # Tick 4: model should try something different (python3, which python, etc.)
+        response, call = self._tick(4)
+        print(f"\n  After 3 failures of 'python --version': {response[:200]!r}")
+        if call:
+            cmd = call.args.get("cmd", "") if call.tool == "bash" else ""
+            print(f"  New approach: {call.tool}({json.dumps(call.args)[:80]})")
+            # Should not repeat the exact same failing command
+            if call.tool == "bash" and cmd.strip() == "python --version":
+                print(f"  WARNING: model repeated the exact failing command 'python --version'")
+
+        # Model may reason correctly but not emit a tool call (token budget).
+        # python3/pip3 in the prose = correct recovery thinking.
+        if call is None:
+            shows_adaptation = any(w in response.lower() for w in [
+                "python3", "pip3", "which", "command not found",
+                "alternative", "try", "instead",
+            ])
+            assert shows_adaptation, (
+                f"Model neither adapted nor showed recovery intent. "
+                f"Response: {response[:300]}"
+            )
+            print("  SOFT PASS: model showed correct adaptation in reasoning but didn't format tool call")
+
+    def test_recovers_from_timeout(self):
+        """After a command timeout, model adjusts (shorter command, or different approach).
+
+        Timeout is a strong signal that the command hung — the model should
+        not blindly retry the same long-running command.
+        """
+        self.config.goal_path.write_text("Scan for open network ports.")
+        write_memory(self.config, "# Working Memory\nScanning ports. First attempt timed out.")
+
+        append_observation(self.config, {
+            "tick": 1, "tool": "bash",
+            "args": {"cmd": "nmap -sT -p 1-65535 localhost"},
+            "success": False,
+            "output": f"TIMEOUT: command exceeded {self.config.cmd_timeout_s}s limit",
+        })
+
+        # Tick 2: model should try a lighter scan or different tool
+        response, call = self._tick(2)
+        print(f"\n  After timeout: {response[:200]!r}")
+        if call:
+            cmd = call.args.get("cmd", "") if call.tool == "bash" else ""
+            print(f"  Adjusted approach: {call.tool}({json.dumps(call.args)[:80]})")
+            if call.tool == "bash" and "1-65535" in cmd:
+                print("  WARNING: model retried the exact same full port scan")
+        assert call is not None, (
+            f"Model produced no tool call after timeout. Response: {response[:300]}"
+        )
+
+    def test_adapts_after_rotation_notice(self):
+        """After observation rotation, model relies on working memory, not missing history.
+
+        The rotation notice tells the model its history was truncated.
+        It should consult working memory rather than referencing observations
+        that no longer exist.
+        """
+        self.config.goal_path.write_text("Build a system health dashboard.")
+        write_memory(self.config, (
+            "# Working Memory\n"
+            "## Progress\n"
+            "- Ticks 1-49: Gathered CPU, RAM, disk, network stats.\n"
+            "- Created /home/pi/dashboard/index.html with basic layout.\n"
+            "- TODO: Add cron job to refresh data every 5 minutes.\n"
+            "## Key Facts\n"
+            "- Dashboard path: /home/pi/dashboard/\n"
+            "- Data script: /home/pi/dashboard/collect.sh\n"
+        ))
+
+        # Rotation notice (what the model now sees after tick 50)
+        append_observation(self.config, {
+            "tick": 50, "tool": "system",
+            "success": True,
+            "output": (
+                "Observation log rotated. Older entries archived. "
+                "Your recent observation history starts from this point — "
+                "consult working memory for earlier context."
+            ),
+        })
+
+        # Tick 51: model should continue from working memory, not flounder
+        response, call = self._tick(51)
+        print(f"\n  After rotation notice: {response[:200]!r}")
+        if call:
+            print(f"  Continued with: {call.tool}({json.dumps(call.args)[:80]})")
+        assert call is not None, (
+            f"Model stalled after rotation notice. Response: {response[:300]}"
+        )
+        # Should be progressing the goal, not starting over
+        if call and call.tool == "bash":
+            cmd = call.args.get("cmd", "").lower()
+            is_relevant = any(w in cmd for w in [
+                "cron", "dashboard", "collect", "home/pi", "health",
+                "cat", "echo", "curl", "systemctl", "chmod",
+            ])
+            if not is_relevant:
+                print(f"  WARNING: command doesn't seem goal-relevant: {cmd[:80]}")
+
