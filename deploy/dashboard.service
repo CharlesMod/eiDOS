@@ -1,0 +1,15 @@
+[Unit]
+Description=Kairos dashboard (read-only status server)
+After=kairos.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/kairos
+ExecStart=/usr/bin/python3 dashboard.py --config config.toml
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

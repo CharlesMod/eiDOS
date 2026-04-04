@@ -158,7 +158,7 @@ def _snapshot_memory(config: Config) -> None:
     if not current:
         return
     ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
-    snapshot_path = config.snapshots_dir / f"memory_before_{ts}.md"
+    snapshot_path = config.snapshots_dir / f"memory_snapshot_{ts}.md"
     snapshot_path.write_text(current)
 
 

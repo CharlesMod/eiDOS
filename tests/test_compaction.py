@@ -44,13 +44,13 @@ class TestCompactionTriggers(unittest.TestCase):
     def test_snapshot_created(self):
         write_memory(self.config, "test memory before compaction")
         _snapshot_memory(self.config)
-        snapshots = list(self.config.snapshots_dir.glob("memory_before_*.md"))
+        snapshots = list(self.config.snapshots_dir.glob("memory_snapshot_*.md"))
         self.assertEqual(len(snapshots), 1)
         self.assertEqual(snapshots[0].read_text(), "test memory before compaction")
 
     def test_snapshot_empty_memory(self):
         _snapshot_memory(self.config)
-        snapshots = list(self.config.snapshots_dir.glob("memory_before_*.md"))
+        snapshots = list(self.config.snapshots_dir.glob("memory_snapshot_*.md"))
         self.assertEqual(len(snapshots), 0)  # No snapshot for empty memory
 
     def test_format_observations(self):

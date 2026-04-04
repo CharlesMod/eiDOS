@@ -108,6 +108,46 @@ def rotate_llm_log(config: Config) -> bool:
     return True
 
 
+def rotate_metrics(config: Config) -> bool:
+    """Rotate metrics.jsonl if it exceeds metrics_max_bytes.
+
+    Same pattern as llm_log rotation.
+    Returns True if rotation was performed.
+    """
+    log_path = config.workspace / "metrics.jsonl"
+    if not log_path.exists():
+        return False
+
+    try:
+        size = log_path.stat().st_size
+    except OSError:
+        return False
+
+    if size < config.metrics_max_bytes:
+        return False
+
+    ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+    archive_path = config.workspace / f"metrics_{ts}.jsonl.gz"
+    with open(log_path, "rb") as f_in:
+        with gzip.open(archive_path, "wb") as f_out:
+            f_out.write(f_in.read())
+
+    log_path.write_text("")
+
+    archives = sorted(
+        config.workspace.glob("metrics_*.jsonl.gz"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for old in archives[config.metrics_archive_count:]:
+        try:
+            old.unlink()
+        except OSError:
+            continue
+
+    return True
+
+
 def cleanup_old_snapshots(config: Config) -> int:
     """Keep only the most recent snapshot_max_count memory snapshots.
 

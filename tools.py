@@ -124,8 +124,13 @@ def tool_write_file(args: dict, config: Config) -> ToolResult:
         # Resolve relative paths against workspace dir
         if not p.is_absolute():
             p = Path(config.workspace_dir) / p
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
+        # Prevent path traversal outside workspace
+        resolved = p.resolve()
+        workspace_resolved = Path(config.workspace_dir).resolve()
+        if not str(resolved).startswith(str(workspace_resolved) + os.sep) and resolved != workspace_resolved:
+            return ToolResult(output="Error: path escapes workspace directory", full_output_path=None, success=False, duration_s=time.monotonic() - start)
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(content)
         duration = time.monotonic() - start
         return ToolResult(output=f"Written {len(content)} chars to {path}", full_output_path=None, success=True, duration_s=duration)
     except OSError as e:
@@ -144,7 +149,12 @@ def tool_read_file(args: dict, config: Config) -> ToolResult:
         # Resolve relative paths against workspace dir
         if not p.is_absolute():
             p = Path(config.workspace_dir) / p
-        content = p.read_text()
+        # Prevent path traversal outside workspace
+        resolved = p.resolve()
+        workspace_resolved = Path(config.workspace_dir).resolve()
+        if not str(resolved).startswith(str(workspace_resolved) + os.sep) and resolved != workspace_resolved:
+            return ToolResult(output="Error: path escapes workspace directory", full_output_path=None, success=False, duration_s=time.monotonic() - start)
+        content = resolved.read_text()
         tick_id = time.strftime("%Y%m%d_%H%M%S")
         full_path = None
         if len(content) > config.output_truncation_chars:
@@ -224,19 +234,39 @@ def tool_bg_check(args: dict, config: Config) -> ToolResult:
     pid = job.get("pid", 0)
     if job["status"] == "running":
         try:
-            os.kill(pid, 0)  # Signal 0 = check existence
-        except ProcessLookupError:
-            job["status"] = "completed"
-            _write_jobs(config, jobs)
-        except PermissionError:
-            pass  # Process exists but we can't signal it
+            # Try to reap zombie first (Popen children without wait)
+            wpid, status = os.waitpid(pid, os.WNOHANG)
+            if wpid != 0:
+                job["status"] = "completed"
+                _write_jobs(config, jobs)
+            else:
+                pass  # Still running
+        except ChildProcessError:
+            # Not our child — fall back to kill(0) probe
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                job["status"] = "completed"
+                _write_jobs(config, jobs)
+            except PermissionError:
+                pass
 
-    # Read tail of output
+    # Read tail of output (and cap output file if oversized)
     output_path = job.get("output_path", "")
     tail = ""
     if output_path:
         try:
-            content = Path(output_path).read_text()
+            p = Path(output_path)
+            size = p.stat().st_size
+            if size > config.bg_output_max_bytes:
+                # Truncate to last bg_output_max_bytes
+                with open(p, "rb") as f:
+                    f.seek(-config.bg_output_max_bytes, 2)
+                    kept = f.read()
+                with open(p, "wb") as f:
+                    f.write(b"[truncated]\n")
+                    f.write(kept)
+            content = p.read_text(errors="replace")
             tail = content[-1000:] if len(content) > 1000 else content
         except OSError:
             tail = "(output file not readable)"
@@ -359,10 +389,20 @@ def refresh_jobs(config: Config) -> list[dict]:
     for job in jobs:
         if job["status"] != "running":
             continue
+        pid = job["pid"]
         try:
-            os.kill(job["pid"], 0)
-        except ProcessLookupError:
-            job["status"] = "completed"
+            wpid, status = os.waitpid(pid, os.WNOHANG)
+            if wpid != 0:
+                job["status"] = "completed"
+                changed = True
+        except ChildProcessError:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                job["status"] = "completed"
+                changed = True
+            except PermissionError:
+                pass
             changed = True
         except PermissionError:
             pass

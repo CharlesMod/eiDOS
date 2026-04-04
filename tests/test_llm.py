@@ -194,5 +194,64 @@ class TestLLMComplete(unittest.TestCase):
         self.assertEqual(out, "done")
 
 
+class TestEnsureModelLoaded(unittest.TestCase):
+
+    def setUp(self):
+        self.config = Config()
+        self.config.llm_url = "http://localhost:1234"
+        self.config.llm_model = "test-model"
+
+    @patch("llm.urllib.request.urlopen")
+    def test_model_already_loaded(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse({
+            "data": [{"id": "test-model"}]
+        })
+        from llm import ensure_model_loaded
+        result = ensure_model_loaded(self.config)
+        self.assertEqual(result, "already_loaded")
+
+    @patch("llm.urllib.request.urlopen")
+    def test_model_needs_loading(self, mock_urlopen):
+        # First call: list models (model not present)
+        # Second call: load model
+        responses = [
+            _FakeResponse({"data": [{"id": "other-model"}]}),
+            _FakeResponse({"load_time_seconds": 5.2}),
+        ]
+        mock_urlopen.side_effect = responses
+        from llm import ensure_model_loaded
+        result = ensure_model_loaded(self.config)
+        self.assertEqual(result, "loaded")
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("llm.urllib.request.urlopen")
+    def test_model_unreachable(self, mock_urlopen):
+        import urllib.error
+        mock_urlopen.side_effect = urllib.error.URLError("connection refused")
+        from llm import ensure_model_loaded
+        with self.assertRaises(LLMError) as ctx:
+            ensure_model_loaded(self.config)
+        self.assertIn("Cannot reach", str(ctx.exception))
+
+    @patch("llm.urllib.request.urlopen")
+    def test_model_load_http_error(self, mock_urlopen):
+        import io
+        import urllib.error
+        # First call succeeds (model not in list)
+        # Second call fails (HTTP error on load)
+        def side_effect(req, **kwargs):
+            if "/v1/models" in req.full_url and req.get_method() != "POST":
+                return _FakeResponse({"data": []})
+            raise urllib.error.HTTPError(
+                url="", code=500, msg="Internal Server Error",
+                hdrs=None, fp=io.BytesIO(b"model too large"),
+            )
+        mock_urlopen.side_effect = side_effect
+        from llm import ensure_model_loaded
+        with self.assertRaises(LLMError) as ctx:
+            ensure_model_loaded(self.config)
+        self.assertIn("Failed to load", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

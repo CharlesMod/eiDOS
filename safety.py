@@ -103,6 +103,17 @@ def _check_ram_darwin(max_pct: float) -> Tuple[bool, float]:
         return True, 0.0
 
 
+def get_cpu_temp() -> Optional[float]:
+    """Read CPU temperature in °C. Returns None on unsupported platforms."""
+    if sys.platform == "linux":
+        try:
+            with open("/sys/class/thermal/thermal_zone0/temp") as f:
+                return int(f.read().strip()) / 1000.0
+        except (OSError, ValueError):
+            return None
+    return None
+
+
 def kill_child_processes(parent_pid: int = None) -> int:
     """Kill child processes of the given PID (or current process).
 

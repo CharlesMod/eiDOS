@@ -40,9 +40,10 @@ from persona import (
     format_prefix,
     format_status_line,
 )
-from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, cleanup_old_snapshots
-from safety import check_ram, kill_child_processes
+from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rotate_metrics, cleanup_old_snapshots
+from safety import check_ram, get_cpu_temp, kill_child_processes, check_disk_space
 from session import human_present, take_workspace_snapshot, workspace_diff
+from telemetry import write_heartbeat, append_metrics
 from tools import execute_tool, refresh_jobs
 
 logger = logging.getLogger("kairos")
@@ -181,10 +182,42 @@ def recover(config: Config) -> dict:
     if not goal:
         print("[kairos] WARNING: No goal.md found. Agent will idle until one is created.")
 
-    # 2. Create memory.md if missing
-    if not config.memory_path.exists():
-        write_memory(config, "# Working Memory\nFresh start. No prior context.")
-        print("[kairos] Created initial memory.md")
+    # 2. Create memory.md if missing, or restore from snapshot if empty
+    mem_missing = not config.memory_path.exists()
+    mem_empty = False
+    if not mem_missing:
+        try:
+            mem_empty = config.memory_path.stat().st_size == 0
+        except OSError:
+            mem_empty = True
+
+    if mem_missing or mem_empty:
+        # Try restoring from most recent snapshot
+        restored = False
+        if config.snapshots_dir.exists():
+            snapshots = sorted(
+                config.snapshots_dir.glob("memory_snapshot_*"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if snapshots:
+                try:
+                    content = snapshots[0].read_text()
+                    if content.strip():
+                        write_memory(config, content)
+                        restored = True
+                        print(f"[kairos] Restored memory.md from snapshot: {snapshots[0].name}")
+                        append_observation(config, {
+                            "tick": 0,
+                            "tool": "system",
+                            "success": True,
+                            "output": f"Restored memory from snapshot {snapshots[0].name} after {'missing' if mem_missing else 'empty'} memory.md.",
+                        })
+                except OSError:
+                    pass
+        if not restored:
+            write_memory(config, "# Working Memory\nFresh start. No prior context.")
+            print("[kairos] Created initial memory.md")
 
     # 3. Validate observations.jsonl
     truncated = validate_observations(config)
@@ -258,6 +291,7 @@ def run_loop(config: Config, persona=None, wal=None):
     goal_complete = False
     last_tick_failed = False
     ticks_since_goal_complete = None  # None = never
+    idle_since = None  # timestamp when goal went missing
     loop_start = time.monotonic()
 
     pfx = _pfx(persona, config)
@@ -298,21 +332,40 @@ def run_loop(config: Config, persona=None, wal=None):
                         print(f"{pfx} Workspace changes detected on resume")
                     standby_snapshot = None
 
+        # --- Thermal check (Linux only) ---
+        cpu_temp = get_cpu_temp()
+        if cpu_temp is not None and cpu_temp > config.thermal_pause_c:
+            print(f"{pfx} Thermal throttle ({cpu_temp:.0f}°C > {config.thermal_pause_c}°C), skipping tick")
+            append_observation(config, {
+                "tick": tick_number,
+                "tool": "system",
+                "success": False,
+                "output": f"Thermal throttle: {cpu_temp:.0f}°C, pausing tick.",
+            })
+            time.sleep(config.tick_interval_s)
+            continue
+
         # --- Check for goal ---
         goal = read_goal(config)
         if not goal:
+            if idle_since is None:
+                idle_since = time.time()
             if config.mock_mode:
                 print("[kairos] No goal.md — exiting (mock mode)")
                 break
             time.sleep(config.tick_interval_s)
             continue
+        else:
+            idle_since = None
 
         # --- Compaction check ---
+        tick_compacted = False
         if should_compact(config, ticks_since_compaction):
             print(f"{pfx} Dreaming... consolidating memories.")
             try:
                 compact(config, persona=persona)
                 ticks_since_compaction = 0
+                tick_compacted = True
                 if persona and config.persona_enabled:
                     record_compaction(persona)
                     pfx = _pfx(persona, config)
@@ -372,8 +425,14 @@ def run_loop(config: Config, persona=None, wal=None):
                 print(content[:2000] if len(content) > 2000 else content)
 
         # --- LLM call ---
+        llm_start = time.monotonic()
+        tick_tool_name = ""
+        tick_tool_success = False
+        tick_tool_duration = 0.0
+        tick_compacted = False
         try:
             response = complete(messages, config, max_tokens=current_max_tokens)
+            llm_elapsed = time.monotonic() - llm_start
             consecutive_failures = 0  # reset on success
 
             # Successful content — decay max_tokens back toward baseline
@@ -385,6 +444,7 @@ def run_loop(config: Config, persona=None, wal=None):
             reasoning_exhaustions = 0
 
         except ReasoningExhausted as e:
+            llm_elapsed = time.monotonic() - llm_start
             reasoning_exhaustions += 1
 
             # Bump max_tokens for next tick (up to ceiling)
@@ -435,6 +495,7 @@ def run_loop(config: Config, persona=None, wal=None):
             continue
 
         except LLMError as e:
+            llm_elapsed = time.monotonic() - llm_start
             consecutive_failures += 1
             print(f"{pfx} LLM error on tick {tick_number} "
                   f"({consecutive_failures}/{config.llm_max_consecutive_failures}): {e}")
@@ -500,9 +561,13 @@ def run_loop(config: Config, persona=None, wal=None):
             if persona and config.persona_enabled:
                 record_tick(persona, None, False)
                 last_tick_failed = True
+                tick_tool_name = "parse_error"
         else:
             # --- Execute tool ---
             result = execute_tool(call, config)
+            tick_tool_name = call.tool
+            tick_tool_success = result.success
+            tick_tool_duration = result.duration_s
 
             # --- Log observation ---
             append_observation(config, {
@@ -565,6 +630,7 @@ def run_loop(config: Config, persona=None, wal=None):
         if tick_number % 50 == 0:
             rotated = rotate_if_needed(config)
             rotate_llm_log(config)
+            rotate_metrics(config)
             cleanup_old_snapshots(config)
             if rotated:
                 append_observation(config, {
@@ -587,6 +653,42 @@ def run_loop(config: Config, persona=None, wal=None):
         if persona and config.persona_enabled:
             if ticks_since_goal_complete is not None:
                 ticks_since_goal_complete += 1
+
+        # --- Telemetry ---
+        _disk_ok, _disk_free = check_disk_space(min_gb=0)
+        _ram_ok, _ram_pct = check_ram(config.ram_max_pct)
+        _cpu_temp = get_cpu_temp()
+        _uptime = time.monotonic() - loop_start
+        _p_level = persona.get("level", 1) if persona else 1
+        _p_mood = persona.get("mood", "neutral") if persona else "neutral"
+        _p_xp = persona.get("xp", 0) if persona else 0
+        _goal_snip = goal if goal else ""
+        _mem_chars = 0
+        try:
+            _mem_chars = config.memory_path.stat().st_size
+        except OSError:
+            pass
+        _obs_count = 0
+        try:
+            with open(config.observations_path) as _f:
+                _obs_count = sum(1 for _ in _f)
+        except OSError:
+            pass
+
+        _telem_kw = dict(
+            tick=tick_number, level=_p_level, mood=_p_mood, xp=_p_xp,
+            consecutive_failures=consecutive_failures,
+            current_max_tokens=current_max_tokens,
+            disk_free_gb=_disk_free, ram_pct=_ram_pct,
+            cpu_temp_c=_cpu_temp, llm_elapsed_s=llm_elapsed,
+            tool_name=tick_tool_name, tool_success=tick_tool_success,
+            uptime_s=_uptime,
+        )
+        write_heartbeat(config, goal_snippet=_goal_snip,
+                        idle_since=idle_since, **_telem_kw)
+        append_metrics(config, ctx_chars=ctx_chars, memory_chars=_mem_chars,
+                       obs_count=_obs_count, tool_duration_s=tick_tool_duration,
+                       compacted=tick_compacted, **_telem_kw)
 
         # --- Sleep ---
         tick_number += 1

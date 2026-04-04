@@ -1,0 +1,20 @@
+[Unit]
+Description=llama.cpp inference server
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/usr/local/bin/llama-server \
+    -m /home/pi/models/qwen3.5-4b-q4.gguf \
+    --host 127.0.0.1 \
+    --port 8080 \
+    -ngl 0 \
+    -c 3072 \
+    -t 4
+Restart=always
+RestartSec=10
+Environment=LLAMA_LOG_LEVEL=warn
+
+[Install]
+WantedBy=multi-user.target

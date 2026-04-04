@@ -45,6 +45,8 @@ class Config:
     cmd_timeout_s: int = 120
     disk_min_gb: float = 1.0
     ram_max_pct: float = 85.0
+    thermal_pause_c: float = 75.0
+    bg_output_max_bytes: int = 10_000_000  # 10MB cap for bg_run output files
     protected_patterns: List[str] = dataclasses.field(default_factory=lambda: [
         r"rm\s+-rf\s+/",
         r"rm\s+.*-r",            # rm -r, rm -rf, rm -ri, etc.
@@ -65,6 +67,7 @@ class Config:
 
     # Self-healing
     llm_restart_cmd: str = ""       # e.g. "systemctl restart llama-server"
+    llm_local_only: bool = False     # production: True — restart always means local llama-server
     llm_max_consecutive_failures: int = 5
 
     # Adaptive token management — for thinking models that may exhaust budget
@@ -77,6 +80,8 @@ class Config:
     obs_archive_days: int = 14
     llm_log_max_bytes: int = 5_000_000   # 5MB then rotate
     llm_log_archive_count: int = 3       # keep last N archives
+    metrics_max_bytes: int = 2_000_000   # 2MB then rotate
+    metrics_archive_count: int = 3       # keep last N metrics archives
     snapshot_max_count: int = 20         # keep last N memory snapshots
 
     # Context budgets (chars) — per-section limits for normal ticks
@@ -101,6 +106,9 @@ class Config:
 
     # Persona
     persona_enabled: bool = True
+
+    # Dashboard
+    dashboard_port: int = 8099
 
     # Mock mode
     mock_mode: bool = False
@@ -180,6 +188,8 @@ def load_config(path: str = "config.toml") -> Config:
         config.cmd_timeout_s = safety.get("cmd_timeout_s", config.cmd_timeout_s)
         config.disk_min_gb = safety.get("disk_min_gb", config.disk_min_gb)
         config.ram_max_pct = safety.get("ram_max_pct", config.ram_max_pct)
+        config.thermal_pause_c = safety.get("thermal_pause_c", config.thermal_pause_c)
+        config.bg_output_max_bytes = safety.get("bg_output_max_bytes", config.bg_output_max_bytes)
         if "protected_patterns" in safety:
             config.protected_patterns = safety["protected_patterns"]
 
@@ -188,6 +198,7 @@ def load_config(path: str = "config.toml") -> Config:
 
         healing = data.get("self_healing", {})
         config.llm_restart_cmd = healing.get("restart_cmd", config.llm_restart_cmd)
+        config.llm_local_only = healing.get("local_only", config.llm_local_only)
         config.llm_max_consecutive_failures = healing.get(
             "max_consecutive_failures", config.llm_max_consecutive_failures)
         config.llm_max_tokens_ceiling = healing.get(
@@ -203,6 +214,8 @@ def load_config(path: str = "config.toml") -> Config:
         config.obs_archive_days = rot.get("archive_days", config.obs_archive_days)
         config.llm_log_max_bytes = rot.get("llm_log_max_bytes", config.llm_log_max_bytes)
         config.llm_log_archive_count = rot.get("llm_log_archive_count", config.llm_log_archive_count)
+        config.metrics_max_bytes = rot.get("metrics_max_bytes", config.metrics_max_bytes)
+        config.metrics_archive_count = rot.get("metrics_archive_count", config.metrics_archive_count)
         config.snapshot_max_count = rot.get("snapshot_max_count", config.snapshot_max_count)
 
         ctx = data.get("context", {})
@@ -222,6 +235,9 @@ def load_config(path: str = "config.toml") -> Config:
 
         persona = data.get("persona", {})
         config.persona_enabled = persona.get("enabled", config.persona_enabled)
+
+        dashboard = data.get("dashboard", {})
+        config.dashboard_port = dashboard.get("port", config.dashboard_port)
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)
