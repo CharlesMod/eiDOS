@@ -11,18 +11,29 @@ from config import Config
 logger = logging.getLogger("kairos.llm")
 
 
-def _log_interaction(config: Config, messages, payload, response_data, content, elapsed_s):
+def _log_interaction(config: Config, messages, payload, response_data, content, elapsed_s,
+                     *, run_id: str = "", tick: int = 0):
     """Append request/response summary to workspace/llm_log.jsonl."""
     try:
+        usage = response_data.get("usage", {})
+        details = usage.get("completion_tokens_details", {})
+        prompt_chars = sum(len(m.get("content", "")) for m in messages)
         entry = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "run_id": run_id,
+            "tick": tick,
             "elapsed_s": round(elapsed_s, 2),
             "model": payload.get("model", ""),
             "temperature": payload.get("temperature"),
             "max_tokens": payload.get("max_tokens"),
-            "messages": [{"role": m["role"], "content": m["content"][:500]} for m in messages],
-            "response_content": (content or "")[:1000],
-            "usage": response_data.get("usage", {}),
+            "prompt_chars": prompt_chars,
+            "response_chars": len(content or ""),
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "completion_tokens": usage.get("completion_tokens", 0),
+            "reasoning_tokens": details.get("reasoning_tokens", 0),
+            # Full content — untruncated for post-run analysis
+            "messages_preview": [{"role": m["role"], "content": m["content"]} for m in messages],
+            "response_preview": (content or ""),
         }
         log_path = config.workspace / "llm_log.jsonl"
         with open(log_path, "a") as f:
@@ -36,15 +47,74 @@ class LLMError(Exception):
     pass
 
 
+def ensure_model_loaded(config: Config, ttl: int = 3600) -> str:
+    """Ensure the configured model is loaded in LM Studio, loading it if needed.
+
+    Uses GET /v1/models to check, then POST /api/v1/models/load if absent.
+    Sets a TTL (default 1 hour) to prevent idle eviction during long runs.
+
+    Returns a status string: 'already_loaded', 'loaded', or raises LLMError.
+    """
+    base = config.llm_url.rstrip("/")
+    model = config.llm_model
+
+    # Step 1: Check if model is already loaded
+    list_url = base + "/v1/models"
+    try:
+        req = urllib.request.Request(list_url)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        loaded_ids = [m.get("id", "") for m in data.get("data", [])]
+        if model in loaded_ids:
+            logger.info("model already loaded: %s", model)
+            return "already_loaded"
+        logger.info("model not loaded (have: %s), requesting load: %s",
+                     loaded_ids, model)
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
+        raise LLMError(f"Cannot reach LM Studio at {base}: {e}") from e
+
+    # Step 2: Request model load via LM Studio REST API
+    load_url = base + "/api/v1/models/load"
+    payload = {"model": model}
+    req = urllib.request.Request(
+        load_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        load_time = result.get("load_time_seconds", "?")
+        logger.info("model loaded: %s in %ss", model, load_time)
+        return "loaded"
+    except urllib.error.HTTPError as e:
+        error_body = ""
+        try:
+            error_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        raise LLMError(f"Failed to load model '{model}': HTTP {e.code}: {error_body}") from e
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
+        raise LLMError(f"Failed to load model '{model}': {e}") from e
+
+
 def complete(
     messages: list[dict],
     config: Config,
     temperature: float = None,
     max_tokens: int = None,
+    *,
+    run_id: str = "",
+    tick: int = 0,
+    enable_thinking: bool = True,
 ) -> str:
     """Send a chat completion request, return the assistant's content string.
 
     Uses the OpenAI-compatible /v1/chat/completions endpoint.
+    Set enable_thinking=False to request the server disable reasoning
+    (requires server-side support: llama-server with nonthinking template,
+    or vLLM with chat_template_kwargs).
     """
     if temperature is None:
         temperature = config.llm_temperature
@@ -63,8 +133,13 @@ def complete(
         "min_p": config.llm_min_p,
         "presence_penalty": config.llm_presence_penalty,
         "stream": False,
-        "seed": 42,
     }
+
+    # Request thinking suppression via chat_template_kwargs.
+    # Supported by vLLM and llama-server (with Qwen3 jinja template).
+    # Ignored silently by LM Studio and servers without template support.
+    if not enable_thinking:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     body = json.dumps(payload).encode("utf-8")
     logger.debug("llm payload_bytes=%d messages=%d", len(body), len(messages))
@@ -115,13 +190,15 @@ def complete(
         if not content and reasoning:
             logger.warning("llm returned empty content but %d chars of reasoning — "
                            "max_tokens likely exhausted during thinking", len(reasoning))
-            _log_interaction(config, messages, payload, data, reasoning, elapsed)
+            _log_interaction(config, messages, payload, data, reasoning, elapsed,
+                             run_id=run_id, tick=tick)
             return reasoning
 
         if not content:
             raise LLMError(f"Empty response content. Full response: {data}")
 
-        _log_interaction(config, messages, payload, data, content, elapsed)
+        _log_interaction(config, messages, payload, data, content, elapsed,
+                         run_id=run_id, tick=tick)
         return content
     except (KeyError, IndexError) as e:
         raise LLMError(f"Unexpected response format: {data}") from e

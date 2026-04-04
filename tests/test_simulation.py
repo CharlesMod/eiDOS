@@ -153,7 +153,7 @@ def _run_ticks(config, mock_llm, n_ticks, *, goal_start_time=None):
     for tick_number in range(1, n_ticks + 1):
         entry = {"tick": tick_number, "call": None, "result": None,
                  "response": None, "error": None, "loop_detected": False,
-                 "compacted": False}
+                 "compacted": False, "context_chars": 0}
 
         # Loop detection
         loop_detected = False
@@ -182,6 +182,7 @@ def _run_ticks(config, mock_llm, n_ticks, *, goal_start_time=None):
             loop_detected=loop_detected,
             repeat_count=repeat_count,
         )
+        entry["context_chars"] = sum(len(m["content"]) for m in messages)
 
         # LLM call
         try:
@@ -677,6 +678,50 @@ class TestCompactionUnderLoad(SimulationTestBase):
         self.assertEqual(len(snapshots), 1)
         self.assertEqual(snapshots[0].read_text(), "before compaction content")
 
+    @patch("compaction.complete")
+    def test_compaction_output_capped_at_memory_budget(self, mock_complete):
+        """If the LLM returns an oversized compaction result it is trimmed
+        back to context_memory_max_chars so the next tick's context stays
+        within budget.  Prevents a single dream pass from bloating memory."""
+        oversized = "# Big Memory\n" + ("W" * self.config.context_memory_max_chars * 2)
+        mock_complete.return_value = oversized
+
+        write_memory(self.config, "prior memory")
+        append_observation(self.config, {"tick": 1, "tool": "bash",
+                                          "success": True, "output": "x"})
+        compact(self.config)
+
+        mem = read_memory(self.config)
+        self.assertLessEqual(
+            len(mem), self.config.context_memory_max_chars,
+            f"Compaction output not capped: {len(mem)} > "
+            f"{self.config.context_memory_max_chars}",
+        )
+
+    @patch("compaction.complete")
+    def test_goal_always_visible_after_many_compaction_cycles(self, mock_compact):
+        """goal.md is read fresh on every tick so the goal always appears in
+        the assembled context regardless of how many times memory is compacted.
+        Critical for a days-long run where goal persistence is the top priority."""
+        goal_text = "Monitor temperature sensors and alert if above 40C."
+        self.config.goal_path.write_text(goal_text)
+        mock_compact.return_value = "# Compacted Memory\nAll prior data distilled."
+
+        for cycle in range(10):
+            append_observation(self.config, {
+                "tick": cycle, "tool": "bash", "success": True,
+                "output": f"reading {cycle}",
+            })
+            compact(self.config)
+
+        messages = assemble_context(self.config, tick_number=11,
+                                     goal_start_time=time.time())
+        content = messages[1]["content"]
+        self.assertIn(
+            "Monitor temperature sensors", content,
+            "Goal text must survive all compaction cycles and remain in context",
+        )
+
 
 # -------------------------------------------------------------------
 # 5. Log rotation under heavy load
@@ -1001,6 +1046,39 @@ class TestLongSimulation(SimulationTestBase):
         self.assertLess(file_count, 1000,
                         f"Too many files ({file_count}) after 3-day sim")
 
+    def test_context_ceiling_respected_across_all_ticks(self):
+        """Every single tick in a 100-tick run produces context that stays
+        within context_max_total_chars.  This is the key invariant for a
+        long-running solar node — a single oversize context causes an
+        HTTP 400 from LM Studio and makes the agent useless for that tick."""
+        # Low thresholds so compaction runs mid-test and we see its effect
+        self.config.compaction_token_threshold = 500
+        self.config.compaction_tick_threshold = 10
+
+        responses = [
+            _make_tool_response("remember", {"note": f"t{i} " + "data " * 20})
+            for i in range(100)
+        ]
+        llm = _ScriptedLLM(responses)
+        mock_compact = MagicMock(
+            return_value="# Memory\n" + "compact data\n" * 50)
+
+        with patch("compaction.complete", mock_compact):
+            results = _run_ticks(self.config, llm, 100)
+
+        ceiling = self.config.context_max_total_chars
+        violations = [
+            r for r in results
+            if r["context_chars"] > ceiling + 100  # +100 trim-notice tolerance
+        ]
+        self.assertEqual(
+            len(violations), 0,
+            f"{len(violations)} ticks exceeded context ceiling "
+            f"({ceiling} chars): "
+            + ", ".join(f"tick {r['tick']}={r['context_chars']}"
+                        for r in violations[:5]),
+        )
+
 
 # -------------------------------------------------------------------
 # 7. Context assembly edge cases
@@ -1070,6 +1148,58 @@ class TestContextEdgeCases(SimulationTestBase):
                                      goal_start_time=time.time())
         content = messages[1]["content"]
         self.assertIn("API moved to port 8080", content)
+
+    def test_context_ceiling_enforced_when_sections_exceed_total(self):
+        """Hard ceiling trims assembled context when per-section budgets
+        sum to more than context_max_total_chars.  Exercises the safety net
+        that prevents HTTP 400 'Context size exceeded' from LM Studio."""
+        # Give each section a generous per-section budget but impose a
+        # tight total ceiling so the limits conflict.
+        self.config.context_memory_max_chars = 8000
+        self.config.context_obs_max_chars = 8000
+        self.config.context_goal_max_chars = 4000
+        self.config.context_max_total_chars = 10000  # ceiling < sum of sections
+
+        # Fill memory and observations to their per-section maxima.
+        write_memory(self.config, "M" * 8000)
+        for i in range(100):
+            append_observation(self.config, {
+                "tick": i, "tool": "bash", "success": True,
+                "output": "O" * 100,
+            })
+
+        messages = assemble_context(self.config, tick_number=1,
+                                     goal_start_time=time.time())
+        total = sum(len(m["content"]) for m in messages)
+        # Allow small overage from the trim-notice suffix (≤ 100 chars)
+        self.assertLessEqual(
+            total, self.config.context_max_total_chars + 100,
+            f"Context ceiling violated: {total} chars > "
+            f"{self.config.context_max_total_chars} limit",
+        )
+
+    def test_adaptive_obs_budget_has_minimum_floor(self):
+        """When memory is at its ceiling, observations still receive at
+        least 1000 chars — the agent must not go blind to recent events."""
+        # Pin memory at the exact ceiling
+        write_memory(self.config, "M" * self.config.context_memory_max_chars)
+        # Add enough observations to fill well beyond the minimum floor
+        for i in range(30):
+            append_observation(self.config, {
+                "tick": i, "tool": "bash", "success": True,
+                "output": f"sensor reading {i}: temp=38.{i}C voltage=5.0V",
+            })
+
+        messages = assemble_context(self.config, tick_number=1,
+                                     goal_start_time=time.time())
+        content = messages[1]["content"]
+        obs_start = content.find("## Recent Observations")
+        self.assertNotEqual(obs_start, -1, "Observations section must be present")
+        obs_section = content[obs_start:]
+        self.assertGreater(
+            len(obs_section), 500,
+            "Observations section is too small — agent loses situational awareness",
+        )
 
 
 # -------------------------------------------------------------------
@@ -1159,6 +1289,28 @@ class TestMemoryIntegrity(SimulationTestBase):
         self.assertEqual(len(obs), 1)
         self.assertEqual(obs[0]["tick"], 1)
 
+    def test_remember_tool_stays_within_budget(self):
+        """Calling tool_remember repeatedly never lets memory.md exceed
+        context_memory_max_chars — critical for days-long runs where the
+        agent accumulates hundreds of notes."""
+        # Use the default 4000-char budget from _sandboxed_config
+        budget = self.config.context_memory_max_chars
+        for i in range(150):
+            execute_tool(
+                ToolCall(
+                    tool="remember",
+                    args={"note": f"Note #{i}: " + "x" * 80},
+                    raw="",
+                ),
+                self.config,
+            )
+        mem = read_memory(self.config)
+        self.assertLessEqual(
+            len(mem), budget,
+            f"Memory exceeded budget after many remember calls: "
+            f"{len(mem)} > {budget}",
+        )
+
 
 # -------------------------------------------------------------------
 # 10. Timeout-scoped resource usage (Pi-specific concerns)
@@ -1191,6 +1343,11 @@ class TestTimeoutScoping(SimulationTestBase):
                          "Default LLM timeout should be 300s for slow Pi")
         self.assertEqual(default_config.cmd_timeout_s, 120,
                          "Default cmd timeout should be 120s for Pi")
+        # A Pi 4 running a 4B model at ~3 t/s needs ~20 min per tick for
+        # inference alone.  The tick interval is the sleep BETWEEN ticks so
+        # 5 min (300 s) is the correct default — actual wall time is ~25 min.
+        self.assertEqual(default_config.tick_interval_s, 300,
+                         "Default tick interval should be 300s (5 min between ticks)")
 
     def test_truncation_limits_memory(self):
         """Output truncation prevents memory overflow from large outputs."""

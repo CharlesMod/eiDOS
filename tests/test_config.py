@@ -53,6 +53,18 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.goal_path, Path("/tmp/test_workspace/goal.md"))
         self.assertEqual(config.memory_path, Path("/tmp/test_workspace/memory.md"))
         self.assertEqual(config.observations_path, Path("/tmp/test_workspace/observations.jsonl"))
+        self.assertEqual(config.wal_path, Path("/tmp/test_workspace/wal.json"))
+
+    def test_self_healing_defaults(self):
+        config = Config()
+        self.assertEqual(config.llm_restart_cmd, "")
+        self.assertEqual(config.llm_max_consecutive_failures, 5)
+
+    def test_log_rotation_defaults(self):
+        config = Config()
+        self.assertEqual(config.llm_log_max_bytes, 5_000_000)
+        self.assertEqual(config.llm_log_archive_count, 3)
+        self.assertEqual(config.snapshot_max_count, 20)
 
     def test_missing_toml_uses_defaults(self):
         config = load_config("/nonexistent/path.toml")

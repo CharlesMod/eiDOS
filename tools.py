@@ -121,6 +121,9 @@ def tool_write_file(args: dict, config: Config) -> ToolResult:
     start = time.monotonic()
     try:
         p = Path(path)
+        # Resolve relative paths against workspace dir
+        if not p.is_absolute():
+            p = Path(config.workspace_dir) / p
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
         duration = time.monotonic() - start
@@ -137,7 +140,11 @@ def tool_read_file(args: dict, config: Config) -> ToolResult:
 
     start = time.monotonic()
     try:
-        content = Path(path).read_text()
+        p = Path(path)
+        # Resolve relative paths against workspace dir
+        if not p.is_absolute():
+            p = Path(config.workspace_dir) / p
+        content = p.read_text()
         tick_id = time.strftime("%Y%m%d_%H%M%S")
         full_path = None
         if len(content) > config.output_truncation_chars:
@@ -278,7 +285,17 @@ def tool_remember(args: dict, config: Config) -> ToolResult:
 
     current = read_memory(config)
     timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    updated = current + f"\n\n[Remembered at {timestamp}]\n{note}"
+    addition = f"\n\n[Remembered at {timestamp}]\n{note}"
+    updated = current + addition
+
+    # Hard cap: if memory would exceed budget, trim oldest lines from the top
+    budget = config.context_memory_max_chars
+    if len(updated) > budget:
+        lines = updated.splitlines(keepends=True)
+        while lines and len("".join(lines)) > budget:
+            lines.pop(0)
+        updated = "".join(lines)
+
     write_memory(config, updated)
     return ToolResult(output=f"Noted in memory: {note[:100]}", full_output_path=None, success=True, duration_s=0)
 

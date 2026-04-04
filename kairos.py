@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -39,7 +40,7 @@ from persona import (
     format_prefix,
     format_status_line,
 )
-from rotation import rotate_if_needed, cleanup_old_archives
+from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, cleanup_old_snapshots
 from safety import check_ram, kill_child_processes
 from session import human_present, take_workspace_snapshot, workspace_diff
 from tools import execute_tool, refresh_jobs
@@ -84,7 +85,7 @@ def main():
     signal.signal(signal.SIGINT, _handle_signal)
 
     # Crash recovery
-    recover(config)
+    wal = recover(config)
 
     # Load persona
     persona = None
@@ -95,7 +96,7 @@ def main():
         print(f"{pfx} Online. {format_status_line(persona)}")
 
     # Main loop
-    run_loop(config, persona)
+    run_loop(config, persona, wal=wal)
 
 
 def _pfx(persona, config):
@@ -105,9 +106,72 @@ def _pfx(persona, config):
     return "[kairos]"
 
 
-def recover(config: Config):
-    """Crash recovery: validate state, fix corruption, log restart."""
+def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
+              goal_start_time: float, consecutive_failures: int = 0):
+    """Atomically write tick state to WAL for crash recovery."""
+    wal = {
+        "tick_number": tick_number,
+        "ticks_since_compaction": ticks_since_compaction,
+        "goal_start_time": goal_start_time,
+        "consecutive_failures": consecutive_failures,
+        "ts": time.time(),
+    }
+    tmp = config.wal_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(wal))
+    tmp.rename(config.wal_path)
+
+
+def read_wal(config: Config) -> dict:
+    """Read WAL state, return empty dict on missing/corrupt."""
+    try:
+        return json.loads(config.wal_path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def clear_wal(config: Config):
+    """Remove WAL after clean shutdown."""
+    try:
+        config.wal_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def attempt_llm_restart(config: Config) -> bool:
+    """Try to restart the local LLM process. Returns True on success."""
+    cmd = config.llm_restart_cmd
+    if not cmd:
+        logger.warning("No llm_restart_cmd configured — cannot self-heal")
+        return False
+    logger.info("Attempting LLM restart: %s", cmd)
+    try:
+        result = subprocess.run(
+            cmd, shell=True, timeout=60, capture_output=True, text=True)
+        if result.returncode == 0:
+            logger.info("LLM restart succeeded")
+            time.sleep(10)  # give the model time to load
+            return True
+        logger.error("LLM restart failed (rc=%d): %s", result.returncode, result.stderr[:500])
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error("LLM restart timed out after 60s")
+        return False
+    except Exception as e:
+        logger.error("LLM restart error: %s", e)
+        return False
+
+
+def recover(config: Config) -> dict:
+    """Crash recovery: validate state, fix corruption, log restart.
+    Returns WAL state dict (may be empty on fresh start).
+    """
     print("[kairos] Running crash recovery...")
+
+    # 0. Read WAL (tick state from before crash)
+    wal = read_wal(config)
+    if wal:
+        print(f"[kairos] WAL recovered: tick={wal.get('tick_number')}, "
+              f"compaction_gap={wal.get('ticks_since_compaction')}")
 
     # 1. Verify goal.md
     goal = read_goal(config)
@@ -145,15 +209,20 @@ def recover(config: Config):
     if deleted:
         print(f"[kairos] Cleaned {deleted} old archive(s)")
 
+    return wal
 
-def run_loop(config: Config, persona=None):
+
+def run_loop(config: Config, persona=None, wal=None):
     """Main tick loop with session detection and compaction."""
     global _shutdown_requested
 
-    tick_number = 1
-    ticks_since_compaction = 0
+    # Restore state from WAL or start fresh
+    wal = wal or {}
+    tick_number = wal.get("tick_number", 1)
+    ticks_since_compaction = wal.get("ticks_since_compaction", 0)
+    goal_start_time = wal.get("goal_start_time", time.time())
+    consecutive_failures = wal.get("consecutive_failures", 0)
     recent_hashes: collections.deque = collections.deque(maxlen=config.loop_detect_window)
-    goal_start_time = time.time()
     standby = False
     standby_snapshot = None
     goal_complete = False
@@ -275,14 +344,34 @@ def run_loop(config: Config, persona=None):
         # --- LLM call ---
         try:
             response = complete(messages, config)
+            consecutive_failures = 0  # reset on success
         except LLMError as e:
-            print(f"{pfx} LLM error on tick {tick_number}: {e}")
+            consecutive_failures += 1
+            print(f"{pfx} LLM error on tick {tick_number} "
+                  f"({consecutive_failures}/{config.llm_max_consecutive_failures}): {e}")
             append_observation(config, {
                 "tick": tick_number,
                 "tool": "llm_error",
                 "success": False,
-                "output": f"LLM call failed: {e}",
+                "output": f"LLM call failed ({consecutive_failures}x): {e}",
             })
+
+            # Self-healing: restart LLM after too many consecutive failures
+            if consecutive_failures >= config.llm_max_consecutive_failures:
+                print(f"{pfx} Too many consecutive LLM failures — attempting restart")
+                if attempt_llm_restart(config):
+                    consecutive_failures = 0
+                    append_observation(config, {
+                        "tick": tick_number,
+                        "tool": "system",
+                        "success": True,
+                        "output": "LLM process restarted after repeated failures.",
+                    })
+                    if persona and config.persona_enabled:
+                        record_error_recovery(persona)
+
+            write_wal(config, tick_number, ticks_since_compaction,
+                      goal_start_time, consecutive_failures)
             time.sleep(config.tick_interval_s)
             tick_number += 1
             ticks_since_compaction += 1
@@ -371,6 +460,8 @@ def run_loop(config: Config, persona=None):
         # --- Log rotation check (every 50 ticks) ---
         if tick_number % 50 == 0:
             rotate_if_needed(config)
+            rotate_llm_log(config)
+            cleanup_old_snapshots(config)
 
         # --- Persona periodic save (every 10 ticks) ---
         if persona and config.persona_enabled and tick_number % 10 == 0:
@@ -388,10 +479,15 @@ def run_loop(config: Config, persona=None):
         tick_number += 1
         ticks_since_compaction += 1
 
+        # --- Persist tick state to WAL ---
+        write_wal(config, tick_number, ticks_since_compaction,
+                  goal_start_time, consecutive_failures)
+
         if not goal_complete and not _shutdown_requested:
             time.sleep(config.tick_interval_s)
 
     # --- Shutdown ---
+    clear_wal(config)  # clean exit — no stale WAL
     if persona and config.persona_enabled:
         persona["uptime_total_s"] = persona.get("uptime_total_s", 0) + int(time.monotonic() - loop_start)
         compute_traits(persona)

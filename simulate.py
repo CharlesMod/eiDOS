@@ -31,10 +31,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import Config
+from config import Config, load_config
 from context import assemble_context
 from compaction import should_compact, compact
-from llm import complete, LLMError
+from llm import complete, ensure_model_loaded, LLMError
 from memory import (
     append_observation,
     read_memory,
@@ -474,8 +474,8 @@ def main():
     )
     parser.add_argument("--url", required=True,
                         help="LLM endpoint URL (e.g. http://192.168.1.50:1234/v1)")
-    parser.add_argument("--model", default="local",
-                        help="Model name for the endpoint (default: local)")
+    parser.add_argument("--model", default=None,
+                        help="Model name (default: from config.toml)")
     parser.add_argument("--scenario", default="all",
                         help="Scenario to run (default: all)")
     parser.add_argument("--ticks", type=int, default=None,
@@ -491,10 +491,34 @@ def main():
     if url.endswith("/v1"):
         url = url[:-3]
 
+    # Resolve model name from config.toml if not specified
+    if args.model is None:
+        try:
+            file_cfg = load_config("config.toml")
+            args.model = file_cfg.llm_model
+        except Exception:
+            args.model = "local"
+
     print(f"{_BOLD}Kairos Live Simulation{_RESET}")
     print(f"Endpoint: {url}")
     print(f"Model: {args.model}")
     print(f"Timeout: {args.timeout}s")
+
+    # Ensure model is loaded before running scenarios
+    print(f"\n  Checking model availability...", end="", flush=True)
+    try:
+        preload_cfg = Config()
+        preload_cfg.llm_url = url
+        preload_cfg.llm_model = args.model
+        status = ensure_model_loaded(preload_cfg, ttl=3600)
+        if status == "already_loaded":
+            print(f" {_GREEN}ready{_RESET}")
+        else:
+            print(f" {_GREEN}loaded{_RESET}")
+    except LLMError as e:
+        print(f" {_RED}FAILED{_RESET}")
+        print(f"  {_RED}{e}{_RESET}")
+        print(f"  Continuing anyway — JIT loading may work on first request.")
 
     # Determine which scenarios to run
     if args.scenario == "all":

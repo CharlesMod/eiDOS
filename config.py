@@ -21,7 +21,7 @@ class Config:
     llm_url: str = "http://127.0.0.1:8080"
     llm_model: str = "local"
     llm_temperature: float = 0.6
-    llm_max_tokens: int = 2048
+    llm_max_tokens: int = 1024
     llm_request_timeout_s: int = 300
     llm_top_p: float = 0.95
     llm_top_k: int = 20
@@ -35,7 +35,8 @@ class Config:
     # Compaction
     compaction_token_threshold: int = 8000
     compaction_tick_threshold: int = 20
-    compaction_max_tokens: int = 4096
+    compaction_max_tokens: int = 2048
+    compaction_retry_max_tokens: int = 4096  # retry budget if thinking exhausts tokens
 
     # Output
     output_truncation_chars: int = 2000
@@ -59,9 +60,16 @@ class Config:
     # Session
     grace_period_s: int = 60
 
+    # Self-healing
+    llm_restart_cmd: str = ""       # e.g. "systemctl restart llama-server"
+    llm_max_consecutive_failures: int = 5
+
     # Rotation
     obs_max_lines: int = 5000
     obs_archive_days: int = 14
+    llm_log_max_bytes: int = 5_000_000   # 5MB then rotate
+    llm_log_archive_count: int = 3       # keep last N archives
+    snapshot_max_count: int = 20         # keep last N memory snapshots
 
     # Context budgets (chars) — per-section limits for normal ticks
     context_obs_max_chars: int = 4000
@@ -70,7 +78,7 @@ class Config:
     context_memory_max_chars: int = 4000
     context_env_max_chars: int = 800
     context_interventions_max_chars: int = 2000
-    context_max_total_chars: int = 24000  # ~6800 tokens total input budget
+    context_max_total_chars: int = 20000  # test/dev default; production uses config.toml (6500)
 
     # Compaction context budgets (chars) — generous for distillation
     compaction_obs_max_chars: int = 16000
@@ -104,6 +112,10 @@ class Config:
     @property
     def observations_path(self) -> Path:
         return self.workspace / "observations.jsonl"
+
+    @property
+    def wal_path(self) -> Path:
+        return self.workspace / "wal.json"
 
     @property
     def interventions_dir(self) -> Path:
@@ -151,6 +163,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.compaction_token_threshold = comp.get("token_threshold", config.compaction_token_threshold)
         config.compaction_tick_threshold = comp.get("tick_threshold", config.compaction_tick_threshold)
         config.compaction_max_tokens = comp.get("max_tokens", config.compaction_max_tokens)
+        config.compaction_retry_max_tokens = comp.get("retry_max_tokens", config.compaction_retry_max_tokens)
 
         out = data.get("output", {})
         config.output_truncation_chars = out.get("truncation_chars", config.output_truncation_chars)
@@ -165,9 +178,17 @@ def load_config(path: str = "config.toml") -> Config:
         sess = data.get("session", {})
         config.grace_period_s = sess.get("grace_period_s", config.grace_period_s)
 
+        healing = data.get("self_healing", {})
+        config.llm_restart_cmd = healing.get("restart_cmd", config.llm_restart_cmd)
+        config.llm_max_consecutive_failures = healing.get(
+            "max_consecutive_failures", config.llm_max_consecutive_failures)
+
         rot = data.get("rotation", {})
         config.obs_max_lines = rot.get("obs_max_lines", config.obs_max_lines)
         config.obs_archive_days = rot.get("archive_days", config.obs_archive_days)
+        config.llm_log_max_bytes = rot.get("llm_log_max_bytes", config.llm_log_max_bytes)
+        config.llm_log_archive_count = rot.get("llm_log_archive_count", config.llm_log_archive_count)
+        config.snapshot_max_count = rot.get("snapshot_max_count", config.snapshot_max_count)
 
         ctx = data.get("context", {})
         config.context_obs_max_chars = ctx.get("obs_max_chars", config.context_obs_max_chars)

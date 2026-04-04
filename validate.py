@@ -30,7 +30,7 @@ from memory import (
     validate_observations,
     read_interventions,
 )
-from llm import complete, LLMError
+from llm import complete, ensure_model_loaded, LLMError
 from prompts import SYSTEM_PROMPT, TICK_PROMPT
 from env_snapshot import generate as generate_env_snapshot
 from context import assemble_context
@@ -467,13 +467,21 @@ def run_validation(llm_url: str, llm_model: str):
 
     config = make_test_config(llm_url, workspace_dir, llm_model)
 
+    # Ensure model is loaded before validation
+    print(f"\nKairos Validation — {llm_url}")
+    print(f"Model: {llm_model}")
+    print(f"Checking model availability...", end="", flush=True)
+    try:
+        status = ensure_model_loaded(config, ttl=3600)
+        print(f" {'ready' if status == 'already_loaded' else 'loaded'}")
+    except LLMError as e:
+        print(f" FAILED: {e}")
+        print(f"Continuing anyway — JIT loading may work on first request.")
+    print("=" * 60)
+
     # Write a default goal for stages that need it
     config.goal_path.write_text("Validation test goal.")
     write_memory(config, "# Working Memory\nValidation run.")
-
-    print(f"\nKairos Validation — {llm_url}")
-    print(f"Model: {llm_model}")
-    print("=" * 60)
 
     stages = [
         stage_endpoint_health,

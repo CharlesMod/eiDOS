@@ -68,6 +68,7 @@ def assemble_context(
     goal_start_time: float,
     loop_detected: bool = False,
     repeat_count: int = 0,
+    max_ticks: int = 0,
 ) -> list[dict]:
     """Assemble the full messages list in fixed order for one tick.
 
@@ -95,10 +96,12 @@ def assemble_context(
 
     # 3. Memory — budget-capped
     memory = read_memory(config)
+    mem_len = len(memory) if memory else 0
     if memory:
-        if len(memory) > config.context_memory_max_chars:
-            _log_overrun(config, tick_number, "memory", len(memory), config.context_memory_max_chars)
+        if mem_len > config.context_memory_max_chars:
+            _log_overrun(config, tick_number, "memory", mem_len, config.context_memory_max_chars)
             memory = _truncate(memory, config.context_memory_max_chars, "memory")
+            mem_len = config.context_memory_max_chars
         sections.append(f"## Working Memory\n{memory}")
 
     # 4. Environment snapshot — budget-capped
@@ -121,8 +124,12 @@ def assemble_context(
                                           config.context_interventions_max_chars, "interventions")
         sections.append(f"## Interventions (from supervisor)\n{intervention_text}")
 
-    # 6. Recent observations (newest first) — already bounded by config limits
-    observations = read_recent_observations(config)
+    # 6. Recent observations — adaptive budget.
+    #    When memory is large, reduce obs budget so total stays bounded;
+    #    when memory is small, give more room to observations.
+    combined_budget = config.context_memory_max_chars + config.context_obs_max_chars
+    obs_budget = max(1000, combined_budget - mem_len)
+    observations = read_recent_observations(config, max_chars=obs_budget)
     if observations:
         obs_lines = []
         for obs in observations:
@@ -147,29 +154,56 @@ def assemble_context(
     now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     elapsed = _format_elapsed(time.time() - goal_start_time)
 
+    # Urgency nudge: when 3 or fewer ticks remain, remind the model to finish.
+    urgency_note = ""
+    if max_ticks > 0:
+        remaining = max_ticks - tick_number
+        if remaining <= 0:
+            urgency_note = " — FINAL TICK: call goal_complete now or the run ends"
+        elif remaining <= 2:
+            urgency_note = f" — {remaining} tick{'s' if remaining != 1 else ''} remaining: wrap up and call goal_complete if ready"
+
     if loop_detected:
         tick_msg = TICK_PROMPT_LOOP_DETECTED.format(
             tick_number=tick_number,
+            max_ticks=max_ticks if max_ticks else "?",
             timestamp=now,
             elapsed=elapsed,
             repeat_count=repeat_count,
+            urgency_note=urgency_note,
         )
     else:
         tick_msg = TICK_PROMPT.format(
             tick_number=tick_number,
+            max_ticks=max_ticks if max_ticks else "?",
             timestamp=now,
             elapsed=elapsed,
+            urgency_note=urgency_note,
         )
 
     messages.append({"role": "user", "content": tick_msg})
 
-    # --- Total context size check ---
+    # --- Hard-enforce total context ceiling ---
+    # If over budget, shrink the user message (middle message) by trimming
+    # observations first, then trimming oldest memory lines. System and tick
+    # prompts are never touched — the model needs both to function.
     total_chars = sum(len(m["content"]) for m in messages)
-    est_tokens = estimate_tokens(str(total_chars), config.chars_per_token)
-
     if total_chars > config.context_max_total_chars:
         _log_overrun(config, tick_number, "TOTAL", total_chars, config.context_max_total_chars)
+        overhead = sum(len(m["content"]) for m in (messages[0], messages[2]))  # sys + tick
+        user_budget = config.context_max_total_chars - overhead
+        user_content = messages[1]["content"]
+        if len(user_content) > user_budget:
+            # Trim from the end of the user message (observations are last)
+            # Use a clean line boundary so we don't split inside a JSON blob
+            lines = user_content.splitlines(keepends=True)
+            while lines and len("".join(lines)) > user_budget:
+                lines.pop()
+            user_content = "".join(lines) + "\n... [context trimmed to fit budget]"
+            messages[1] = {"role": "user", "content": user_content}
+        total_chars = sum(len(m["content"]) for m in messages)
 
+    est_tokens = estimate_tokens(str(total_chars), config.chars_per_token)
     logger.info("tick=%d ctx_chars=%d est_tokens=%d sections=[sys=%d goal=%d mem=%d env=%d obs=%d tick=%d]",
                 tick_number, total_chars, est_tokens,
                 len(system), len(goal) if goal else 0,

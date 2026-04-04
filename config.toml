@@ -2,7 +2,7 @@
 url = "http://100.113.123.91:1234"
 model = "qwen3.5-4b-uncensored-hauhaucs-aggressive"
 temperature = 0.6
-max_tokens = 2048
+max_tokens = 1024
 request_timeout_s = 300
 top_p = 0.95
 top_k = 20
@@ -16,7 +16,8 @@ loop_detect_window = 3
 [compaction]
 token_threshold = 8000
 tick_threshold = 20
-max_tokens = 4096             # thinking models need headroom for reasoning + content
+max_tokens = 2048
+retry_max_tokens = 4096         # retry budget when thinking exhausts first attempt             # thinking models need headroom: ~1024 reasoning + ~1024 content
 # Generous budgets for distillation — compaction needs to see everything
 obs_max_chars = 16000       # observation chars fed to compaction LLM call
 memory_max_chars = 6000     # memory chars fed to compaction LLM call
@@ -44,9 +45,16 @@ protected_patterns = [
 [session]
 grace_period_s = 60
 
+[self_healing]
+restart_cmd = ""                # e.g. "systemctl restart llama-server"
+max_consecutive_failures = 5    # restart LLM after this many back-to-back errors
+
 [rotation]
 obs_max_lines = 5000
 archive_days = 14
+llm_log_max_bytes = 5000000    # 5MB then rotate
+llm_log_archive_count = 3     # keep last N llm_log archives
+snapshot_max_count = 20        # keep last N memory snapshots
 
 [context]
 obs_max_chars = 4000
@@ -56,7 +64,7 @@ goal_max_chars = 2000
 memory_max_chars = 4000
 env_max_chars = 800
 interventions_max_chars = 2000
-max_total_chars = 24000     # total tick context budget (~6800 tokens)
+max_total_chars = 6500      # safe ceiling: ~1870 tokens + 1024 max_tokens fits n_ctx~3072
 chars_per_token = 3.5       # rough estimate for Qwen3
 
 [persona]

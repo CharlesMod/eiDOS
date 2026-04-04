@@ -86,6 +86,103 @@ class TestCompactionTriggers(unittest.TestCase):
 
         self.assertEqual(read_memory(self.config), "condensed memory")
 
+    @patch("compaction.complete", return_value=(
+        "Thinking Process:\n\n"
+        "1.  **Analyze the Request:**\n"
+        "    *   Role: Memory compaction system.\n"
+        "    *   Task: Rewrite working memory.\n"
+        "This is raw reasoning that should NOT be saved as memory."
+    ))
+    def test_compact_discards_reasoning_dump(self, _mock_complete):
+        """Thinking models may exhaust tokens on reasoning, returning raw
+        'Thinking Process:' output instead of actual compacted memory.
+        compact() must detect this and keep the old memory."""
+        write_memory(self.config, "important prior memory")
+        append_observation(self.config, {"tick": 1, "tool": "bash", "success": True, "output": "work"})
+
+        compact(self.config)
+
+        mem = read_memory(self.config)
+        self.assertEqual(mem, "important prior memory")
+        self.assertNotIn("Thinking Process", mem)
+
+    @patch("compaction.complete", return_value=(
+        "  \n**Analyze the Request:** The user wants...\nStep by step analysis..."
+    ))
+    def test_compact_discards_reasoning_with_leading_whitespace(self, _mock_complete):
+        """Reasoning dumps may have leading whitespace before the marker."""
+        write_memory(self.config, "real memory content")
+        append_observation(self.config, {"tick": 1, "tool": "bash", "success": True, "output": "work"})
+
+        compact(self.config)
+
+        self.assertEqual(read_memory(self.config), "real memory content")
+
+    @patch("compaction.complete", return_value="# Working Memory\nGoal: explore system.\n- Checked disk: OK")
+    def test_compact_keeps_legitimate_memory_starting_with_heading(self, _mock_complete):
+        """Normal compaction output (markdown headings, bullet points) must not
+        be falsely flagged as reasoning."""
+        write_memory(self.config, "old memory")
+        append_observation(self.config, {"tick": 1, "tool": "bash", "success": True, "output": "work"})
+
+        compact(self.config)
+
+        self.assertIn("Goal: explore system", read_memory(self.config))
+
+    @patch("compaction.complete", side_effect=[
+        "Thinking Process:\n1. **Analyze** the request...",
+        "# Working Memory\nRetry succeeded with higher budget.",
+    ])
+    def test_compact_retries_on_reasoning_dump(self, mock_complete):
+        """When first attempt returns reasoning dump, compact() retries with
+        higher max_tokens budget."""
+        self.config.compaction_retry_max_tokens = 4096
+        write_memory(self.config, "old memory")
+        append_observation(self.config, {"tick": 1, "tool": "bash", "success": True, "output": "work"})
+
+        compact(self.config)
+
+        self.assertEqual(mock_complete.call_count, 2)
+        # First call uses compaction_max_tokens
+        _, kwargs1 = mock_complete.call_args_list[0]
+        self.assertEqual(kwargs1.get("max_tokens") or self.config.compaction_max_tokens,
+                         self.config.compaction_max_tokens)
+        # Second call uses retry budget
+        _, kwargs2 = mock_complete.call_args_list[1]
+        self.assertEqual(kwargs2["max_tokens"], 4096)
+        # Memory should be the retry result
+        self.assertIn("Retry succeeded", read_memory(self.config))
+
+    @patch("compaction.complete")
+    def test_compact_passes_enable_thinking_false(self, mock_complete):
+        """Compaction should request thinking disabled via enable_thinking=False."""
+        mock_complete.return_value = "Condensed memory."
+        write_memory(self.config, "old memory")
+        append_observation(self.config, {"tick": 1, "tool": "bash", "success": True, "output": "work"})
+
+        compact(self.config)
+
+        # Check that enable_thinking=False was passed
+        _, kwargs = mock_complete.call_args_list[0]
+        self.assertFalse(kwargs.get("enable_thinking"))
+
+    @patch("compaction.complete", return_value="Condensed memory with goal context.")
+    def test_compact_includes_goal_in_prompt(self, mock_complete):
+        """Compaction prompt must include the current goal so the LLM knows
+        what information is relevant to retain."""
+        self.config.goal_path.write_text("Build a weather station dashboard.")
+        write_memory(self.config, "# Working Memory\nPrior observations.")
+        append_observation(self.config, {"tick": 1, "tool": "bash", "success": True, "output": "data"})
+
+        compact(self.config)
+
+        # Inspect the messages passed to complete()
+        call_args = mock_complete.call_args
+        messages = call_args[0][0]  # first positional arg
+        user_msg = next(m["content"] for m in messages if m["role"] == "user")
+        self.assertIn("Build a weather station dashboard", user_msg)
+        self.assertIn("immutable", user_msg.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

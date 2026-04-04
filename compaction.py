@@ -10,6 +10,7 @@ import time
 
 from config import Config
 from memory import (
+    read_goal,
     read_memory,
     write_memory,
     read_recent_observations,
@@ -73,9 +74,11 @@ def compact(config: Config, persona: dict = None) -> None:
         mood = persona.get("mood", "neutral")
         system_content += COMPACTION_PERSONALITY_CLAUSE.format(traits=traits, mood=mood)
 
+    goal = read_goal(config)
     messages = [
         {"role": "system", "content": system_content},
         {"role": "user", "content": COMPACTION_USER.format(
+            goal=goal or "(no goal set)",
             memory=current_memory or "(empty — first compaction)",
             observations=obs_text or "(no observations)",
         )},
@@ -92,12 +95,51 @@ def compact(config: Config, persona: dict = None) -> None:
                        total_chars, config.compaction_context_max_chars)
         _log_compaction_overrun(config, total_chars)
 
-    new_memory = complete(messages, config, temperature=0.3, max_tokens=config.compaction_max_tokens)
+    # Thinking models (Qwen 3.5, etc.) may exhaust max_tokens on reasoning
+    # and produce zero content tokens.  complete() returns the raw reasoning
+    # as a fallback, which starts with "Thinking Process:" or similar.
+    # Saving that as memory is destructive — it fills the budget with
+    # meta-analysis noise and triggers a compaction loop every tick.
+    _REASONING_PREFIXES = (
+        "thinking process", "**analyze", "1.  **", "let me think",
+        "step 1:", "<think>", "reasoning:",
+    )
+
+    def _is_reasoning_dump(text: str) -> bool:
+        return bool(text) and text.lstrip().lower().startswith(_REASONING_PREFIXES)
+
+    # Strategy: request thinking disabled, then retry with higher budget if
+    # the server ignored it and the model exhausted tokens on reasoning.
+    new_memory = complete(messages, config, temperature=0.3,
+                          max_tokens=config.compaction_max_tokens,
+                          enable_thinking=False)
+
+    if _is_reasoning_dump(new_memory):
+        logger.warning("compaction returned raw reasoning on first attempt "
+                       "(server may not support enable_thinking=False) — "
+                       "retrying with %d max_tokens",
+                       config.compaction_retry_max_tokens)
+        new_memory = complete(messages, config, temperature=0.3,
+                              max_tokens=config.compaction_retry_max_tokens,
+                              enable_thinking=False)
+
+    if _is_reasoning_dump(new_memory):
+        logger.warning("compaction returned raw reasoning even after retry — "
+                       "keeping previous memory")
+        new_memory = ""
 
     # Some models occasionally return empty content for chat completions.
     # Keep at least the existing memory to avoid destructive compaction.
     if not new_memory or not new_memory.strip():
         new_memory = current_memory or "# Working Memory\nNo consolidated update produced in this pass."
+
+    # Hard cap: compaction output must fit in the tick-level memory budget.
+    # This guarantees memory reliably shrinks back to a usable size.
+    cap = config.context_memory_max_chars
+    if len(new_memory) > cap:
+        logger.warning("compaction output too large (%d > %d), trimming",
+                       len(new_memory), cap)
+        new_memory = new_memory[:cap].rsplit("\n", 1)[0] + "\n... [compaction trimmed]"
 
     # Atomic write
     write_memory(config, new_memory.strip())
