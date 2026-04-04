@@ -190,19 +190,44 @@ def recover(config: Config) -> dict:
     truncated = validate_observations(config)
     if truncated:
         print(f"[kairos] Truncated {truncated} malformed line(s) from observations.jsonl")
+        append_observation(config, {
+            "tick": 0,
+            "tool": "system",
+            "success": False,
+            "output": (f"Crash recovery: {truncated} corrupted observation(s) "
+                       f"removed from observations.jsonl. Recent history may be incomplete."),
+        })
 
     # 4. Scan background jobs, mark dead ones
     jobs = refresh_jobs(config)
     dead = [j for j in jobs if j["status"] != "running"]
     if dead:
         print(f"[kairos] Found {len(dead)} completed/dead background jobs")
+        dead_names = ", ".join(j.get("cmd", "?")[:60] for j in dead)
+        append_observation(config, {
+            "tick": 0,
+            "tool": "system",
+            "success": False,
+            "output": (f"Background jobs died during downtime: {dead_names}. "
+                       f"Their results are unavailable. Re-launch if still needed."),
+        })
 
-    # 5. Log recovery
+    # 5. Log recovery with full crash context
+    if wal:
+        recovery_detail = (
+            f"Kairos recovered from crash. Resuming at tick {wal.get('tick_number', '?')}. "
+            f"State before crash: {wal.get('consecutive_failures', 0)} consecutive LLM failures, "
+            f"{wal.get('reasoning_exhaustions', 0)} reasoning exhaustions, "
+            f"max_tokens was {wal.get('current_max_tokens', config.llm_max_tokens)}. "
+            f"Review recent observations — the last action may not have completed."
+        )
+    else:
+        recovery_detail = "Kairos starting fresh. No prior crash state found."
     append_observation(config, {
         "tick": 0,
         "tool": "system",
         "success": True,
-        "output": "Kairos recovered from restart. All state validated.",
+        "output": recovery_detail,
     })
 
     # 6. Rotate logs and clean old archives
@@ -449,11 +474,25 @@ def run_loop(config: Config, persona=None, wal=None):
         # --- Parse tool call ---
         call = parse_tool_call(response)
         if not call:
+            # Give the model actionable feedback so it can self-correct.
+            # Include the raw output snippet so it can see what went wrong,
+            # plus the expected format so it doesn't have to guess.
+            raw_snippet = response[:300].replace('\n', ' ').strip()
+            feedback = (
+                f"Could not parse a tool call from your response. "
+                f"Your output began with: {raw_snippet!r}\n\n"
+                f"Required format (exactly):\n"
+                f"<tool>TOOL_NAME</tool>\n"
+                f"<args>{{\"key\": \"value\"}}</args>\n\n"
+                f"Common mistakes: unescaped quotes inside JSON strings, "
+                f"missing </args> tag, arguments not valid JSON. "
+                f"Try again with a single, correctly-formatted tool call."
+            )
             append_observation(config, {
                 "tick": tick_number,
                 "tool": "parse_error",
                 "success": False,
-                "output": f"No valid tool call in response. Raw: {response[:500]}",
+                "output": feedback,
             })
             print(f"{pfx} Tick {tick_number}: no valid tool call parsed")
             # Hash as empty for loop detection
@@ -524,9 +563,18 @@ def run_loop(config: Config, persona=None, wal=None):
 
         # --- Log rotation check (every 50 ticks) ---
         if tick_number % 50 == 0:
-            rotate_if_needed(config)
+            rotated = rotate_if_needed(config)
             rotate_llm_log(config)
             cleanup_old_snapshots(config)
+            if rotated:
+                append_observation(config, {
+                    "tick": tick_number,
+                    "tool": "system",
+                    "success": True,
+                    "output": ("Observation log rotated. Older entries archived. "
+                               "Your recent observation history starts from this point — "
+                               "consult working memory for earlier context."),
+                })
 
         # --- Persona periodic save (every 10 ticks) ---
         if persona and config.persona_enabled and tick_number % 10 == 0:

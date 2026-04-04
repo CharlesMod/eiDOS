@@ -77,11 +77,16 @@ class TestLiveLLM:
             {"role": "system", "content": "You are a helpful assistant. Reply concisely."},
             {"role": "user", "content": "What is 2 + 2? Reply with just the number."},
         ]
-        response = complete(messages, self.config, max_tokens=256)
+        try:
+            response = complete(messages, self.config, max_tokens=512)
+        except ReasoningExhausted as e:
+            # Thinking model used entire budget on reasoning — check reasoning
+            print(f"\n  ReasoningExhausted: {e.reasoning_tokens}/{e.max_tokens} tokens")
+            print(f"  Reasoning: {e.reasoning[:200]!r}")
+            assert "4" in e.reasoning, f"Expected '4' in reasoning, got: {e.reasoning[:200]!r}"
+            return
         print(f"\n  Response: {response!r}")
         assert response.strip(), "Response should not be empty"
-        # Accept the answer in content or reasoning — thinking models may
-        # exhaust max_tokens on reasoning before producing final output
         assert "4" in response or "two" in response.lower(), (
             f"Expected '4' in response, got: {response!r}"
         )
@@ -119,8 +124,12 @@ class TestLiveLLM:
             {"role": "user", "content": "Say 'ping'."},
         ]
         # Call complete — it logs to llm_log.jsonl
-        response = complete(messages, self.config, max_tokens=32)
-        print(f"\n  Response: {response!r}")
+        # ReasoningExhausted also logs before raising, so the log entry exists either way
+        try:
+            response = complete(messages, self.config, max_tokens=128)
+            print(f"\n  Response: {response!r}")
+        except ReasoningExhausted as e:
+            print(f"\n  ReasoningExhausted ({e.reasoning_tokens} tokens) — log still written")
 
         # Check the log file was written
         log_path = Path(self.config.workspace_dir) / "llm_log.jsonl"
@@ -136,7 +145,10 @@ class TestLiveLLM:
         messages = [
             {"role": "user", "content": "Reply with the word 'logged'."},
         ]
-        complete(messages, self.config, max_tokens=32)
+        try:
+            complete(messages, self.config, max_tokens=128)
+        except ReasoningExhausted:
+            pass  # Log is still written on exhaustion
 
         log_path = Path(self.config.workspace_dir) / "llm_log.jsonl"
         assert log_path.exists()

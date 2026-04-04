@@ -229,5 +229,88 @@ class TestParserSloppyJSON(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestParserUnescapedQuotes(unittest.TestCase):
+    """Test recovery from unescaped quotes inside JSON string values.
+
+    This is the most common parse failure from 4B thinking models.
+    The model produces commands like:  grep -v "pattern"  inside JSON
+    without escaping the inner quotes.
+    """
+
+    def test_grep_with_unescaped_quotes(self):
+        """Real failure: {"cmd": "grep -v "^-""}"""
+        text = '<tool>bash</tool>\n<args>{"cmd": "grep -v "^-""}</args>'
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result, "Should recover from unescaped quotes in cmd")
+        self.assertIn("grep", result.args["cmd"])
+        self.assertIn("^-", result.args["cmd"])
+
+    def test_free_with_unescaped_quotes(self):
+        """Real failure from live test: free -h && df -h | grep -v "^-" """
+        text = '<tool>bash</tool>\n<args>{"cmd": "free -h && df -h | grep -v "^-""}</args>'
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result, "Should recover from unescaped quotes in cmd")
+        self.assertIn("free -h", result.args["cmd"])
+
+    def test_echo_with_unescaped_quotes(self):
+        """{"cmd": "echo "hello world""}"""
+        text = '<tool>bash</tool>\n<args>{"cmd": "echo "hello world""}</args>'
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertIn("hello world", result.args["cmd"])
+
+    def test_sed_with_unescaped_quotes(self):
+        """{"cmd": "sed -i "s/old/new/g" file.txt"}"""
+        text = '<tool>bash</tool>\n<args>{"cmd": "sed -i "s/old/new/g" file.txt"}</args>'
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertIn("sed", result.args["cmd"])
+        self.assertIn("s/old/new/g", result.args["cmd"])
+
+    def test_awk_with_unescaped_quotes(self):
+        """{"cmd": "awk "{print $1}" file.txt"}"""
+        text = '<tool>bash</tool>\n<args>{"cmd": "awk "{print $1}" file.txt"}</args>'
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertIn("awk", result.args["cmd"])
+
+    def test_find_with_unescaped_quotes(self):
+        """{"cmd": "find / -name "*.conf""}"""
+        text = '<tool>bash</tool>\n<args>{"cmd": "find / -name "*.conf""}</args>'
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertIn("find", result.args["cmd"])
+        self.assertIn("*.conf", result.args["cmd"])
+
+    def test_valid_json_not_affected(self):
+        """Normal JSON with properly escaped quotes is unchanged."""
+        text = '<tool>bash</tool>\n<args>{"cmd": "echo \\"hello\\""}</args>'
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.args["cmd"], 'echo "hello"')
+
+    def test_unclosed_args_with_unescaped_quotes(self):
+        """Unescaped quotes + missing </args> tag."""
+        text = '<tool>bash</tool>\n<args>{"cmd": "grep "pattern" file.txt"}'
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertIn("grep", result.args["cmd"])
+
+    def test_fallback_only_for_cmd_key(self):
+        """Non-cmd keys with broken JSON still fail (no blind guessing)."""
+        text = '<tool>write_file</tool>\n<args>{"path": "/tmp/"bad"", "content": "hi"}</args>'
+        result = parse_tool_call(text)
+        # This is ambiguous with multiple keys — fallback is cmd-only
+        self.assertIsNone(result)
+
+    def test_empty_cmd_after_extraction_fails(self):
+        """Empty command value should not produce a tool call."""
+        text = '<tool>bash</tool>\n<args>{"cmd": ""}</args>'
+        result = parse_tool_call(text)
+        # Empty cmd should still parse as valid JSON (it is), but cmd is empty
+        self.assertIsNotNone(result)
+        self.assertEqual(result.args["cmd"], "")
+
+
 if __name__ == "__main__":
     unittest.main()

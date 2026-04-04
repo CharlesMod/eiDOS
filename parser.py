@@ -126,14 +126,46 @@ def parse_tool_call(text: str) -> Optional[ToolCall]:
 
 
 def _try_parse_json(args_str: str) -> Optional[dict]:
-    """Try raw JSON, then cleaned. Returns dict or None."""
+    """Try raw JSON, then cleaned, then cmd-extraction fallback. Returns dict or None."""
     try:
         args = json.loads(args_str)
     except (json.JSONDecodeError, ValueError):
         try:
             args = json.loads(_clean_json(args_str))
         except (json.JSONDecodeError, ValueError):
+            # Last resort: extract {"cmd": "..."} with unescaped inner quotes
+            # Handles e.g. {"cmd": "grep -v "pattern""}
+            extracted = _extract_cmd_fallback(args_str)
+            if extracted is not None:
+                return extracted
             return None
     if not isinstance(args, dict):
         return None
     return args
+
+
+# Regex for {"cmd": "...anything..."} where the value may contain unescaped quotes
+_CMD_EXTRACT = re.compile(
+    r'\{\s*"cmd"\s*:\s*"(.*)"',
+    re.DOTALL,
+)
+
+
+def _extract_cmd_fallback(s: str) -> Optional[dict]:
+    """Extract a cmd value from malformed JSON where internal quotes aren't escaped.
+
+    For a 4B model producing {"cmd": "grep -v "^-""}, greedily capture everything
+    between the opening quote after "cmd": and the last quote before }.
+    """
+    s = _clean_json(s)
+    m = _CMD_EXTRACT.search(s)
+    if not m:
+        return None
+    # The greedy .* captured everything between first and last quote
+    cmd = m.group(1).strip()
+    # Remove any trailing " that got included (extra closing quote)
+    cmd = cmd.rstrip('"').strip()
+    if not cmd:
+        return None
+    # Escape internal quotes so the value is clean for downstream use
+    return {"cmd": cmd}

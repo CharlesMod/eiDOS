@@ -121,8 +121,10 @@ def compact(config: Config, persona: dict = None) -> None:
                                   max_tokens=config.compaction_retry_max_tokens)
         except ReasoningExhausted:
             logger.warning("compaction: reasoning exhausted even on retry — "
-                           "keeping previous memory")
-            new_memory = ""
+                           "building fallback memory from observations")
+            new_memory = _build_fallback_memory(
+                current_memory, goal, observations, config.context_memory_max_chars
+            )
 
     # Some models occasionally return empty content for chat completions.
     # Keep at least the existing memory to avoid destructive compaction.
@@ -158,6 +160,48 @@ def _snapshot_memory(config: Config) -> None:
     ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
     snapshot_path = config.snapshots_dir / f"memory_before_{ts}.md"
     snapshot_path.write_text(current)
+
+
+def _build_fallback_memory(
+    current_memory: str,
+    goal: str,
+    observations: list,
+    cap: int,
+) -> str:
+    """Build fallback memory when LLM compaction fails completely.
+
+    Preserves existing memory and appends observation summaries so
+    critical facts aren't lost when the model can't produce output.
+    """
+    parts = []
+
+    if goal:
+        parts.append(f"## Active Goal (immutable — do NOT alter)\n{goal}")
+
+    if current_memory:
+        parts.append(current_memory.strip())
+
+    if observations:
+        obs_lines = ["## Uncompacted Observations (auto-preserved)"]
+        for obs in observations:
+            tick = obs.get("tick", "?")
+            tool = obs.get("tool", "?")
+            output = obs.get("output", "")
+            if len(output) > 150:
+                output = output[:150] + "..."
+            line = f"- [tick {tick} | {tool}] {output}"
+            # Stop if we'd exceed the cap
+            current_len = sum(len(p) for p in parts) + sum(len(l) for l in obs_lines) + len(line) + 10
+            if current_len > cap:
+                obs_lines.append("... (observations truncated to fit budget)")
+                break
+            obs_lines.append(line)
+        parts.append("\n".join(obs_lines))
+
+    if not parts:
+        return "# Working Memory\nCompaction failed — no data available."
+
+    return "\n\n".join(parts)
 
 
 def _format_observations(observations: list[dict]) -> str:

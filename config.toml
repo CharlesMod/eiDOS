@@ -32,6 +32,9 @@ disk_min_gb = 1.0
 ram_max_pct = 85.0
 protected_patterns = [
     "rm\\s+-rf\\s+/",
+    "rm\\s+.*-r",
+    "find\\s+.*-exec\\s+rm",
+    "find\\s+.*-delete",
     "systemctl\\s+(stop|disable|kill)\\s+.*kairos",
     "pkill.*kairos",
     "kill.*kairos",

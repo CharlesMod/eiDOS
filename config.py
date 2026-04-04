@@ -47,6 +47,9 @@ class Config:
     ram_max_pct: float = 85.0
     protected_patterns: List[str] = dataclasses.field(default_factory=lambda: [
         r"rm\s+-rf\s+/",
+        r"rm\s+.*-r",            # rm -r, rm -rf, rm -ri, etc.
+        r"find\s+.*-exec\s+rm",  # find ... -exec rm
+        r"find\s+.*-delete",     # find ... -delete
         r"systemctl\s+(stop|disable|kill)\s+.*kairos",
         r"pkill.*kairos",
         r"kill.*kairos",
