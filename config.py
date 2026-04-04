@@ -89,9 +89,12 @@ class Config:
     context_obs_max_count: int = 20
     context_goal_max_chars: int = 2000
     context_memory_max_chars: int = 4000
+    context_plan_max_chars: int = 800           # briefing model: plan section budget
+    context_intelligence_max_chars: int = 1200  # briefing model: auto-recalled knowledge
     context_env_max_chars: int = 800
     context_interventions_max_chars: int = 2000
     context_max_total_chars: int = 20000  # test/dev default; production uses config.toml (6500)
+    briefing_model: bool = False  # enable new context structure (Phase 2)
 
     # Compaction context budgets (chars) — generous for distillation
     compaction_obs_max_chars: int = 16000
@@ -110,6 +113,11 @@ class Config:
     # Dashboard
     dashboard_port: int = 8099
 
+    # Knowledge store
+    knowledge_enabled: bool = True
+    knowledge_recall_top_k: int = 3         # entries auto-surfaced per tick
+    knowledge_recall_max_chars: int = 1200  # budget for Intelligence section
+
     # Mock mode
     mock_mode: bool = False
 
@@ -124,6 +132,10 @@ class Config:
     @property
     def memory_path(self) -> Path:
         return self.workspace / "memory.md"
+
+    @property
+    def plan_path(self) -> Path:
+        return self.workspace / "plan.md"
 
     @property
     def observations_path(self) -> Path:
@@ -148,6 +160,14 @@ class Config:
     @property
     def jobs_path(self) -> Path:
         return self.workspace / "jobs.json"
+
+    @property
+    def knowledge_dir(self) -> Path:
+        return self.workspace / "knowledge"
+
+    @property
+    def knowledge_index_path(self) -> Path:
+        return self.knowledge_dir / "index.json"
 
 
 def load_config(path: str = "config.toml") -> Config:
@@ -223,10 +243,13 @@ def load_config(path: str = "config.toml") -> Config:
         config.context_obs_max_count = ctx.get("obs_max_count", config.context_obs_max_count)
         config.context_goal_max_chars = ctx.get("goal_max_chars", config.context_goal_max_chars)
         config.context_memory_max_chars = ctx.get("memory_max_chars", config.context_memory_max_chars)
+        config.context_plan_max_chars = ctx.get("plan_max_chars", config.context_plan_max_chars)
+        config.context_intelligence_max_chars = ctx.get("intelligence_max_chars", config.context_intelligence_max_chars)
         config.context_env_max_chars = ctx.get("env_max_chars", config.context_env_max_chars)
         config.context_interventions_max_chars = ctx.get("interventions_max_chars", config.context_interventions_max_chars)
         config.context_max_total_chars = ctx.get("max_total_chars", config.context_max_total_chars)
         config.chars_per_token = ctx.get("chars_per_token", config.chars_per_token)
+        config.briefing_model = ctx.get("briefing_model", config.briefing_model)
 
         comp_ctx = data.get("compaction", {})
         config.compaction_obs_max_chars = comp_ctx.get("obs_max_chars", config.compaction_obs_max_chars)
@@ -238,6 +261,11 @@ def load_config(path: str = "config.toml") -> Config:
 
         dashboard = data.get("dashboard", {})
         config.dashboard_port = dashboard.get("port", config.dashboard_port)
+
+        knowledge = data.get("knowledge", {})
+        config.knowledge_enabled = knowledge.get("enabled", config.knowledge_enabled)
+        config.knowledge_recall_top_k = knowledge.get("recall_top_k", config.knowledge_recall_top_k)
+        config.knowledge_recall_max_chars = knowledge.get("recall_max_chars", config.knowledge_recall_max_chars)
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

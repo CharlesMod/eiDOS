@@ -330,6 +330,93 @@ def tool_remember(args: dict, config: Config) -> ToolResult:
     return ToolResult(output=f"Noted in memory: {note[:100]}", full_output_path=None, success=True, duration_s=0)
 
 
+def tool_update_plan(args: dict, config: Config) -> ToolResult:
+    """Write an urgent note to plan.md (briefing model working memory)."""
+    from memory import read_plan, write_plan
+
+    note = args.get("note", "")
+    if not note:
+        return ToolResult(output="Error: 'note' required", full_output_path=None, success=False, duration_s=0)
+
+    current = read_plan(config)
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    addition = f"\n\n[Updated at {timestamp}]\n{note}"
+    updated = current + addition
+
+    # Hard cap: trim oldest lines from top to stay within plan budget
+    budget = config.context_plan_max_chars
+    if len(updated) > budget:
+        lines = updated.splitlines(keepends=True)
+        while lines and len("".join(lines)) > budget:
+            lines.pop(0)
+        updated = "".join(lines)
+
+    write_plan(config, updated)
+    return ToolResult(output=f"Plan updated: {note[:100]}", full_output_path=None, success=True, duration_s=0)
+
+
+def tool_memorize(args: dict, config: Config) -> ToolResult:
+    """Store a durable knowledge entry in the long-term knowledge store."""
+    from knowledge import store_entry
+
+    fact = args.get("fact", "")
+    if not fact:
+        return ToolResult(output="Error: 'fact' required", full_output_path=None, success=False, duration_s=0)
+
+    tags = args.get("tags", [])
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",") if t.strip()]
+    if not tags:
+        return ToolResult(output="Error: 'tags' required (list of strings)", full_output_path=None, success=False, duration_s=0)
+
+    category = args.get("category", "facts")
+    confidence = args.get("confidence", "tentative")
+    source_goal = args.get("source_goal", "")
+    source_tick = args.get("source_tick", 0)
+
+    try:
+        entry_id = store_entry(
+            config, content=fact, tags=tags, category=category,
+            confidence=confidence, source_goal=source_goal,
+            source_tick=source_tick,
+        )
+        return ToolResult(
+            output=f"Stored to long-term memory: {entry_id}",
+            full_output_path=None, success=True, duration_s=0,
+        )
+    except Exception as e:
+        return ToolResult(
+            output=f"Error storing knowledge: {e}",
+            full_output_path=None, success=False, duration_s=0,
+        )
+
+
+def tool_recall(args: dict, config: Config) -> ToolResult:
+    """Search the long-term knowledge store."""
+    from knowledge import search_bm25, format_recalled
+
+    query = args.get("query", "")
+    if not query:
+        return ToolResult(output="Error: 'query' required", full_output_path=None, success=False, duration_s=0)
+
+    try:
+        results = search_bm25(config, query, top_k=5)
+        if not results:
+            return ToolResult(
+                output="No relevant knowledge found.",
+                full_output_path=None, success=True, duration_s=0,
+            )
+        text = format_recalled(results, max_chars=config.knowledge_recall_max_chars)
+        return ToolResult(
+            output=text, full_output_path=None, success=True, duration_s=0,
+        )
+    except Exception as e:
+        return ToolResult(
+            output=f"Error recalling knowledge: {e}",
+            full_output_path=None, success=False, duration_s=0,
+        )
+
+
 def tool_goal_complete(args: dict, config: Config) -> ToolResult:
     """Signal that the current goal has been achieved."""
     summary = args.get("summary", "")
@@ -421,6 +508,9 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "bg_check": tool_bg_check,
     "http_get": tool_http_get,
     "remember": tool_remember,
+    "update_plan": tool_update_plan,
+    "memorize": tool_memorize,
+    "recall": tool_recall,
     "goal_complete": tool_goal_complete,
     "ask_supervisor": tool_ask_supervisor,
 }

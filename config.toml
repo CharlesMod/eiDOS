@@ -73,16 +73,24 @@ obs_max_count = 20
 # Per-section budgets for normal ticks — keep lean for fast inference
 goal_max_chars = 2000
 memory_max_chars = 4000
+plan_max_chars = 800            # briefing model: plan section budget
+intelligence_max_chars = 1200   # briefing model: auto-recalled knowledge
 env_max_chars = 800
 interventions_max_chars = 2000
 max_total_chars = 6500      # safe ceiling: ~1870 tokens + 1024 max_tokens fits n_ctx~3072
 chars_per_token = 3.5       # rough estimate for Qwen3
+briefing_model = false      # enable new context structure (set true when ready)
 
 [persona]
 enabled = true
 
 [dashboard]
 port = 8099
+
+[knowledge]
+enabled = true
+recall_top_k = 3          # entries auto-surfaced per tick
+recall_max_chars = 1200   # budget for Intelligence section
 
 [paths]
 workspace = "workspace"

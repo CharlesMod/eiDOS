@@ -1,4 +1,9 @@
-"""Three-tier memory management: goal.md, memory.md, observations.jsonl."""
+"""Three-tier memory management: goal.md, plan.md (working memory), observations.jsonl.
+
+Historical note: plan.md was previously memory.md.  The read_memory / write_memory
+functions are kept as aliases so existing callers continue to work during the
+transition.
+"""
 
 import json
 import os
@@ -17,8 +22,46 @@ def read_goal(config: Config) -> str:
         return ""
 
 
+def read_plan(config: Config) -> str:
+    """Read plan.md (or memory.md as fallback). Returns empty string if missing."""
+    try:
+        return config.plan_path.read_text().strip()
+    except FileNotFoundError:
+        pass
+    # Fallback: read legacy memory.md during transition
+    try:
+        return config.memory_path.read_text().strip()
+    except FileNotFoundError:
+        return ""
+
+
+def write_plan(config: Config, content: str) -> None:
+    """Atomically write plan.md (temp file + rename)."""
+    config.workspace.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(config.workspace),
+        prefix=".plan_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.rename(tmp_path, str(config.plan_path))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+# --- Aliases for backward compatibility (used by kairos.py, compaction.py, tools.py) ---
+
 def read_memory(config: Config) -> str:
-    """Read memory.md. Returns empty string if missing."""
+    """Read memory.md. Returns empty string if missing.
+
+    Note: new code should prefer read_plan().
+    """
     try:
         return config.memory_path.read_text().strip()
     except FileNotFoundError:
@@ -26,7 +69,10 @@ def read_memory(config: Config) -> str:
 
 
 def write_memory(config: Config, content: str) -> None:
-    """Atomically write memory.md (temp file + rename)."""
+    """Atomically write memory.md (temp file + rename).
+
+    Note: new code should prefer write_plan().
+    """
     config.workspace.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(
         dir=str(config.workspace),
@@ -38,7 +84,6 @@ def write_memory(config: Config, content: str) -> None:
             f.write(content)
         os.rename(tmp_path, str(config.memory_path))
     except Exception:
-        # Clean up temp file on failure
         try:
             os.unlink(tmp_path)
         except OSError:

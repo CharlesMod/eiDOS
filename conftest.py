@@ -2,7 +2,31 @@
 
 import logging
 import os
+import shutil
 import time
+from pathlib import Path
+
+import pytest
+
+_session_start = None
+_RPI4_MULTIPLIER = 7.0
+
+_FIXTURES_DIR = Path(__file__).parent / "tests" / "fixtures"
+
+
+@pytest.fixture
+def knowledge_fixture(tmp_path):
+    """Copy the seed knowledge store into a temp workspace for testing.
+
+    Returns the Config-style workspace path (tmp_path / "workspace").
+    The knowledge dir is at workspace/knowledge/.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    src = _FIXTURES_DIR / "knowledge"
+    dst = workspace / "knowledge"
+    shutil.copytree(str(src), str(dst))
+    return workspace
 
 _session_start = None
 _RPI4_MULTIPLIER = 7.0

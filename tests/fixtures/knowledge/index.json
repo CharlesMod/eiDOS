@@ -1,0 +1,145 @@
+[
+  {
+    "id": "pi_hardware_specs",
+    "category": "facts",
+    "tags": ["raspberry-pi", "hardware", "ram"],
+    "confidence": "verified",
+    "source_goal": "Initial system survey",
+    "source_tick": 5,
+    "created": "2026-04-01T10:00:00Z",
+    "updated": "2026-04-01T10:00:00Z",
+    "content_preview": "Raspberry Pi 4 Model B with 4GB RAM. Broadcom BCM2711 quad-core Cortex-A72 at 1.5GHz. Running Raspberry Pi OS Bookworm (Debian 12). SD card is 64GB."
+  },
+  {
+    "id": "pip_bookworm_flag",
+    "category": "facts",
+    "tags": ["pip", "python", "bookworm", "raspberry-pi"],
+    "confidence": "verified",
+    "source_goal": "Set up Python environment",
+    "source_tick": 12,
+    "created": "2026-04-01T11:00:00Z",
+    "updated": "2026-04-01T11:00:00Z",
+    "content_preview": "On Raspberry Pi OS Bookworm (Debian 12), pip install requires the --break-system-packages flag or use of a virtual environment. Without this flag pip refuses to install packages globally."
+  },
+  {
+    "id": "gpio_dht22_sensor",
+    "category": "facts",
+    "tags": ["gpio", "dht22", "sensor", "temperature", "humidity"],
+    "confidence": "verified",
+    "source_goal": "Deploy weather station",
+    "source_tick": 34,
+    "created": "2026-04-02T08:30:00Z",
+    "updated": "2026-04-02T08:30:00Z",
+    "content_preview": "DHT22 temperature/humidity sensor connected on GPIO4. Requires adafruit-circuitpython-dht library. Readings take approximately 2 seconds. Occasional CRC checksum errors are normal \u2014 retry up to 3 times before logging a failure."
+  },
+  {
+    "id": "tailscale_network",
+    "category": "facts",
+    "tags": ["network", "tailscale", "vpn", "connectivity"],
+    "confidence": "verified",
+    "source_goal": "Initial system survey",
+    "source_tick": 8,
+    "created": "2026-04-01T10:30:00Z",
+    "updated": "2026-04-01T10:30:00Z",
+    "content_preview": "Network access is via Tailscale VPN. The Pi's Tailscale IP is 100.74.178.26. The control machine is at 100.113.123.91. There is no direct internet access \u2014 all external traffic routes through the Tailscale network. Pull-only architecture: the Pi never initiates outbound connections to untrusted hosts."
+  },
+  {
+    "id": "solar_power_constraints",
+    "category": "facts",
+    "tags": ["solar", "power", "battery", "runtime"],
+    "confidence": "verified",
+    "source_goal": "Initial system survey",
+    "source_tick": 6,
+    "created": "2026-04-01T10:15:00Z",
+    "updated": "2026-04-01T10:15:00Z",
+    "content_preview": "The Pi is powered by a solar panel and battery system. During extended cloud cover the battery may run low. Kairos should minimize CPU-intensive operations during low-power periods. The system may shut down unexpectedly due to power loss \u2014 crash recovery handles this."
+  },
+  {
+    "id": "network_diagnostics",
+    "category": "procedures",
+    "tags": ["network", "diagnostics", "troubleshooting", "connectivity"],
+    "confidence": "verified",
+    "source_goal": "Fix network outage",
+    "source_tick": 67,
+    "created": "2026-04-03T14:00:00Z",
+    "updated": "2026-04-03T14:00:00Z",
+    "content_preview": "When network connectivity fails, diagnose in this order: 1) ip link show \u2014 check interface is UP. 2) ping the default gateway. 3) Check /etc/resolv.conf for DNS. 4) systemctl status systemd-networkd. 5) Check tailscale status for VPN health. 6) If all else fails, restarting tailscaled often fixes transient issues."
+  },
+  {
+    "id": "cron_setup",
+    "category": "procedures",
+    "tags": ["cron", "scheduling", "automation"],
+    "confidence": "verified",
+    "source_goal": "Set up data collection",
+    "source_tick": 45,
+    "created": "2026-04-02T16:00:00Z",
+    "updated": "2026-04-02T16:00:00Z",
+    "content_preview": "To schedule recurring tasks: use crontab -e (never edit /var/spool/cron directly). Always use absolute paths in crontab entries. Redirect output to a log file to capture errors. Test the command manually first. Example: */5 * * * * /usr/bin/python3 /home/pi/collect.py >> /home/pi/collect.log 2>&1"
+  },
+  {
+    "id": "python_venv_setup",
+    "category": "procedures",
+    "tags": ["python", "virtualenv", "venv", "packages"],
+    "confidence": "verified",
+    "source_goal": "Set up Python environment",
+    "source_tick": 15,
+    "created": "2026-04-01T11:30:00Z",
+    "updated": "2026-04-01T11:30:00Z",
+    "content_preview": "To set up a Python virtual environment on the Pi: python3 -m venv ~/myenv && source ~/myenv/bin/activate. Then pip install works without --break-system-packages. Activate before running scripts: source ~/myenv/bin/activate && python3 script.py. The venv should be created once and reused across ticks."
+  },
+  {
+    "id": "pip_externally_managed",
+    "category": "errors",
+    "tags": ["pip", "python", "bookworm", "installation"],
+    "confidence": "verified",
+    "source_goal": "Set up Python environment",
+    "source_tick": 10,
+    "created": "2026-04-01T10:45:00Z",
+    "updated": "2026-04-01T10:45:00Z",
+    "content_preview": "pip install fails with \"externally-managed-environment\" error on Raspberry Pi OS Bookworm. This is a PEP 668 restriction. Fix: use --break-system-packages flag or create a virtual environment. The error message is misleading \u2014 it's not a permissions issue but an OS policy."
+  },
+  {
+    "id": "dht22_crc_errors",
+    "category": "errors",
+    "tags": ["dht22", "sensor", "gpio", "crc"],
+    "confidence": "verified",
+    "source_goal": "Deploy weather station",
+    "source_tick": 38,
+    "created": "2026-04-02T09:00:00Z",
+    "updated": "2026-04-02T09:00:00Z",
+    "content_preview": "DHT22 sensor occasionally returns CRC checksum errors. These are transient hardware timing issues, not software bugs. Retry up to 3 times with a 2-second delay between attempts. If errors persist after 3 retries, the wiring or sensor may be faulty. Do not treat CRC errors as fatal."
+  },
+  {
+    "id": "tmp_full_npm",
+    "category": "errors",
+    "tags": ["npm", "node", "tmp", "disk", "installation"],
+    "confidence": "tentative",
+    "source_goal": "Set up web dashboard",
+    "source_tick": 52,
+    "created": "2026-04-02T18:00:00Z",
+    "updated": "2026-04-02T18:00:00Z",
+    "content_preview": "npm install fails silently when /tmp is full. The error output is unhelpful \u2014 check df -h /tmp first when npm operations fail unexpectedly. Fix: clear /tmp or set npm cache to a different location with npm config set cache /home/pi/.npm-cache."
+  },
+  {
+    "id": "check_os_before_install",
+    "category": "reflections",
+    "tags": ["planning", "os", "installation", "efficiency"],
+    "confidence": "verified",
+    "source_goal": "Set up Python environment",
+    "source_tick": 14,
+    "created": "2026-04-01T11:15:00Z",
+    "updated": "2026-04-01T11:15:00Z",
+    "content_preview": "Wasted 3 ticks trying to install packages before checking the OS version. The pip --break-system-packages issue would have been caught immediately by checking /etc/os-release. Lesson: always check OS version and distribution before attempting package installation."
+  },
+  {
+    "id": "bg_for_long_downloads",
+    "category": "reflections",
+    "tags": ["background", "downloads", "efficiency", "bg_run"],
+    "confidence": "verified",
+    "source_goal": "Set up Python environment",
+    "source_tick": 20,
+    "created": "2026-04-01T12:00:00Z",
+    "updated": "2026-04-01T12:00:00Z",
+    "content_preview": "Used bash for a large pip install that took over 90 seconds and timed out. Should have used bg_run for any download or install expected to take more than 30 seconds. The bg_check tool can poll for completion on subsequent ticks. This avoids wasting a tick on a timeout failure."
+  }
+]

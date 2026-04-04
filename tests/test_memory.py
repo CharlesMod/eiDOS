@@ -13,6 +13,8 @@ from memory import (
     read_goal,
     read_memory,
     write_memory,
+    read_plan,
+    write_plan,
     append_observation,
     read_recent_observations,
     count_observation_chars,
@@ -268,6 +270,41 @@ class TestMemory(unittest.TestCase):
         shutil.rmtree(str(self.config.interventions_dir))
         interventions = read_interventions(self.config)
         self.assertEqual(len(interventions), 0)
+
+    # --- Plan (plan.md) tests ---
+
+    def test_write_read_plan(self):
+        write_plan(self.config, "# Plan\nStep 1: do the thing")
+        self.assertEqual(read_plan(self.config), "# Plan\nStep 1: do the thing")
+
+    def test_plan_path_is_plan_md(self):
+        self.assertTrue(str(self.config.plan_path).endswith("plan.md"))
+
+    def test_plan_and_memory_are_separate(self):
+        write_memory(self.config, "memory content")
+        write_plan(self.config, "plan content")
+        self.assertEqual(read_memory(self.config), "memory content")
+        self.assertEqual(read_plan(self.config), "plan content")
+
+    def test_read_plan_fallback_to_memory(self):
+        """When plan.md is missing, read_plan falls back to memory.md."""
+        write_memory(self.config, "legacy memory content")
+        self.assertFalse(self.config.plan_path.exists())
+        self.assertEqual(read_plan(self.config), "legacy memory content")
+
+    def test_read_plan_prefers_plan_md(self):
+        """When both plan.md and memory.md exist, read_plan prefers plan.md."""
+        write_memory(self.config, "old memory")
+        write_plan(self.config, "new plan")
+        self.assertEqual(read_plan(self.config), "new plan")
+
+    def test_read_plan_missing_both(self):
+        self.assertEqual(read_plan(self.config), "")
+
+    def test_write_plan_atomic(self):
+        write_plan(self.config, "plan content")
+        tmp_files = list(Path(self.config.workspace_dir).glob(".plan_*"))
+        self.assertEqual(len(tmp_files), 0)
 
 
 if __name__ == "__main__":

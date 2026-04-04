@@ -15,7 +15,8 @@ from parser import ToolCall
 from tools import (
     execute_tool, tool_bash, tool_write_file, tool_read_file,
     tool_bg_run, tool_bg_check, tool_http_get,
-    tool_remember, tool_goal_complete, tool_ask_supervisor,
+    tool_remember, tool_update_plan, tool_memorize, tool_recall,
+    tool_goal_complete, tool_ask_supervisor,
     refresh_jobs, _read_jobs, _write_jobs,
 )
 
@@ -332,6 +333,127 @@ class TestTools(unittest.TestCase):
         from tools import TOOLS
         for name in TOOLS:
             self.assertIn(name, TOOLS)
+
+    # --- update_plan ---
+
+    def test_update_plan_success(self):
+        Path(self.config.workspace_dir, "plan.md").write_text("# Plan\nStep 1")
+        result = tool_update_plan({"note": "Step 1 complete, moving to step 2"}, self.config)
+        self.assertTrue(result.success)
+        plan = Path(self.config.workspace_dir, "plan.md").read_text()
+        self.assertIn("Step 1 complete", plan)
+        self.assertIn("[Updated at", plan)
+
+    def test_update_plan_no_note(self):
+        result = tool_update_plan({}, self.config)
+        self.assertFalse(result.success)
+
+    def test_update_plan_budget_cap(self):
+        Path(self.config.workspace_dir, "plan.md").write_text("x" * 2000)
+        self.config.context_plan_max_chars = 200
+        result = tool_update_plan({"note": "new step"}, self.config)
+        self.assertTrue(result.success)
+        plan = Path(self.config.workspace_dir, "plan.md").read_text()
+        self.assertLessEqual(len(plan), 200)
+        self.assertIn("new step", plan)
+
+    def test_update_plan_creates_file(self):
+        """update_plan should work even if plan.md doesn't exist yet."""
+        result = tool_update_plan({"note": "first plan note"}, self.config)
+        self.assertTrue(result.success)
+        self.assertTrue(Path(self.config.workspace_dir, "plan.md").exists())
+
+    # --- memorize ---
+
+    def test_memorize_success(self):
+        result = tool_memorize({
+            "fact": "pip requires --break-system-packages on Bookworm",
+            "tags": ["pip", "bookworm"],
+            "category": "facts",
+        }, self.config)
+        self.assertTrue(result.success)
+        self.assertIn("Stored to long-term memory", result.output)
+        # Verify file was created
+        knowledge_dir = self.config.knowledge_dir / "facts"
+        self.assertTrue(any(knowledge_dir.glob("*.md")))
+
+    def test_memorize_no_fact(self):
+        result = tool_memorize({"tags": ["x"]}, self.config)
+        self.assertFalse(result.success)
+        self.assertIn("'fact' required", result.output)
+
+    def test_memorize_no_tags(self):
+        result = tool_memorize({"fact": "something"}, self.config)
+        self.assertFalse(result.success)
+        self.assertIn("'tags' required", result.output)
+
+    def test_memorize_tags_as_string(self):
+        """Tags can be provided as comma-separated string."""
+        result = tool_memorize({
+            "fact": "test fact",
+            "tags": "tag1, tag2, tag3",
+        }, self.config)
+        self.assertTrue(result.success)
+
+    def test_memorize_invalid_category_defaults(self):
+        """Invalid category should default to 'facts'."""
+        result = tool_memorize({
+            "fact": "test",
+            "tags": ["t1"],
+            "category": "bogus",
+        }, self.config)
+        self.assertTrue(result.success)
+
+    def test_memorize_via_dispatch(self):
+        call = ToolCall(tool="memorize", args={
+            "fact": "dispatch test",
+            "tags": ["test"],
+        }, raw="")
+        result = execute_tool(call, self.config)
+        self.assertTrue(result.success)
+
+    # --- recall ---
+
+    def test_recall_empty_store(self):
+        result = tool_recall({"query": "anything"}, self.config)
+        self.assertTrue(result.success)
+        self.assertIn("No relevant knowledge found", result.output)
+
+    def test_recall_no_query(self):
+        result = tool_recall({}, self.config)
+        self.assertFalse(result.success)
+        self.assertIn("'query' required", result.output)
+
+    def test_recall_finds_stored_entry(self):
+        """Store something, then recall it."""
+        from knowledge import rebuild_index, _invalidate_bm25_cache
+
+        tool_memorize({
+            "fact": "The DHT22 sensor is connected on GPIO pin 4",
+            "tags": ["dht22", "gpio", "sensor"],
+            "category": "facts",
+        }, self.config)
+
+        # Force full rebuild so BM25 picks up the new entry
+        rebuild_index(self.config)
+        _invalidate_bm25_cache()
+
+        result = tool_recall({"query": "DHT22 sensor GPIO pin"}, self.config)
+        self.assertTrue(result.success)
+        self.assertIn("DHT22", result.output)
+
+    def test_recall_via_dispatch(self):
+        call = ToolCall(tool="recall", args={"query": "test"}, raw="")
+        result = execute_tool(call, self.config)
+        self.assertTrue(result.success)
+
+    # --- new tools in registry ---
+
+    def test_new_tools_registered(self):
+        from tools import TOOLS
+        self.assertIn("update_plan", TOOLS)
+        self.assertIn("memorize", TOOLS)
+        self.assertIn("recall", TOOLS)
 
 
 if __name__ == "__main__":
