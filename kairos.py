@@ -19,7 +19,7 @@ from pathlib import Path
 from config import Config, load_config
 from context import assemble_context
 from compaction import should_compact, compact
-from llm import complete, LLMError
+from llm import complete, LLMError, ReasoningExhausted
 from memory import (
     append_observation,
     read_goal,
@@ -107,13 +107,16 @@ def _pfx(persona, config):
 
 
 def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
-              goal_start_time: float, consecutive_failures: int = 0):
+              goal_start_time: float, consecutive_failures: int = 0,
+              reasoning_exhaustions: int = 0, current_max_tokens: int = 0):
     """Atomically write tick state to WAL for crash recovery."""
     wal = {
         "tick_number": tick_number,
         "ticks_since_compaction": ticks_since_compaction,
         "goal_start_time": goal_start_time,
         "consecutive_failures": consecutive_failures,
+        "reasoning_exhaustions": reasoning_exhaustions,
+        "current_max_tokens": current_max_tokens,
         "ts": time.time(),
     }
     tmp = config.wal_path.with_suffix(".tmp")
@@ -222,6 +225,8 @@ def run_loop(config: Config, persona=None, wal=None):
     ticks_since_compaction = wal.get("ticks_since_compaction", 0)
     goal_start_time = wal.get("goal_start_time", time.time())
     consecutive_failures = wal.get("consecutive_failures", 0)
+    reasoning_exhaustions = wal.get("reasoning_exhaustions", 0)
+    current_max_tokens = wal.get("current_max_tokens", 0) or config.llm_max_tokens
     recent_hashes: collections.deque = collections.deque(maxlen=config.loop_detect_window)
     standby = False
     standby_snapshot = None
@@ -343,8 +348,67 @@ def run_loop(config: Config, persona=None, wal=None):
 
         # --- LLM call ---
         try:
-            response = complete(messages, config)
+            response = complete(messages, config, max_tokens=current_max_tokens)
             consecutive_failures = 0  # reset on success
+
+            # Successful content — decay max_tokens back toward baseline
+            if current_max_tokens > config.llm_max_tokens:
+                current_max_tokens = max(
+                    config.llm_max_tokens,
+                    current_max_tokens - config.llm_token_backoff_step,
+                )
+            reasoning_exhaustions = 0
+
+        except ReasoningExhausted as e:
+            reasoning_exhaustions += 1
+
+            # Bump max_tokens for next tick (up to ceiling)
+            current_max_tokens = min(
+                current_max_tokens + config.llm_token_backoff_step,
+                config.llm_max_tokens_ceiling,
+            )
+            logger.warning(
+                "Reasoning exhausted (%d/%d tokens, attempt %d). "
+                "Next tick max_tokens=%d.",
+                e.reasoning_tokens, e.max_tokens,
+                reasoning_exhaustions, current_max_tokens,
+            )
+
+            append_observation(config, {
+                "tick": tick_number,
+                "tool": "system",
+                "success": False,
+                "output": (
+                    f"Token budget exhausted by reasoning "
+                    f"({e.reasoning_tokens}/{e.max_tokens} tokens used, 0 content). "
+                    f"Next tick budget raised to {current_max_tokens}. "
+                    f"Keep your thinking brief and go straight to the tool call."
+                ),
+            })
+
+            # After repeated exhaustions, force compaction to shrink context
+            if (reasoning_exhaustions >= config.llm_reasoning_exhaust_compaction_trigger
+                    and ticks_since_compaction > 0):
+                logger.warning(
+                    "Forcing compaction after %d consecutive reasoning exhaustions",
+                    reasoning_exhaustions)
+                try:
+                    compact(config, persona=persona)
+                    ticks_since_compaction = 0
+                    if persona and config.persona_enabled:
+                        record_compaction(persona)
+                        pfx = _pfx(persona, config)
+                except LLMError as ce:
+                    logger.error("Forced compaction failed: %s", ce)
+
+            write_wal(config, tick_number, ticks_since_compaction,
+                      goal_start_time, consecutive_failures,
+                      reasoning_exhaustions, current_max_tokens)
+            time.sleep(config.tick_interval_s)
+            tick_number += 1
+            ticks_since_compaction += 1
+            continue
+
         except LLMError as e:
             consecutive_failures += 1
             print(f"{pfx} LLM error on tick {tick_number} "
@@ -371,7 +435,8 @@ def run_loop(config: Config, persona=None, wal=None):
                         record_error_recovery(persona)
 
             write_wal(config, tick_number, ticks_since_compaction,
-                      goal_start_time, consecutive_failures)
+                      goal_start_time, consecutive_failures,
+                      reasoning_exhaustions, current_max_tokens)
             time.sleep(config.tick_interval_s)
             tick_number += 1
             ticks_since_compaction += 1
@@ -481,7 +546,8 @@ def run_loop(config: Config, persona=None, wal=None):
 
         # --- Persist tick state to WAL ---
         write_wal(config, tick_number, ticks_since_compaction,
-                  goal_start_time, consecutive_failures)
+                  goal_start_time, consecutive_failures,
+                  reasoning_exhaustions, current_max_tokens)
 
         if not goal_complete and not _shutdown_requested:
             time.sleep(config.tick_interval_s)

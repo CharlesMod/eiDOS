@@ -47,6 +47,21 @@ class LLMError(Exception):
     pass
 
 
+class ReasoningExhausted(LLMError):
+    """Raised when a thinking model used all tokens on reasoning, producing no content.
+
+    Callers should catch this to implement adaptive retry strategies
+    (raise max_tokens, shrink context, add budget feedback to prompt).
+    """
+    def __init__(self, reasoning: str, reasoning_tokens: int, max_tokens: int):
+        self.reasoning = reasoning
+        self.reasoning_tokens = reasoning_tokens
+        self.max_tokens = max_tokens
+        super().__init__(
+            f"Reasoning exhausted token budget "
+            f"({reasoning_tokens}/{max_tokens} tokens, 0 content tokens)")
+
+
 def ensure_model_loaded(config: Config, ttl: int = 3600) -> str:
     """Ensure the configured model is loaded in LM Studio, loading it if needed.
 
@@ -107,14 +122,13 @@ def complete(
     *,
     run_id: str = "",
     tick: int = 0,
-    enable_thinking: bool = True,
 ) -> str:
     """Send a chat completion request, return the assistant's content string.
 
     Uses the OpenAI-compatible /v1/chat/completions endpoint.
-    Set enable_thinking=False to request the server disable reasoning
-    (requires server-side support: llama-server with nonthinking template,
-    or vLLM with chat_template_kwargs).
+    Raises ReasoningExhausted if a thinking model uses all tokens on
+    reasoning_content with zero content tokens — callers should catch
+    this and retry with a larger budget or smaller prompt.
     """
     if temperature is None:
         temperature = config.llm_temperature
@@ -134,12 +148,6 @@ def complete(
         "presence_penalty": config.llm_presence_penalty,
         "stream": False,
     }
-
-    # Request thinking suppression via chat_template_kwargs.
-    # Supported by vLLM and llama-server (with Qwen3 jinja template).
-    # Ignored silently by LM Studio and servers without template support.
-    if not enable_thinking:
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     body = json.dumps(payload).encode("utf-8")
     logger.debug("llm payload_bytes=%d messages=%d", len(body), len(messages))
@@ -188,11 +196,9 @@ def complete(
                         completion_tokens, reasoning_tokens, usage.get("prompt_tokens", 0))
 
         if not content and reasoning:
-            logger.warning("llm returned empty content but %d chars of reasoning — "
-                           "max_tokens likely exhausted during thinking", len(reasoning))
             _log_interaction(config, messages, payload, data, reasoning, elapsed,
                              run_id=run_id, tick=tick)
-            return reasoning
+            raise ReasoningExhausted(reasoning, reasoning_tokens, max_tokens)
 
         if not content:
             raise LLMError(f"Empty response content. Full response: {data}")

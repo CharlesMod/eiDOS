@@ -11,7 +11,7 @@ from unittest.mock import patch
 import urllib.error
 
 from config import Config
-from llm import complete, LLMError
+from llm import complete, LLMError, ReasoningExhausted
 
 
 class _FakeResponse:
@@ -107,8 +107,8 @@ class TestLLMComplete(unittest.TestCase):
         self.assertIn("<tool>bash</tool>", out)
 
     @patch("llm.urllib.request.urlopen")
-    def test_thinking_model_empty_content_returns_reasoning(self, mock_urlopen):
-        """When content is empty but reasoning_content exists, return reasoning."""
+    def test_thinking_model_empty_content_raises_reasoning_exhausted(self, mock_urlopen):
+        """When content is empty but reasoning_content exists, raise ReasoningExhausted."""
         mock_urlopen.return_value = _FakeResponse({
             "choices": [{"message": {
                 "content": "",
@@ -117,12 +117,14 @@ class TestLLMComplete(unittest.TestCase):
             "usage": {"prompt_tokens": 50, "completion_tokens": 32,
                       "completion_tokens_details": {"reasoning_tokens": 32}},
         })
-        out = complete(self.messages, self.config)
-        self.assertEqual(out, "I was still thinking about the approach...")
+        with self.assertRaises(ReasoningExhausted) as ctx:
+            complete(self.messages, self.config)
+        self.assertEqual(ctx.exception.reasoning_tokens, 32)
+        self.assertIn("I was still thinking", ctx.exception.reasoning)
 
     @patch("llm.urllib.request.urlopen")
-    def test_thinking_model_null_content_returns_reasoning(self, mock_urlopen):
-        """When content is null/None but reasoning exists, return reasoning."""
+    def test_thinking_model_null_content_raises_reasoning_exhausted(self, mock_urlopen):
+        """When content is null/None but reasoning exists, raise ReasoningExhausted."""
         mock_urlopen.return_value = _FakeResponse({
             "choices": [{"message": {
                 "content": None,
@@ -131,8 +133,25 @@ class TestLLMComplete(unittest.TestCase):
             "usage": {"prompt_tokens": 50, "completion_tokens": 32,
                       "completion_tokens_details": {"reasoning_tokens": 32}},
         })
-        out = complete(self.messages, self.config)
-        self.assertEqual(out, "Still processing...")
+        with self.assertRaises(ReasoningExhausted) as ctx:
+            complete(self.messages, self.config)
+        self.assertIn("Still processing", ctx.exception.reasoning)
+
+    @patch("llm.urllib.request.urlopen")
+    def test_reasoning_exhausted_has_token_info(self, mock_urlopen):
+        """ReasoningExhausted carries reasoning_tokens and max_tokens."""
+        mock_urlopen.return_value = _FakeResponse({
+            "choices": [{"message": {
+                "content": "",
+                "reasoning_content": "deep thoughts...",
+            }}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 1024,
+                      "completion_tokens_details": {"reasoning_tokens": 1024}},
+        })
+        with self.assertRaises(ReasoningExhausted) as ctx:
+            complete(self.messages, self.config, max_tokens=1024)
+        self.assertEqual(ctx.exception.reasoning_tokens, 1024)
+        self.assertEqual(ctx.exception.max_tokens, 1024)
 
     @patch("llm.urllib.request.urlopen")
     def test_thinking_model_both_empty_raises(self, mock_urlopen):

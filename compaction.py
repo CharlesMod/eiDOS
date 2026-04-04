@@ -17,7 +17,7 @@ from memory import (
     count_observation_chars,
     append_observation,
 )
-from llm import complete
+from llm import complete, ReasoningExhausted
 from prompts import COMPACTION_SYSTEM, COMPACTION_USER, COMPACTION_PERSONALITY_CLAUSE
 
 logger = logging.getLogger("kairos.compaction")
@@ -96,37 +96,33 @@ def compact(config: Config, persona: dict = None) -> None:
         _log_compaction_overrun(config, total_chars)
 
     # Thinking models (Qwen 3.5, etc.) may exhaust max_tokens on reasoning
-    # and produce zero content tokens.  complete() returns the raw reasoning
-    # as a fallback, which starts with "Thinking Process:" or similar.
-    # Saving that as memory is destructive — it fills the budget with
-    # meta-analysis noise and triggers a compaction loop every tick.
-    _REASONING_PREFIXES = (
-        "thinking process", "**analyze", "1.  **", "let me think",
-        "step 1:", "<think>", "reasoning:",
-    )
-
-    def _is_reasoning_dump(text: str) -> bool:
-        return bool(text) and text.lstrip().lower().startswith(_REASONING_PREFIXES)
-
-    # Strategy: request thinking disabled, then retry with higher budget if
-    # the server ignored it and the model exhausted tokens on reasoning.
-    new_memory = complete(messages, config, temperature=0.3,
-                          max_tokens=config.compaction_max_tokens,
-                          enable_thinking=False)
-
-    if _is_reasoning_dump(new_memory):
-        logger.warning("compaction returned raw reasoning on first attempt "
-                       "(server may not support enable_thinking=False) — "
-                       "retrying with %d max_tokens",
-                       config.compaction_retry_max_tokens)
+    # and produce zero content tokens.  We keep thinking enabled (it helps
+    # small models) but catch the exhaustion and retry with:
+    #   1. A larger token budget
+    #   2. A prompt nudge telling the model to keep reasoning brief
+    try:
         new_memory = complete(messages, config, temperature=0.3,
-                              max_tokens=config.compaction_retry_max_tokens,
-                              enable_thinking=False)
-
-    if _is_reasoning_dump(new_memory):
-        logger.warning("compaction returned raw reasoning even after retry — "
-                       "keeping previous memory")
-        new_memory = ""
+                              max_tokens=config.compaction_max_tokens)
+    except ReasoningExhausted as e:
+        logger.warning("compaction: reasoning exhausted %d/%d tokens — "
+                       "retrying with %d max_tokens and budget feedback",
+                       e.reasoning_tokens, e.max_tokens,
+                       config.compaction_retry_max_tokens)
+        # Add budget feedback so the model knows what happened
+        retry_messages = messages + [
+            {"role": "assistant", "content": "(internal thinking used all available tokens — no output produced)"},
+            {"role": "user", "content":
+             "Your reasoning used the entire token budget and produced no output. "
+             "You now have a larger budget. Keep your thinking concise and "
+             "focus on producing the memory document."},
+        ]
+        try:
+            new_memory = complete(retry_messages, config, temperature=0.3,
+                                  max_tokens=config.compaction_retry_max_tokens)
+        except ReasoningExhausted:
+            logger.warning("compaction: reasoning exhausted even on retry — "
+                           "keeping previous memory")
+            new_memory = ""
 
     # Some models occasionally return empty content for chat completions.
     # Keep at least the existing memory to avoid destructive compaction.

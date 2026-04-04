@@ -33,12 +33,15 @@ class TestWAL(unittest.TestCase):
 
     def test_write_and_read_wal(self):
         write_wal(self.config, tick_number=42, ticks_since_compaction=7,
-                  goal_start_time=1000.0, consecutive_failures=2)
+                  goal_start_time=1000.0, consecutive_failures=2,
+                  reasoning_exhaustions=1, current_max_tokens=1536)
         wal = read_wal(self.config)
         self.assertEqual(wal["tick_number"], 42)
         self.assertEqual(wal["ticks_since_compaction"], 7)
         self.assertEqual(wal["goal_start_time"], 1000.0)
         self.assertEqual(wal["consecutive_failures"], 2)
+        self.assertEqual(wal["reasoning_exhaustions"], 1)
+        self.assertEqual(wal["current_max_tokens"], 1536)
         self.assertIn("ts", wal)
 
     def test_read_wal_missing_returns_empty(self):

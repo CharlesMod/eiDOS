@@ -48,6 +48,9 @@ grace_period_s = 60
 [self_healing]
 restart_cmd = ""                # e.g. "systemctl restart llama-server"
 max_consecutive_failures = 5    # restart LLM after this many back-to-back errors
+max_tokens_ceiling = 4096       # hard upper limit for adaptive token scaling
+token_backoff_step = 512        # bump max_tokens by this much per reasoning exhaustion
+reasoning_exhaust_compaction_trigger = 3  # force compaction after N consecutive exhaustions
 
 [rotation]
 obs_max_lines = 5000

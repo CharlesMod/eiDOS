@@ -60,6 +60,12 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.llm_restart_cmd, "")
         self.assertEqual(config.llm_max_consecutive_failures, 5)
 
+    def test_adaptive_token_defaults(self):
+        config = Config()
+        self.assertEqual(config.llm_max_tokens_ceiling, 4096)
+        self.assertEqual(config.llm_token_backoff_step, 512)
+        self.assertEqual(config.llm_reasoning_exhaust_compaction_trigger, 3)
+
     def test_log_rotation_defaults(self):
         config = Config()
         self.assertEqual(config.llm_log_max_bytes, 5_000_000)

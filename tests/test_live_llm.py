@@ -15,7 +15,7 @@ import pytest
 
 from config import load_config, Config
 from compaction import compact
-from llm import complete, LLMError
+from llm import complete, LLMError, ReasoningExhausted
 from memory import (
     append_observation,
     read_memory,
@@ -23,8 +23,8 @@ from memory import (
     write_memory,
 )
 from context import assemble_context
-from parser import parse_tool_call
 from prompts import SYSTEM_PROMPT
+from parser import parse_tool_call
 
 # Mark every test in this module as "live" — requires real LM Studio
 pytestmark = pytest.mark.live
@@ -487,13 +487,12 @@ class TestLiveGoalResilience:
             print(f"  Tool: {call.tool}({json.dumps(call.args)[:80]})")
 
 
-class TestLiveThinkingSuppression:
-    """Verify thinking suppression behavior with the real model.
+class TestLiveAdaptiveTokens:
+    """Verify adaptive token management with a real thinking model.
 
-    Tests whether enable_thinking=False via chat_template_kwargs actually
-    reduces or eliminates reasoning tokens.  Servers that don't support
-    the param (e.g. LM Studio) will silently ignore it — the test
-    documents the current behavior either way.
+    Tests that ReasoningExhausted is raised when the model exhausts tokens
+    on reasoning, and that compaction's retry with a larger budget produces
+    usable content.
     """
 
     @pytest.fixture(autouse=True)
@@ -504,80 +503,37 @@ class TestLiveThinkingSuppression:
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _raw_completion(self, messages, max_tokens=512, enable_thinking=True):
-        """Call the endpoint directly and return (content, reasoning, usage)."""
-        import urllib.request
-        url = self.config.llm_url.rstrip("/") + "/v1/chat/completions"
-        payload = {
-            "model": self.config.llm_model,
-            "messages": messages,
-            "temperature": 0.3,
-            "max_tokens": max_tokens,
-            "top_p": self.config.llm_top_p,
-            "top_k": self.config.llm_top_k,
-            "min_p": self.config.llm_min_p,
-            "presence_penalty": self.config.llm_presence_penalty,
-            "stream": False,
-        }
-        if not enable_thinking:
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
-        body = json.dumps(payload).encode()
-        req = urllib.request.Request(url, data=body,
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read())
-        msg = data["choices"][0]["message"]
-        usage = data.get("usage", {})
-        details = usage.get("completion_tokens_details", {})
-        return (
-            msg.get("content") or "",
-            msg.get("reasoning_content") or "",
-            {
-                "reasoning_tokens": details.get("reasoning_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
-            },
-        )
+    def test_reasoning_exhausted_raised_on_small_budget(self):
+        """With a deliberately tiny max_tokens, a thinking model should
+        exhaust the budget on reasoning and raise ReasoningExhausted."""
+        from llm import complete, ReasoningExhausted
 
-    def test_thinking_suppression_reduces_reasoning(self):
-        """enable_thinking=False should reduce or eliminate reasoning tokens.
-
-        If the server supports it, reasoning_tokens should be 0 and content
-        should be non-empty.  If ignored (LM Studio), both calls will have
-        similar reasoning_tokens — test documents the behavior.
-        """
-        msgs = [
-            {"role": "system", "content": "Summarize concisely in one sentence."},
-            {"role": "user", "content": "A cat sat on a mat. A dog barked. A bird flew."},
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT.format(workspace="/tmp/test")},
+            {"role": "user", "content": (
+                "## Goal\nExplore the filesystem.\n\n"
+                "## Recent Observations\n"
+                "[tick 1 | bash | OK] file_a.txt  file_b.txt\n"
+                "[tick 2 | bash | OK] file_c.txt  file_d.txt\n\n"
+                "Tick 3/100 | What is your next action?"
+            )},
         ]
+        # With 256 max_tokens, a thinking model will likely exhaust on reasoning
+        try:
+            result = complete(messages, self.config, max_tokens=256)
+            # Model produced content — that's fine, just means it was brief
+            print(f"\n  Model produced content with 256 tokens: {result[:100]!r}")
+        except ReasoningExhausted as e:
+            print(f"\n  ReasoningExhausted raised as expected:")
+            print(f"    reasoning_tokens: {e.reasoning_tokens}")
+            print(f"    max_tokens: {e.max_tokens}")
+            print(f"    reasoning ({len(e.reasoning)} chars): {e.reasoning[:100]!r}")
+            assert e.reasoning_tokens > 0
+            assert e.max_tokens == 256
 
-        content_think, reasoning_think, usage_think = self._raw_completion(
-            msgs, max_tokens=512, enable_thinking=True)
-        content_nothink, reasoning_nothink, usage_nothink = self._raw_completion(
-            msgs, max_tokens=512, enable_thinking=False)
-
-        print(f"\n  WITH thinking:")
-        print(f"    reasoning_tokens: {usage_think['reasoning_tokens']}")
-        print(f"    completion_tokens: {usage_think['completion_tokens']}")
-        print(f"    content ({len(content_think)} chars): {content_think[:100]!r}")
-        print(f"  WITHOUT thinking:")
-        print(f"    reasoning_tokens: {usage_nothink['reasoning_tokens']}")
-        print(f"    completion_tokens: {usage_nothink['completion_tokens']}")
-        print(f"    content ({len(content_nothink)} chars): {content_nothink[:100]!r}")
-
-        suppression_worked = (
-            usage_nothink["reasoning_tokens"] < usage_think["reasoning_tokens"]
-        )
-        print(f"\n  Thinking suppression effective: {suppression_worked}")
-
-        if not suppression_worked:
-            print(f"  WARNING: Server ignored enable_thinking=False. "
-                  f"On llama-server, use --chat-template-file qwen3_nonthinking.jinja "
-                  f"for hard suppression.")
-        # Don't hard-fail — just report. The compaction retry is the fallback.
-
-    def test_compaction_produces_content_with_retry(self):
-        """Compaction retry strategy produces usable memory even when the
-        server ignores enable_thinking=False."""
+    def test_compaction_retry_produces_content(self):
+        """Compaction retry with higher token budget should produce usable
+        memory even when the model spends most tokens on reasoning."""
         self.config.goal_path.write_text("Explore the filesystem.")
         write_memory(self.config, "# Working Memory\nFresh start.")
         self.config.compaction_retry_max_tokens = 4096
@@ -595,128 +551,37 @@ class TestLiveThinkingSuppression:
         print(f"\n  Post-compaction memory ({len(mem)} chars):")
         print(f"  {mem[:400]!r}")
 
-        # With the retry at 4096 tokens, even if thinking isn't suppressed,
-        # the model should have enough budget to produce content.
         assert len(mem.strip()) > 50, (
-            f"Compaction still failed after retry ({len(mem)} chars). "
-            f"Model may need even higher retry_max_tokens or a nonthinking template."
-        )
-        assert "thinking process" not in mem.lower(), "Memory contains raw reasoning"
-
-
-class TestLiveThinkingSuppression:
-    """Verify thinking suppression behavior with the real model.
-
-    Tests whether enable_thinking=False via chat_template_kwargs actually
-    reduces or eliminates reasoning tokens.  Servers that don't support
-    the param (e.g. LM Studio) will silently ignore it — the test
-    documents the current behavior either way.
-    """
-
-    @pytest.fixture(autouse=True)
-    def setup(self):
-        self.config, self.tmp = _make_config()
-        _check_server(self.config)
-        yield
-        import shutil
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def _raw_completion(self, messages, max_tokens=512, enable_thinking=True):
-        """Call the endpoint directly and return (content, reasoning, usage)."""
-        import urllib.request
-        url = self.config.llm_url.rstrip("/") + "/v1/chat/completions"
-        payload = {
-            "model": self.config.llm_model,
-            "messages": messages,
-            "temperature": 0.3,
-            "max_tokens": max_tokens,
-            "top_p": self.config.llm_top_p,
-            "top_k": self.config.llm_top_k,
-            "min_p": self.config.llm_min_p,
-            "presence_penalty": self.config.llm_presence_penalty,
-            "stream": False,
-        }
-        if not enable_thinking:
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
-        body = json.dumps(payload).encode()
-        req = urllib.request.Request(url, data=body,
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read())
-        msg = data["choices"][0]["message"]
-        usage = data.get("usage", {})
-        details = usage.get("completion_tokens_details", {})
-        return (
-            msg.get("content") or "",
-            msg.get("reasoning_content") or "",
-            {
-                "reasoning_tokens": details.get("reasoning_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
-            },
+            f"Compaction failed ({len(mem)} chars). "
+            f"Model may need higher compaction_retry_max_tokens."
         )
 
-    def test_thinking_suppression_reduces_reasoning(self):
-        """enable_thinking=False should reduce or eliminate reasoning tokens.
+    def test_adaptive_budget_recovery_with_feedback(self):
+        """When first compaction attempt hits ReasoningExhausted, the retry
+        with budget feedback and higher max_tokens should succeed."""
+        from llm import complete, ReasoningExhausted
 
-        If the server supports it, reasoning_tokens should be 0 and content
-        should be non-empty.  If ignored (LM Studio), both calls will have
-        similar reasoning_tokens — test documents the behavior.
-        """
-        msgs = [
-            {"role": "system", "content": "Summarize concisely in one sentence."},
-            {"role": "user", "content": "A cat sat on a mat. A dog barked. A bird flew."},
-        ]
-
-        content_think, reasoning_think, usage_think = self._raw_completion(
-            msgs, max_tokens=512, enable_thinking=True)
-        content_nothink, reasoning_nothink, usage_nothink = self._raw_completion(
-            msgs, max_tokens=512, enable_thinking=False)
-
-        print(f"\n  WITH thinking:")
-        print(f"    reasoning_tokens: {usage_think['reasoning_tokens']}")
-        print(f"    completion_tokens: {usage_think['completion_tokens']}")
-        print(f"    content ({len(content_think)} chars): {content_think[:100]!r}")
-        print(f"  WITHOUT thinking:")
-        print(f"    reasoning_tokens: {usage_nothink['reasoning_tokens']}")
-        print(f"    completion_tokens: {usage_nothink['completion_tokens']}")
-        print(f"    content ({len(content_nothink)} chars): {content_nothink[:100]!r}")
-
-        suppression_worked = (
-            usage_nothink["reasoning_tokens"] < usage_think["reasoning_tokens"]
-        )
-        print(f"\n  Thinking suppression effective: {suppression_worked}")
-
-        if not suppression_worked:
-            print(f"  WARNING: Server ignored enable_thinking=False. "
-                  f"On llama-server, use --chat-template-file qwen3_nonthinking.jinja "
-                  f"for hard suppression.")
-        # Don't hard-fail — just report. The compaction retry is the fallback.
-
-    def test_compaction_produces_content_with_retry(self):
-        """Compaction retry strategy produces usable memory even when the
-        server ignores enable_thinking=False."""
-        self.config.goal_path.write_text("Explore the filesystem.")
-        write_memory(self.config, "# Working Memory\nFresh start.")
+        self.config.goal_path.write_text("Monitor system health.")
+        write_memory(self.config, "# Working Memory\nSystem is healthy.")
+        # Force a small compaction budget to trigger exhaustion
+        self.config.compaction_max_tokens = 512
         self.config.compaction_retry_max_tokens = 4096
 
-        for i in range(8):
+        for i in range(5):
             append_observation(self.config, {
                 "tick": i + 1, "tool": "bash",
-                "args": {"cmd": f"ls /dir_{i}"},
+                "args": {"cmd": f"uptime"},
                 "success": True,
-                "output": f"file_{i}_a.txt  file_{i}_b.txt",
+                "output": f"load average: 0.{i}1, 0.{i}2, 0.{i}3",
             })
 
         compact(self.config)
         mem = read_memory(self.config)
-        print(f"\n  Post-compaction memory ({len(mem)} chars):")
+        print(f"\n  Adaptive recovery memory ({len(mem)} chars):")
         print(f"  {mem[:400]!r}")
 
-        # With the retry at 4096 tokens, even if thinking isn't suppressed,
-        # the model should have enough budget to produce content.
-        assert len(mem.strip()) > 50, (
-            f"Compaction still failed after retry ({len(mem)} chars). "
-            f"Model may need even higher retry_max_tokens or a nonthinking template."
+        # Even with a 512-token first attempt, the retry at 4096 should work
+        assert len(mem.strip()) > 30, (
+            f"Adaptive recovery failed ({len(mem)} chars)"
         )
-        assert "thinking process" not in mem.lower(), "Memory contains raw reasoning"
 

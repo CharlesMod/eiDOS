@@ -64,6 +64,11 @@ class Config:
     llm_restart_cmd: str = ""       # e.g. "systemctl restart llama-server"
     llm_max_consecutive_failures: int = 5
 
+    # Adaptive token management — for thinking models that may exhaust budget
+    llm_max_tokens_ceiling: int = 4096       # hard upper limit for adaptive scaling
+    llm_token_backoff_step: int = 512        # bump per reasoning exhaustion
+    llm_reasoning_exhaust_compaction_trigger: int = 3  # force compaction after N consecutive
+
     # Rotation
     obs_max_lines: int = 5000
     obs_archive_days: int = 14
@@ -182,6 +187,13 @@ def load_config(path: str = "config.toml") -> Config:
         config.llm_restart_cmd = healing.get("restart_cmd", config.llm_restart_cmd)
         config.llm_max_consecutive_failures = healing.get(
             "max_consecutive_failures", config.llm_max_consecutive_failures)
+        config.llm_max_tokens_ceiling = healing.get(
+            "max_tokens_ceiling", config.llm_max_tokens_ceiling)
+        config.llm_token_backoff_step = healing.get(
+            "token_backoff_step", config.llm_token_backoff_step)
+        config.llm_reasoning_exhaust_compaction_trigger = healing.get(
+            "reasoning_exhaust_compaction_trigger",
+            config.llm_reasoning_exhaust_compaction_trigger)
 
         rot = data.get("rotation", {})
         config.obs_max_lines = rot.get("obs_max_lines", config.obs_max_lines)
