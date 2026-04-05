@@ -92,16 +92,17 @@ systemctl enable eidos-first-boot.service'
 
 if [ -f "$FIRSTRUN" ]; then
     # Raspberry Pi Imager creates firstrun.sh with a cleanup line at the end.
-    # Insert our service installation just before the cleanup.
-    if grep -q "rm -f /boot/firmware/firstrun.sh" "$FIRSTRUN"; then
-        log "Patching Imager firstrun.sh"
+    # Insert our service installation just before "exit 0".
+    if grep -q "^exit 0" "$FIRSTRUN"; then
+        log "Patching Imager firstrun.sh (inserting before exit 0)"
         # macOS sed needs '' after -i
-        sed -i '' "/rm -f \/boot\/firmware\/firstrun.sh/i\\
-# eiDOS: install first-boot provisioning service\\
-cp /boot/firmware/eidos-first-boot.service /etc/systemd/system/eidos-first-boot.service\\
-chmod 644 /etc/systemd/system/eidos-first-boot.service\\
-systemctl enable eidos-first-boot.service\\
-" "$FIRSTRUN"
+        sed -i '' '/^exit 0$/i\
+\
+# eiDOS: install first-boot provisioning service\
+cp /boot/firmware/eidos-first-boot.service /etc/systemd/system/eidos-first-boot.service\
+chmod 644 /etc/systemd/system/eidos-first-boot.service\
+systemctl enable eidos-first-boot.service\
+' "$FIRSTRUN"
     else
         # firstrun.sh exists but doesn't have the expected cleanup line — append
         warn "firstrun.sh found but no cleanup line detected; appending"

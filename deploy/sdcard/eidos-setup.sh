@@ -94,13 +94,33 @@ tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="$HOSTNAME"
 log "Tailscale connected"
 
 # ── 6. Build llama.cpp ──────────────────────────────────────────────────────
-log "Building llama.cpp from source (this takes 10-20 min on Pi 4)"
+# Ensure adequate swap for the link step (needs ~2GB)
+if [ ! -f /swapfile ]; then
+    log "Creating 2GB swap file"
+    dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+    chmod 600 /swapfile
+    mkswap /swapfile > /dev/null
+    swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+# Scale build parallelism to available RAM (link step is memory-hungry)
+TOTAL_MB=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo)
+if [ "$TOTAL_MB" -le 2048 ]; then
+    BUILD_JOBS=1
+elif [ "$TOTAL_MB" -le 4096 ]; then
+    BUILD_JOBS=2
+else
+    BUILD_JOBS=$(nproc)
+fi
+
+log "Building llama.cpp from source ($BUILD_JOBS jobs, ${TOTAL_MB}MB RAM)"
 LLAMA_BUILD="/tmp/llama-build"
 rm -rf "$LLAMA_BUILD"
 git clone --depth 1 https://github.com/ggerganov/llama.cpp.git "$LLAMA_BUILD"
 cd "$LLAMA_BUILD"
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON
-cmake --build build -j"$(nproc)" --target llama-server
+cmake --build build -j"$BUILD_JOBS" --target llama-server
 cp build/bin/llama-server /usr/local/bin/llama-server
 chmod +x /usr/local/bin/llama-server
 cd /

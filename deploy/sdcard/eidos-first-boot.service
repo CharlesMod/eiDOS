@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/bash /boot/firmware/eidos-setup.sh
-TimeoutStartSec=3600
+TimeoutStartSec=7200
 StandardOutput=journal+console
 StandardError=journal+console
 
