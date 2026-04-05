@@ -1,0 +1,101 @@
+# eiDOS — Production configuration for Raspberry Pi deployment
+# This file is copied to /home/pi/kairos/config.toml by the setup script.
+
+[llm]
+url = "http://127.0.0.1:8080"
+model = "local"
+temperature = 0.6
+max_tokens = 1024
+request_timeout_s = 600
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+
+[tick]
+interval_s = 300
+loop_detect_window = 3
+
+[compaction]
+token_threshold = 8000
+tick_threshold = 20
+max_tokens = 2048
+retry_max_tokens = 4096
+obs_max_chars = 16000
+memory_max_chars = 6000
+context_max_chars = 40000
+
+[output]
+truncation_chars = 2000
+
+[safety]
+cmd_timeout_s = 120
+disk_min_gb = 1.0
+ram_max_pct = 85.0
+thermal_pause_c = 72.0
+bg_output_max_bytes = 10000000
+protected_patterns = [
+    "rm\\s+-rf\\s+/",
+    "rm\\s+.*-r",
+    "find\\s+.*-exec\\s+rm",
+    "find\\s+.*-delete",
+    "systemctl\\s+(stop|disable|kill)\\s+.*kairos",
+    "pkill.*kairos",
+    "kill.*kairos",
+    "shutdown",
+    "reboot",
+    "halt",
+    "mkfs",
+    "dd\\s+.*of=/dev/",
+]
+
+[session]
+grace_period_s = 60
+
+[self_healing]
+restart_cmd = "sudo systemctl restart llama-server"
+local_only = true
+max_consecutive_failures = 5
+max_tokens_ceiling = 4096
+token_backoff_step = 512
+reasoning_exhaust_compaction_trigger = 3
+
+[rotation]
+obs_max_lines = 5000
+archive_days = 14
+llm_log_max_bytes = 5000000
+llm_log_archive_count = 3
+metrics_max_bytes = 2000000
+metrics_archive_count = 3
+snapshot_max_count = 20
+
+[context]
+obs_max_chars = 4000
+obs_max_count = 20
+goal_max_chars = 2000
+memory_max_chars = 4000
+plan_max_chars = 800
+intelligence_max_chars = 1200
+env_max_chars = 800
+interventions_max_chars = 2000
+max_total_chars = 6500
+chars_per_token = 3.5
+briefing_model = true
+dream_combined = true
+
+[persona]
+enabled = true
+
+[dashboard]
+port = 8099
+
+[knowledge]
+enabled = true
+recall_top_k = 3
+recall_max_chars = 1200
+embedding_enabled = false
+embedding_cohost = false
+embedding_model_dir = "models/all-MiniLM-L6-v2"
+
+[paths]
+workspace = "workspace"
