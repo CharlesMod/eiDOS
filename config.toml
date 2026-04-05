@@ -79,7 +79,7 @@ env_max_chars = 800
 interventions_max_chars = 2000
 max_total_chars = 6500      # safe ceiling: ~1870 tokens + 1024 max_tokens fits n_ctx~3072
 chars_per_token = 3.5       # rough estimate for Qwen3
-briefing_model = false      # enable new context structure (set true when ready)
+briefing_model = true       # enable new context structure
 dream_combined = true       # combined plan+extract in one LLM call (faster on Pi)
 
 [persona]
