@@ -385,7 +385,7 @@ class TestCommandBlockingInHarness(SimulationTestBase):
 
     def test_write_file_allowed_in_sandbox(self):
         """write_file doesn't shell out — it should still work."""
-        path = os.path.join(self.tmp, "safe.txt")
+        path = os.path.join(self.config.workspace_dir, "safe.txt")
         result = execute_tool(
             ToolCall(tool="write_file", args={"path": path, "content": "ok"}, raw=""),
             self.config)
@@ -393,7 +393,7 @@ class TestCommandBlockingInHarness(SimulationTestBase):
         self.assertEqual(Path(path).read_text(), "ok")
 
     def test_read_file_allowed_in_sandbox(self):
-        path = os.path.join(self.tmp, "readable.txt")
+        path = os.path.join(self.config.workspace_dir, "readable.txt")
         Path(path).write_text("data")
         result = execute_tool(
             ToolCall(tool="read_file", args={"path": path}, raw=""), self.config)
@@ -674,7 +674,7 @@ class TestCompactionUnderLoad(SimulationTestBase):
                                           "success": True, "output": "x"})
         compact(self.config)
 
-        snapshots = list(self.config.snapshots_dir.glob("memory_before_*.md"))
+        snapshots = list(self.config.snapshots_dir.glob("memory_snapshot_*.md"))
         self.assertEqual(len(snapshots), 1)
         self.assertEqual(snapshots[0].read_text(), "before compaction content")
 
@@ -1352,7 +1352,7 @@ class TestTimeoutScoping(SimulationTestBase):
     def test_truncation_limits_memory(self):
         """Output truncation prevents memory overflow from large outputs."""
         self.config.output_truncation_chars = 100
-        path = os.path.join(self.tmp, "big.txt")
+        path = os.path.join(self.config.workspace_dir, "big.txt")
         Path(path).write_text("A" * 10000)
         result = execute_tool(
             ToolCall(tool="read_file", args={"path": path}, raw=""),
@@ -1519,7 +1519,7 @@ class TestLowResourceSimulation(SimulationTestBase):
     def test_tiny_truncation_limit(self):
         """Very small truncation limit (simulating low-RAM Pi config)."""
         self.config.output_truncation_chars = 50
-        path = os.path.join(self.tmp, "data.txt")
+        path = os.path.join(self.config.workspace_dir, "data.txt")
         Path(path).write_text("X" * 5000)
 
         result = execute_tool(

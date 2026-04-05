@@ -95,6 +95,7 @@ class Config:
     context_interventions_max_chars: int = 2000
     context_max_total_chars: int = 20000  # test/dev default; production uses config.toml (6500)
     briefing_model: bool = False  # enable new context structure (Phase 2)
+    dream_combined: bool = True    # combined plan+extract in one LLM call (Phase 4)
 
     # Compaction context budgets (chars) — generous for distillation
     compaction_obs_max_chars: int = 16000
@@ -117,6 +118,9 @@ class Config:
     knowledge_enabled: bool = True
     knowledge_recall_top_k: int = 3         # entries auto-surfaced per tick
     knowledge_recall_max_chars: int = 1200  # budget for Intelligence section
+    knowledge_embedding_enabled: bool = False   # Phase 5: semantic search
+    knowledge_embedding_cohost: bool = False    # keep model in RAM between dream cycles
+    embedding_model_dir: str = "models/all-MiniLM-L6-v2"
 
     # Mock mode
     mock_mode: bool = False
@@ -250,6 +254,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.context_max_total_chars = ctx.get("max_total_chars", config.context_max_total_chars)
         config.chars_per_token = ctx.get("chars_per_token", config.chars_per_token)
         config.briefing_model = ctx.get("briefing_model", config.briefing_model)
+        config.dream_combined = ctx.get("dream_combined", config.dream_combined)
 
         comp_ctx = data.get("compaction", {})
         config.compaction_obs_max_chars = comp_ctx.get("obs_max_chars", config.compaction_obs_max_chars)
@@ -266,6 +271,9 @@ def load_config(path: str = "config.toml") -> Config:
         config.knowledge_enabled = knowledge.get("enabled", config.knowledge_enabled)
         config.knowledge_recall_top_k = knowledge.get("recall_top_k", config.knowledge_recall_top_k)
         config.knowledge_recall_max_chars = knowledge.get("recall_max_chars", config.knowledge_recall_max_chars)
+        config.knowledge_embedding_enabled = knowledge.get("embedding_enabled", config.knowledge_embedding_enabled)
+        config.knowledge_embedding_cohost = knowledge.get("embedding_cohost", config.knowledge_embedding_cohost)
+        config.embedding_model_dir = knowledge.get("embedding_model_dir", config.embedding_model_dir)
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

@@ -112,6 +112,9 @@ def _render_observations_pyramid(observations: list[dict], full_budget: int = 20
 def _build_intelligence_section(config: Config, goal: str, plan: str) -> str:
     """Auto-recall knowledge relevant to the current goal + plan.
 
+    Merges BM25 results with any pre-cached semantic results from
+    recall_cache.md (written by dream_prefetch in Phase 5).
+
     Returns the formatted Intelligence section body, or empty string.
     """
     if not config.knowledge_enabled:
@@ -135,14 +138,45 @@ def _build_intelligence_section(config: Config, goal: str, plan: str) -> str:
                 break
 
     query = " ".join(query_parts)
-    if not query.strip():
+
+    # BM25 recall
+    bm25_results = []
+    if query.strip():
+        bm25_results = search_bm25(config, query, top_k=config.knowledge_recall_top_k)
+
+    # Merge with semantic recall cache (Phase 5)
+    cache_text = _read_recall_cache(config)
+
+    # Combine: BM25 formatted text + cache, deduplicating by ID
+    bm25_ids = {r["id"] for r in bm25_results}
+    parts = []
+
+    if bm25_results:
+        parts.append(format_recalled(bm25_results, max_chars=config.context_intelligence_max_chars))
+
+    if cache_text:
+        # Append cache lines not already covered by BM25
+        for line in cache_text.splitlines():
+            # Skip lines whose entry ID appears in BM25 results
+            # Cache lines look like: [FACT] (tag1, tag2) content
+            # We can't easily extract IDs, so include all cache content
+            # when there's budget remaining
+            parts.append(line)
+
+    combined = "\n".join(parts)
+    if not combined.strip():
         return ""
 
-    results = search_bm25(config, query, top_k=config.knowledge_recall_top_k)
-    if not results:
-        return ""
+    return combined[:config.context_intelligence_max_chars]
 
-    return format_recalled(results, max_chars=config.context_intelligence_max_chars)
+
+def _read_recall_cache(config: Config) -> str:
+    """Read the semantic recall pre-cache file, if it exists."""
+    cache_path = config.workspace / "recall_cache.md"
+    try:
+        return cache_path.read_text().strip()
+    except OSError:
+        return ""
 
 
 # ---------------------------------------------------------------------------

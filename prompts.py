@@ -108,3 +108,97 @@ COMPACTION_USER = """\
 {observations}
 
 Write the updated memory now. Preserve all progress, decisions, and next-step plans relevant to the goal above."""
+
+# ---------------------------------------------------------------------------
+# Two-phase compaction prompts (briefing model dream cycle)
+# ---------------------------------------------------------------------------
+
+COMPACTION_PLAN_SYSTEM = """\
+You are a plan-update system for an autonomous agent named Kairos.
+Rewrite the agent's plan.md to reflect what has been learned and what to do next.
+
+You will receive the goal, current plan, and recent observations.
+Produce a new plan that:
+- Notes what was accomplished or failed
+- States the immediate next step clearly
+- Keeps planned future steps if still relevant
+- Drops steps that are done or obsolete
+- Stays under 700 characters
+
+Output ONLY the new plan content. No preamble, no explanation, no markdown fences."""
+
+COMPACTION_PLAN_USER = """\
+## Active Goal (immutable)
+{goal}
+
+## Current plan
+{plan}
+
+## Recent observations (newest first)
+{observations}
+
+Write the updated plan now."""
+
+COMPACTION_EXTRACT_SYSTEM = """\
+You are a knowledge extraction system for an autonomous agent named Kairos.
+Extract durable facts from the agent's recent observations.
+
+For each piece of knowledge, output exactly one line in this format:
+CATEGORY [tag1, tag2]: content
+
+Valid categories: FACT, ERROR, PROCEDURE, REFLECTION
+
+Examples:
+FACT [pip, bookworm]: pip install requires --break-system-packages on Bookworm
+ERROR [dht22, gpio]: DHT22 CRC errors happen when wire exceeds 3m
+PROCEDURE [systemd, service]: Use systemctl --user for non-root services
+REFLECTION [debugging]: Always check journalctl before restarting a service
+
+Rules:
+- Only extract knowledge that is durable and reusable across goals
+- Skip transient status updates (e.g. "download 50% complete")
+- Skip anything too specific to the current goal context
+- Each line must start with one of: FACT, ERROR, PROCEDURE, REFLECTION
+- If there is nothing worth extracting, output exactly: NONE
+
+Output ONLY the extraction lines (or NONE). No preamble, no explanation."""
+
+COMPACTION_EXTRACT_USER = """\
+## Recent observations
+{observations}
+
+Extract durable knowledge now."""
+
+COMPACTION_COMBINED_SYSTEM = """\
+You are a dream-cycle system for an autonomous agent named Kairos.
+You have two jobs:
+
+1. UPDATE PLAN: Rewrite the agent's plan to reflect progress and next steps.
+2. EXTRACT KNOWLEDGE: Pull durable facts from observations for long-term memory.
+
+Output format — use these exact section headers:
+
+=== PLAN ===
+(new plan content, under 700 characters)
+
+=== KNOWLEDGE ===
+(one line per entry, or NONE)
+CATEGORY [tag1, tag2]: content
+
+Valid categories: FACT, ERROR, PROCEDURE, REFLECTION
+Only extract knowledge that is durable and reusable across goals.
+If nothing worth extracting, write NONE under === KNOWLEDGE ===.
+
+Output ONLY these two sections. No preamble, no explanation."""
+
+COMPACTION_COMBINED_USER = """\
+## Active Goal (immutable)
+{goal}
+
+## Current plan
+{plan}
+
+## Recent observations (newest first)
+{observations}
+
+Produce the updated plan and extract knowledge now."""

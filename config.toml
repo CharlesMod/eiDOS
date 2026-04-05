@@ -80,6 +80,7 @@ interventions_max_chars = 2000
 max_total_chars = 6500      # safe ceiling: ~1870 tokens + 1024 max_tokens fits n_ctx~3072
 chars_per_token = 3.5       # rough estimate for Qwen3
 briefing_model = false      # enable new context structure (set true when ready)
+dream_combined = true       # combined plan+extract in one LLM call (faster on Pi)
 
 [persona]
 enabled = true
@@ -91,6 +92,9 @@ port = 8099
 enabled = true
 recall_top_k = 3          # entries auto-surfaced per tick
 recall_max_chars = 1200   # budget for Intelligence section
+embedding_enabled = false # Phase 5: semantic search (requires onnxruntime)
+embedding_cohost = false  # keep embedding model resident in RAM
+embedding_model_dir = "models/all-MiniLM-L6-v2"
 
 [paths]
 workspace = "workspace"

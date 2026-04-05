@@ -2,10 +2,15 @@
 
 Uses a generous context budget so the LLM has full visibility of observations
 when distilling them into concise working memory.
+
+Two modes:
+- Legacy: single LLM call rewrites memory.md (original behaviour)
+- Briefing: two-phase dream cycle (plan update + knowledge extraction)
 """
 
 import json
 import logging
+import re
 import time
 
 from config import Config
@@ -13,12 +18,24 @@ from memory import (
     read_goal,
     read_memory,
     write_memory,
+    read_plan,
+    write_plan,
     read_recent_observations,
     count_observation_chars,
     append_observation,
 )
 from llm import complete, ReasoningExhausted
-from prompts import COMPACTION_SYSTEM, COMPACTION_USER, COMPACTION_PERSONALITY_CLAUSE
+from prompts import (
+    COMPACTION_SYSTEM,
+    COMPACTION_USER,
+    COMPACTION_PERSONALITY_CLAUSE,
+    COMPACTION_PLAN_SYSTEM,
+    COMPACTION_PLAN_USER,
+    COMPACTION_EXTRACT_SYSTEM,
+    COMPACTION_EXTRACT_USER,
+    COMPACTION_COMBINED_SYSTEM,
+    COMPACTION_COMBINED_USER,
+)
 
 logger = logging.getLogger("kairos.compaction")
 
@@ -236,3 +253,325 @@ def _log_compaction_overrun(config: Config, total_chars: int) -> None:
             f.write(json.dumps(entry) + "\n")
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Knowledge extraction parsing
+# ---------------------------------------------------------------------------
+
+_VALID_CATEGORIES = {"FACT": "facts", "ERROR": "errors", "PROCEDURE": "procedures", "REFLECTION": "reflections"}
+_EXTRACT_RE = re.compile(
+    r"^(FACT|ERROR|PROCEDURE|REFLECTION)\s*\[([^\]]*)\]\s*:\s*(.+)$",
+    re.IGNORECASE,
+)
+
+
+def parse_extractions(text: str) -> list[dict]:
+    """Parse knowledge extraction lines from LLM output.
+
+    Expected format per line:
+        CATEGORY [tag1, tag2]: content
+
+    Returns list of dicts with keys: category, tags, content.
+    Silently skips unparseable lines.
+    """
+    results = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.upper() == "NONE":
+            continue
+        m = _EXTRACT_RE.match(line)
+        if not m:
+            continue
+        cat_key = m.group(1).upper()
+        category = _VALID_CATEGORIES.get(cat_key, "facts")
+        tags = [t.strip().lower() for t in m.group(2).split(",") if t.strip()]
+        content = m.group(3).strip()
+        if content and tags:
+            results.append({"category": category, "tags": tags, "content": content})
+    return results
+
+
+def _store_extractions(config: Config, extractions: list[dict], source_goal: str) -> int:
+    """Write parsed extractions to the knowledge store. Returns count stored."""
+    from knowledge import store_entry
+
+    stored = 0
+    for ext in extractions:
+        try:
+            store_entry(
+                config,
+                content=ext["content"],
+                tags=ext["tags"],
+                category=ext["category"],
+                confidence="tentative",
+                source_goal=source_goal,
+            )
+            stored += 1
+        except Exception as exc:
+            logger.warning("dream: failed to store extraction: %s", exc)
+    return stored
+
+
+# ---------------------------------------------------------------------------
+# Briefing-model dream cycle (two-phase or combined)
+# ---------------------------------------------------------------------------
+
+def compact_briefing(config: Config, persona: dict = None) -> None:
+    """Run the briefing-model dream cycle: update plan + extract knowledge.
+
+    When config.dream_combined is True (default), both phases happen in a
+    single LLM call.  When False, two separate calls are made.
+    """
+    _snapshot_memory(config)
+
+    goal = read_goal(config)
+    current_plan = read_plan(config)
+
+    observations = read_recent_observations(
+        config,
+        max_chars=config.compaction_obs_max_chars,
+        max_count=200,
+    )
+
+    if not observations and not current_plan:
+        return
+
+    obs_text = _format_observations(observations)
+
+    combined = getattr(config, "dream_combined", True)
+
+    if combined:
+        new_plan, extractions = _dream_combined(config, goal, current_plan, obs_text, persona)
+    else:
+        new_plan = _dream_plan(config, goal, current_plan, obs_text, persona)
+        extractions = _dream_extract(config, obs_text)
+
+    # Write updated plan
+    if new_plan and new_plan.strip():
+        cap = config.context_plan_max_chars
+        if len(new_plan) > cap:
+            new_plan = new_plan[:cap].rsplit("\n", 1)[0] + "\n... [plan trimmed]"
+        write_plan(config, new_plan.strip())
+    else:
+        # Keep existing plan if LLM returned nothing
+        if not current_plan:
+            write_plan(config, "# Plan\nNo update produced.")
+
+    # Store knowledge extractions
+    stored = _store_extractions(config, extractions, source_goal=goal or "")
+
+    # Log the dream event
+    append_observation(config, {
+        "tick": "compaction",
+        "tool": "dream",
+        "success": True,
+        "output": (
+            f"Dream cycle complete. Plan: {len(current_plan)} → {len(new_plan or '')} chars. "
+            f"Knowledge: {stored} entries extracted."
+        ),
+    })
+
+    logger.info("dream cycle: plan %d→%d chars, %d knowledge entries stored",
+                len(current_plan), len(new_plan or ""), stored)
+
+    # Semantic pre-fetch for next tick (Phase 5)
+    if config.knowledge_embedding_enabled:
+        try:
+            prefetch_count = dream_prefetch(config, goal or "", new_plan or current_plan)
+            logger.info("dream prefetch: %d entries cached", prefetch_count)
+        except Exception as exc:
+            logger.warning("dream prefetch failed: %s", exc)
+
+
+def _dream_combined(config, goal, plan, obs_text, persona):
+    """Single LLM call for plan update + knowledge extraction."""
+    system = COMPACTION_COMBINED_SYSTEM
+    if persona and config.persona_enabled:
+        traits = ", ".join(persona.get("traits", [])) or "developing"
+        mood = persona.get("mood", "neutral")
+        system += COMPACTION_PERSONALITY_CLAUSE.format(traits=traits, mood=mood)
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": COMPACTION_COMBINED_USER.format(
+            goal=goal or "(no goal set)",
+            plan=plan or "(no plan yet)",
+            observations=obs_text or "(no observations)",
+        )},
+    ]
+
+    try:
+        output = _call_with_retry(messages, config)
+    except _DreamExhausted:
+        logger.warning("dream combined: exhausted — keeping current plan, no extractions")
+        return plan, []
+
+    return _parse_combined_output(output, plan)
+
+
+def _dream_plan(config, goal, plan, obs_text, persona):
+    """Separate LLM call for plan update only."""
+    system = COMPACTION_PLAN_SYSTEM
+    if persona and config.persona_enabled:
+        traits = ", ".join(persona.get("traits", [])) or "developing"
+        mood = persona.get("mood", "neutral")
+        system += COMPACTION_PERSONALITY_CLAUSE.format(traits=traits, mood=mood)
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": COMPACTION_PLAN_USER.format(
+            goal=goal or "(no goal set)",
+            plan=plan or "(no plan yet)",
+            observations=obs_text or "(no observations)",
+        )},
+    ]
+
+    try:
+        output = _call_with_retry(messages, config)
+    except _DreamExhausted:
+        return plan
+
+    return output.strip() if output else plan
+
+
+def _dream_extract(config, obs_text):
+    """Separate LLM call for knowledge extraction only."""
+    messages = [
+        {"role": "system", "content": COMPACTION_EXTRACT_SYSTEM},
+        {"role": "user", "content": COMPACTION_EXTRACT_USER.format(
+            observations=obs_text or "(no observations)",
+        )},
+    ]
+
+    try:
+        output = _call_with_retry(messages, config)
+    except _DreamExhausted:
+        return []
+
+    return parse_extractions(output or "")
+
+
+class _DreamExhausted(Exception):
+    """Internal: LLM exhausted reasoning on both attempts."""
+
+
+def _call_with_retry(messages, config):
+    """Call LLM with one retry on ReasoningExhausted. Raises _DreamExhausted if both fail."""
+    try:
+        return complete(messages, config, temperature=0.3,
+                        max_tokens=config.compaction_max_tokens)
+    except ReasoningExhausted:
+        logger.warning("dream: reasoning exhausted — retrying with higher budget")
+        retry_messages = messages + [
+            {"role": "assistant", "content": "(internal thinking used all tokens — no output)"},
+            {"role": "user", "content":
+             "Your reasoning used the entire token budget. "
+             "You now have a larger budget. Be concise and produce output."},
+        ]
+        try:
+            return complete(retry_messages, config, temperature=0.3,
+                            max_tokens=config.compaction_retry_max_tokens)
+        except ReasoningExhausted:
+            raise _DreamExhausted()
+
+
+def _parse_combined_output(output: str, fallback_plan: str) -> tuple:
+    """Parse combined LLM output into (plan_text, extractions_list).
+
+    Expected format:
+        === PLAN ===
+        ...plan content...
+
+        === KNOWLEDGE ===
+        FACT [tag1]: content
+        ...
+    """
+    if not output:
+        return fallback_plan, []
+
+    plan_text = ""
+    knowledge_text = ""
+
+    # Split on section headers
+    parts = re.split(r"===\s*PLAN\s*===", output, flags=re.IGNORECASE)
+    if len(parts) >= 2:
+        after_plan = parts[1]
+        kparts = re.split(r"===\s*KNOWLEDGE\s*===", after_plan, flags=re.IGNORECASE)
+        plan_text = kparts[0].strip()
+        if len(kparts) >= 2:
+            knowledge_text = kparts[1].strip()
+    else:
+        # No section headers — treat entire output as plan, no extractions
+        plan_text = output.strip()
+
+    extractions = parse_extractions(knowledge_text)
+    return (plan_text or fallback_plan), extractions
+
+
+# ---------------------------------------------------------------------------
+# Dream pre-fetch (Phase 5: embedding-based semantic pre-caching)
+# ---------------------------------------------------------------------------
+
+def dream_prefetch(config: Config, goal: str, plan: str) -> int:
+    """After the dream cycle, embed new entries and pre-cache recalls.
+
+    1. Rebuild all embeddings (incremental when possible)
+    2. Semantic search using goal + plan as query
+    3. Write recall_cache.md for next tick's Intelligence section
+
+    Returns the number of entries cached.
+    """
+    from embedding import (
+        load_model, unload_model, is_loaded,
+        embed_and_store, semantic_search,
+    )
+    from knowledge import format_recalled
+
+    # In mock mode (testing), skip model loading
+    if config.mock_mode:
+        was_loaded = True
+    else:
+        # Load model if not already resident
+        was_loaded = is_loaded()
+        if not was_loaded:
+            if not load_model(config):
+                return 0
+
+    try:
+        # Embed all entries (idempotent — re-embeds any new/changed entries)
+        embed_and_store(config)
+
+        # Build query from goal + plan
+        query_parts = []
+        if goal:
+            query_parts.append(goal[:300])
+        if plan:
+            for line in plan.splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    query_parts.append(line[:200])
+                    break
+        query = " ".join(query_parts)
+        if not query.strip():
+            return 0
+
+        # Search
+        results = semantic_search(config, query, top_k=config.knowledge_recall_top_k)
+        if not results:
+            # Clear stale cache
+            cache_path = config.workspace / "recall_cache.md"
+            if cache_path.exists():
+                cache_path.unlink()
+            return 0
+
+        # Write cache
+        cache_text = format_recalled(results, max_chars=config.context_intelligence_max_chars)
+        cache_path = config.workspace / "recall_cache.md"
+        cache_path.write_text(cache_text)
+
+        return len(results)
+    finally:
+        # Unload model unless co-hosting (or in mock mode)
+        if not config.mock_mode and not was_loaded and not config.knowledge_embedding_cohost:
+            unload_model()
