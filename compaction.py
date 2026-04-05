@@ -168,6 +168,53 @@ def compact(config: Config, persona: dict = None) -> None:
     })
 
 
+def emit_flavor(config: Config, persona: dict = None) -> None:
+    """Generate a brief introspective one-liner after compaction (dream).
+
+    Asks the LLM for a short internal thought reflecting the agent's current
+    situation.  Saved to workspace/flavor.json for the dashboard.  Best-effort —
+    never blocks or raises on failure.
+    """
+    mood = "curious"
+    traits = "developing"
+    level = 1
+    if persona:
+        mood = persona.get("mood", "curious")
+        traits = ", ".join(persona.get("traits", [])) or "developing"
+        level = persona.get("level", 1)
+
+    goal = read_goal(config)
+    memory = read_memory(config)
+
+    messages = [
+        {"role": "system", "content":
+         f"You are Kairos (Lv.{level}), a small autonomous agent. "
+         f"Traits: {traits}. Mood: {mood}.\n"
+         "Write a single brief internal thought (10-20 words) as if thinking "
+         "to yourself. Reflect on your current situation, progress, or mood. "
+         "Be authentic to your personality. No quotes, no preamble. Just the thought."},
+        {"role": "user", "content":
+         f"Goal: {goal[:200] if goal else '(none)'}\n"
+         f"Memory snippet: {memory[:300] if memory else '(fresh start)'}"},
+    ]
+
+    try:
+        thought = complete(messages, config, max_tokens=128, temperature=0.8)
+        if thought and thought.strip():
+            flavor_path = config.workspace / "flavor.json"
+            flavor = {
+                "text": thought.strip()[:200],
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "mood": mood,
+            }
+            tmp = flavor_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(flavor))
+            tmp.rename(flavor_path)
+            logger.info("flavor text emitted: %s", flavor["text"][:60])
+    except (Exception,):
+        pass  # flavor is best-effort, never block on failure
+
+
 def _snapshot_memory(config: Config) -> None:
     """Save a timestamped copy of memory.md before compaction."""
     config.snapshots_dir.mkdir(parents=True, exist_ok=True)

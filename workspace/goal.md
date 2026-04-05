@@ -1,0 +1,1 @@
+Set up a weather monitoring station using the DHT22 sensor on GPIO4. Log temperature and humidity readings every 5 minutes to a CSV file. Create a simple web dashboard to view current and historical readings.

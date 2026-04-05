@@ -18,7 +18,7 @@ from pathlib import Path
 
 from config import Config, load_config
 from context import assemble_context
-from compaction import should_compact, compact
+from compaction import should_compact, compact, emit_flavor
 from llm import complete, LLMError, ReasoningExhausted
 from memory import (
     append_observation,
@@ -292,6 +292,7 @@ def run_loop(config: Config, persona=None, wal=None):
     last_tick_failed = False
     ticks_since_goal_complete = None  # None = never
     idle_since = None  # timestamp when goal went missing
+    operator_paused = False
     loop_start = time.monotonic()
 
     pfx = _pfx(persona, config)
@@ -345,6 +346,30 @@ def run_loop(config: Config, persona=None, wal=None):
             time.sleep(config.tick_interval_s)
             continue
 
+        # --- Operator pause check ---
+        pause_path = config.workspace / "paused"
+        if pause_path.exists():
+            if not operator_paused:
+                print(f"{pfx} Operator paused — waiting for resume")
+                append_observation(config, {
+                    "tick": tick_number,
+                    "tool": "system",
+                    "success": True,
+                    "output": "Paused by operator via dashboard. Tick loop suspended.",
+                })
+                operator_paused = True
+            time.sleep(5)
+            continue
+        elif operator_paused:
+            print(f"{pfx} Resuming from operator pause")
+            append_observation(config, {
+                "tick": tick_number,
+                "tool": "system",
+                "success": True,
+                "output": "Resumed by operator. Resuming tick loop.",
+            })
+            operator_paused = False
+
         # --- Check for goal ---
         goal = read_goal(config)
         if not goal:
@@ -364,6 +389,7 @@ def run_loop(config: Config, persona=None, wal=None):
             print(f"{pfx} Dreaming... consolidating memories.")
             try:
                 compact(config, persona=persona)
+                emit_flavor(config, persona)
                 ticks_since_compaction = 0
                 tick_compacted = True
                 if persona and config.persona_enabled:
