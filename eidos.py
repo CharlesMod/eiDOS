@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kairos — autonomous LLM supervisor for Raspberry Pi.
+"""eiDOS — autonomous LLM supervisor for Raspberry Pi.
 
 Entry point: crash recovery, tick loop, signal handling, session detection.
 """
@@ -46,7 +46,7 @@ from session import human_present, take_workspace_snapshot, workspace_diff
 from telemetry import write_heartbeat, append_metrics
 from tools import execute_tool, refresh_jobs
 
-logger = logging.getLogger("kairos")
+logger = logging.getLogger("eidos")
 
 
 # --- Globals for signal handling ---
@@ -59,7 +59,7 @@ def _handle_signal(signum, frame):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Kairos autonomous supervisor")
+    parser = argparse.ArgumentParser(description="eiDOS autonomous supervisor")
     parser.add_argument("--config", default="config.toml", help="Path to config file")
     parser.add_argument("--llm-url", default=None, help="Override LLM endpoint URL")
     args = parser.parse_args()
@@ -104,7 +104,7 @@ def _pfx(persona, config):
     """Return persona prefix or fallback."""
     if config.persona_enabled and persona:
         return format_prefix(persona)
-    return "[kairos]"
+    return "[eidos]"
 
 
 def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
@@ -169,18 +169,18 @@ def recover(config: Config) -> dict:
     """Crash recovery: validate state, fix corruption, log restart.
     Returns WAL state dict (may be empty on fresh start).
     """
-    print("[kairos] Running crash recovery...")
+    print("[eidos] Running crash recovery...")
 
     # 0. Read WAL (tick state from before crash)
     wal = read_wal(config)
     if wal:
-        print(f"[kairos] WAL recovered: tick={wal.get('tick_number')}, "
+        print(f"[eidos] WAL recovered: tick={wal.get('tick_number')}, "
               f"compaction_gap={wal.get('ticks_since_compaction')}")
 
     # 1. Verify goal.md
     goal = read_goal(config)
     if not goal:
-        print("[kairos] WARNING: No goal.md found. Agent will idle until one is created.")
+        print("[eidos] WARNING: No goal.md found. Agent will idle until one is created.")
 
     # 2. Create memory.md if missing, or restore from snapshot if empty
     mem_missing = not config.memory_path.exists()
@@ -206,7 +206,7 @@ def recover(config: Config) -> dict:
                     if content.strip():
                         write_memory(config, content)
                         restored = True
-                        print(f"[kairos] Restored memory.md from snapshot: {snapshots[0].name}")
+                        print(f"[eidos] Restored memory.md from snapshot: {snapshots[0].name}")
                         append_observation(config, {
                             "tick": 0,
                             "tool": "system",
@@ -217,12 +217,12 @@ def recover(config: Config) -> dict:
                     pass
         if not restored:
             write_memory(config, "# Working Memory\nFresh start. No prior context.")
-            print("[kairos] Created initial memory.md")
+            print("[eidos] Created initial memory.md")
 
     # 3. Validate observations.jsonl
     truncated = validate_observations(config)
     if truncated:
-        print(f"[kairos] Truncated {truncated} malformed line(s) from observations.jsonl")
+        print(f"[eidos] Truncated {truncated} malformed line(s) from observations.jsonl")
         append_observation(config, {
             "tick": 0,
             "tool": "system",
@@ -235,7 +235,7 @@ def recover(config: Config) -> dict:
     jobs = refresh_jobs(config)
     dead = [j for j in jobs if j["status"] != "running"]
     if dead:
-        print(f"[kairos] Found {len(dead)} completed/dead background jobs")
+        print(f"[eidos] Found {len(dead)} completed/dead background jobs")
         dead_names = ", ".join(j.get("cmd", "?")[:60] for j in dead)
         append_observation(config, {
             "tick": 0,
@@ -248,14 +248,14 @@ def recover(config: Config) -> dict:
     # 5. Log recovery with full crash context
     if wal:
         recovery_detail = (
-            f"Kairos recovered from crash. Resuming at tick {wal.get('tick_number', '?')}. "
+            f"eiDOS recovered from crash. Resuming at tick {wal.get('tick_number', '?')}. "
             f"State before crash: {wal.get('consecutive_failures', 0)} consecutive LLM failures, "
             f"{wal.get('reasoning_exhaustions', 0)} reasoning exhaustions, "
             f"max_tokens was {wal.get('current_max_tokens', config.llm_max_tokens)}. "
             f"Review recent observations — the last action may not have completed."
         )
     else:
-        recovery_detail = "Kairos starting fresh. No prior crash state found."
+        recovery_detail = "eiDOS starting fresh. No prior crash state found."
     append_observation(config, {
         "tick": 0,
         "tool": "system",
@@ -265,10 +265,10 @@ def recover(config: Config) -> dict:
 
     # 6. Rotate logs and clean old archives
     if rotate_if_needed(config):
-        print("[kairos] Rotated observations.jsonl")
+        print("[eidos] Rotated observations.jsonl")
     deleted = cleanup_old_archives(config)
     if deleted:
-        print(f"[kairos] Cleaned {deleted} old archive(s)")
+        print(f"[eidos] Cleaned {deleted} old archive(s)")
 
     return wal
 
@@ -376,7 +376,7 @@ def run_loop(config: Config, persona=None, wal=None):
             if idle_since is None:
                 idle_since = time.time()
             if config.mock_mode:
-                print("[kairos] No goal.md — exiting (mock mode)")
+                print("[eidos] No goal.md — exiting (mock mode)")
                 break
             time.sleep(config.tick_interval_s)
             continue
@@ -649,7 +649,7 @@ def run_loop(config: Config, persona=None, wal=None):
                         print(f"{pfx} Earned title: {t}")
                     save_persona(config.workspace, persona)
                 else:
-                    print(f"[kairos] Goal declared complete: {summary}")
+                    print(f"[eidos] Goal declared complete: {summary}")
                 append_observation(config, {
                     "tick": tick_number,
                     "tool": "system",
@@ -744,12 +744,12 @@ def run_loop(config: Config, persona=None, wal=None):
         pfx = _pfx(persona, config)
         print(f"{pfx} Shutting down. See you next time.")
     else:
-        print("[kairos] Shutting down...")
+        print("[eidos] Shutting down...")
     append_observation(config, {
         "tick": tick_number,
         "tool": "system",
         "success": True,
-        "output": "Kairos shutting down cleanly.",
+        "output": "eiDOS shutting down cleanly.",
     })
 
 

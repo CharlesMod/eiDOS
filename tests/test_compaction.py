@@ -278,7 +278,7 @@ class TestCompactionTriggers(unittest.TestCase):
         write_memory(self.config, "# Working Memory\nGoal: find config files.")
         append_observation(self.config, {
             "tick": 1, "tool": "bash", "success": True,
-            "output": "raspberrypi-kairos",
+            "output": "raspberrypi-eidos",
         })
         append_observation(self.config, {
             "tick": 2, "tool": "bash", "success": True,
@@ -295,7 +295,7 @@ class TestCompactionTriggers(unittest.TestCase):
         # Old memory preserved
         self.assertIn("find config files", mem)
         # Observation facts preserved in fallback
-        self.assertIn("raspberrypi-kairos", mem)
+        self.assertIn("raspberrypi-eidos", mem)
         self.assertIn("32G", mem)
         self.assertIn("SSH key", mem)
         self.assertIn("Uncompacted Observations", mem)
@@ -355,13 +355,13 @@ class TestCompactionTriggers(unittest.TestCase):
 
     def test_build_fallback_goal_and_observations(self):
         obs = [
-            {"tick": 1, "tool": "bash", "output": "hostname: pi-kairos"},
+            {"tick": 1, "tool": "bash", "output": "hostname: pi-eidos"},
             {"tick": 2, "tool": "bash", "output": "disk: 32G"},
         ]
         result = _build_fallback_memory("old memory", "Monitor system", obs, 4000)
         self.assertIn("Monitor system", result)
         self.assertIn("old memory", result)
-        self.assertIn("pi-kairos", result)
+        self.assertIn("pi-eidos", result)
         self.assertIn("32G", result)
 
     def test_build_fallback_no_goal(self):
@@ -577,14 +577,14 @@ class TestCompactBriefing(unittest.TestCase):
 Step 1 done. Next: configure DHT22 sensor.
 
 === KNOWLEDGE ===
-FACT [hostname]: The Pi's hostname is pi-kairos
+FACT [hostname]: The Pi's hostname is pi-eidos
 ERROR [pip, bookworm]: pip requires --break-system-packages""")
     def test_combined_updates_plan_and_stores_knowledge(self, _mock):
         self.config.goal_path.write_text("Set up weather station")
         write_plan(self.config, "# Plan\nStep 1: check hostname")
         append_observation(self.config, {
             "tick": 1, "tool": "bash", "success": True,
-            "output": "hostname: pi-kairos",
+            "output": "hostname: pi-eidos",
         })
 
         compact_briefing(self.config)

@@ -297,7 +297,7 @@ def tool_http_get(args: dict, config: Config) -> ToolResult:
 
     start = time.monotonic()
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Kairos/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "eiDOS/1.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = resp.read().decode("utf-8", errors="replace")
 

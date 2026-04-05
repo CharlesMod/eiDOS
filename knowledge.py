@@ -19,7 +19,7 @@ import yaml
 
 from config import Config
 
-logger = logging.getLogger("kairos.knowledge")
+logger = logging.getLogger("eidos.knowledge")
 
 # Valid category names — doubles as subdirectory names
 CATEGORIES = ("facts", "procedures", "errors", "reflections")

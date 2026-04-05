@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# remote_poller.sh — Pull-based health checker for Kairos nodes.
+# remote_poller.sh — Pull-based health checker for eiDOS nodes.
 #
-# Runs on the OPERATOR'S machine, NOT on any Kairos node.
+# Runs on the OPERATOR'S machine, NOT on any eiDOS node.
 # Loops through Tailscale IPs and curls /api/ping.
 #
 # Usage:

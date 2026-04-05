@@ -1,4 +1,4 @@
-"""Tests for WAL crash recovery and self-healing in kairos.py."""
+"""Tests for WAL crash recovery and self-healing in eidos.py."""
 
 import json
 import os
@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
 from config import Config
-from kairos import write_wal, read_wal, clear_wal, attempt_llm_restart, recover
+from eidos import write_wal, read_wal, clear_wal, attempt_llm_restart, recover
 from memory import write_memory, append_observation, read_goal
 
 
@@ -118,23 +118,23 @@ class TestSelfHealing(unittest.TestCase):
         self.config.llm_restart_cmd = ""
         self.assertFalse(attempt_llm_restart(self.config))
 
-    @patch("kairos.subprocess.run")
+    @patch("eidos.subprocess.run")
     def test_restart_success(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         self.config.llm_restart_cmd = "systemctl restart llama-server"
-        with patch("kairos.time.sleep"):  # skip the 10s wait
+        with patch("eidos.time.sleep"):  # skip the 10s wait
             result = attempt_llm_restart(self.config)
         self.assertTrue(result)
         mock_run.assert_called_once()
 
-    @patch("kairos.subprocess.run")
+    @patch("eidos.subprocess.run")
     def test_restart_failure_nonzero_exit(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1, stderr="unit not found")
         self.config.llm_restart_cmd = "systemctl restart llama-server"
         result = attempt_llm_restart(self.config)
         self.assertFalse(result)
 
-    @patch("kairos.subprocess.run", side_effect=TimeoutError)
+    @patch("eidos.subprocess.run", side_effect=TimeoutError)
     def test_restart_timeout(self, mock_run):
         self.config.llm_restart_cmd = "hang-forever"
         result = attempt_llm_restart(self.config)

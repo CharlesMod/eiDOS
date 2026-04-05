@@ -1,11 +1,11 @@
 [Unit]
-Description=Kairos dashboard (read-only status server)
-After=kairos.service
+Description=eiDOS dashboard (read-only status server)
+After=eidos.service
 
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/kairos
+WorkingDirectory=/home/pi/eidos
 ExecStart=/usr/bin/python3 dashboard.py --config config.toml
 Restart=always
 RestartSec=10

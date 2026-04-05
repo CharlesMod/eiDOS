@@ -51,6 +51,15 @@ tar czf "$BUNDLE_PATH" \
     --exclude='workspace/outputs' \
     --exclude='workspace/snapshots' \
     --exclude='workspace/live_test_logs' \
+    --exclude='workspace/interventions' \
+    --exclude='workspace/knowledge' \
+    --exclude='workspace/memory.md' \
+    --exclude='workspace/observations.jsonl' \
+    --exclude='workspace/goal.md' \
+    --exclude='workspace/plan.md' \
+    --exclude='workspace/wal.json' \
+    --exclude='workspace/heartbeat.json' \
+    --exclude='workspace/flavor.json' \
     --exclude='workspace/exam_results.json' \
     --exclude='workspace/stress_results.json' \
     --exclude='workspace/llm_log.jsonl' \
@@ -67,7 +76,6 @@ tar czf "$BUNDLE_PATH" \
     --exclude='simulate.py' \
     --exclude='stress.py' \
     --exclude='exam.py' \
-    --exclude='env_snapshot.py' \
     --exclude='setup_embedding.py' \
     .
 
@@ -166,5 +174,5 @@ log ""
 log "  After reboot, check via Tailscale:"
 log "    ssh $PI_USER@eidos-<serial>.tail<net>"
 log "    sudo journalctl -u eidos-first-boot"
-log "    systemctl status llama-server kairos dashboard"
+log "    systemctl status llama-server eidos dashboard"
 log ""

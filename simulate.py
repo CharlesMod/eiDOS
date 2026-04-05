@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kairos Live Simulation — run multi-tick agent loops against a real LLM.
+"""eiDOS Live Simulation — run multi-tick agent loops against a real LLM.
 
 Unlike the unit tests (deterministic fakes) and validate.py (subsystem
 checks), this script exercises the full tick loop with a real LLM endpoint
@@ -459,7 +459,7 @@ def print_final_report(all_results):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run live LLM simulation of Kairos agent loop",
+        description="Run live LLM simulation of eiDOS agent loop",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Scenarios:\n"
@@ -499,7 +499,7 @@ def main():
         except Exception:
             args.model = "local"
 
-    print(f"{_BOLD}Kairos Live Simulation{_RESET}")
+    print(f"{_BOLD}eiDOS Live Simulation{_RESET}")
     print(f"Endpoint: {url}")
     print(f"Model: {args.model}")
     print(f"Timeout: {args.timeout}s")
@@ -535,7 +535,7 @@ def main():
 
     for name in scenario_names:
         # Fresh temp dir per scenario
-        tmp_dir = tempfile.mkdtemp(prefix=f"kairos_sim_{name}_")
+        tmp_dir = tempfile.mkdtemp(prefix=f"eidos_sim_{name}_")
         config = _make_config(url, args.model, tmp_dir, args.timeout)
 
         try:

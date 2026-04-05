@@ -37,7 +37,7 @@ from prompts import (
     COMPACTION_COMBINED_USER,
 )
 
-logger = logging.getLogger("kairos.compaction")
+logger = logging.getLogger("eidos.compaction")
 
 
 def should_compact(config: Config, ticks_since_last: int) -> bool:
@@ -188,7 +188,7 @@ def emit_flavor(config: Config, persona: dict = None) -> None:
 
     messages = [
         {"role": "system", "content":
-         f"You are Kairos (Lv.{level}), a small autonomous agent. "
+         f"You are eiDOS (Lv.{level}), a small autonomous agent. "
          f"Traits: {traits}. Mood: {mood}.\n"
          "Write a single brief internal thought (10-20 words) as if thinking "
          "to yourself. Reflect on your current situation, progress, or mood. "

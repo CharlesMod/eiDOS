@@ -119,7 +119,7 @@ LLAMA_BUILD="/tmp/llama-build"
 rm -rf "$LLAMA_BUILD"
 git clone --depth 1 https://github.com/ggerganov/llama.cpp.git "$LLAMA_BUILD"
 cd "$LLAMA_BUILD"
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DBUILD_SHARED_LIBS=OFF
 cmake --build build -j"$BUILD_JOBS" --target llama-server
 cp build/bin/llama-server /usr/local/bin/llama-server
 chmod +x /usr/local/bin/llama-server
@@ -141,7 +141,7 @@ else
 fi
 
 # ── 8. Extract eiDOS bundle ─────────────────────────────────────────────────
-EIDOS_DIR="$HOME_DIR/kairos"
+EIDOS_DIR="$HOME_DIR/eidos"
 log "Extracting eiDOS bundle to $EIDOS_DIR"
 mkdir -p "$EIDOS_DIR"
 tar xzf "$BOOT_DIR/eidos-bundle.tar.gz" -C "$EIDOS_DIR"
@@ -197,10 +197,10 @@ log "Python dependencies installed"
 log "Installing systemd services"
 
 # Patch service files for this Pi's user and venv Python
-for svc in kairos.service dashboard.service; do
+for svc in eidos.service dashboard.service; do
     sed -i "s|/usr/bin/python3|$EIDOS_DIR/.venv/bin/python3|g" "$EIDOS_DIR/deploy/$svc"
     sed -i "s|User=pi|User=$PI_USER|g" "$EIDOS_DIR/deploy/$svc"
-    sed -i "s|/home/pi/kairos|$EIDOS_DIR|g" "$EIDOS_DIR/deploy/$svc"
+    sed -i "s|/home/pi/eidos|$EIDOS_DIR|g" "$EIDOS_DIR/deploy/$svc"
 done
 
 # Patch llama-server service for this Pi's user and model path
@@ -208,11 +208,11 @@ sed -i "s|User=pi|User=$PI_USER|g" "$EIDOS_DIR/deploy/llama-server.service"
 sed -i "s|/home/pi/models|$MODEL_DIR|g" "$EIDOS_DIR/deploy/llama-server.service"
 
 cp "$EIDOS_DIR/deploy/llama-server.service" /etc/systemd/system/
-cp "$EIDOS_DIR/deploy/kairos.service" /etc/systemd/system/
+cp "$EIDOS_DIR/deploy/eidos.service" /etc/systemd/system/
 cp "$EIDOS_DIR/deploy/dashboard.service" /etc/systemd/system/
 
 systemctl daemon-reload
-systemctl enable llama-server.service kairos.service dashboard.service
+systemctl enable llama-server.service eidos.service dashboard.service
 
 # ── 14. Reduce GPU memory (headless — no desktop needed) ────────────────────
 if ! grep -q "gpu_mem=" /boot/firmware/config.txt; then

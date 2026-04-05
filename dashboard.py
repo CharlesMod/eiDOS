@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Kairos dashboard — single-file HTTP server for monitoring via Tailscale.
+"""eiDOS dashboard — single-file HTTP server for monitoring via Tailscale.
 
 Serves:
   GET /          → HTML dashboard (auto-refreshing)
   GET /api/status → full JSON status blob
   GET /api/ping   → tiny health-check JSON (<500 bytes)
 
-All data is read-only from workspace files. Kairos is the sole writer.
+All data is read-only from workspace files. eiDOS is the sole writer.
 Stdlib only — no frameworks, no dependencies.
 """
 
@@ -158,7 +158,7 @@ def build_status(config: Config) -> dict:
     return {
         "heartbeat": heartbeat,
         "persona": {
-            "name": persona.get("name", "Kairos"),
+            "name": persona.get("name", "eiDOS"),
             "level": level,
             "xp": xp,
             "xp_next": ((level) ** 2) * 50,  # XP needed for next level
@@ -248,7 +248,7 @@ _HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kairos — {{NAME}}</title>
+<title>eiDOS — {{NAME}}</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -659,7 +659,7 @@ body::after {
 <div id="particles"></div>
 <div class="container">
     <div class="header">
-        <h1>⟨ KAIROS ⟩</h1>
+        <h1>⟨ eiDOS ⟩</h1>
         <div class="subtitle">autonomous agent — field station monitor</div>
     </div>
 
@@ -723,7 +723,7 @@ body::after {
         </div>
         <div class="chat-messages" id="chat-messages"></div>
         <div class="chat-input-row">
-            <textarea id="chat-input" placeholder="Send a message to Kairos (auto-pauses tick loop)..." rows="1"></textarea>
+            <textarea id="chat-input" placeholder="Send a message to eiDOS (auto-pauses tick loop)..." rows="1"></textarea>
             <button id="chat-send" onclick="sendChat()">Send ▸</button>
         </div>
     </div>
@@ -1034,7 +1034,7 @@ function update(data) {
 
     // Persona info
     document.getElementById('name-level').textContent =
-        (p.name || 'Kairos') + ' ✦ Lv.' + (p.level || 1) + ' ' + (cr.stage || '');
+        (p.name || 'eiDOS') + ' ✦ Lv.' + (p.level || 1) + ' ' + (cr.stage || '');
     document.getElementById('mood-display').textContent = p.mood || 'unknown';
 
     let xpPct = p.xp_next > 0 ? Math.min(100, (p.xp / p.xp_next) * 100) : 0;
@@ -1116,12 +1116,12 @@ async function loadChat() {
 function renderChat(messages) {
     let el = document.getElementById('chat-messages');
     if (!messages.length) {
-        el.innerHTML = '<div class="chat-empty">No messages yet. Send a message to guide Kairos.</div>';
+        el.innerHTML = '<div class="chat-empty">No messages yet. Send a message to guide eiDOS.</div>';
         return;
     }
     el.innerHTML = messages.map(m => {
         let dir = m.direction === 'outgoing' ? 'outgoing' : 'incoming';
-        let label = dir === 'outgoing' ? 'You \u2192' : '\u2190 Kairos';
+        let label = dir === 'outgoing' ? 'You \u2192' : '\u2190 eiDOS';
         let stCls = m.status === 'delivered' ? 'chat-status-delivered' : 'chat-status-pending';
         let stTxt = m.status === 'delivered' ? '\u2713 delivered' : '\u25cc pending';
         let ts = m.ts || '';
@@ -1200,7 +1200,7 @@ def _make_handler(config: Config):
 
         def do_GET(self):
             if self.path == "/":
-                html = _HTML.replace("{{NAME}}", "Kairos")
+                html = _HTML.replace("{{NAME}}", "eiDOS")
                 html = html.replace("{{INTERVAL_MS}}", str(config.tick_interval_s * 1000))
                 self._respond(200, "text/html; charset=utf-8", html)
 
@@ -1279,7 +1279,7 @@ def _make_handler(config: Config):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Kairos dashboard server")
+    parser = argparse.ArgumentParser(description="eiDOS dashboard server")
     parser.add_argument("--config", default="config.toml", help="Path to config file")
     parser.add_argument("--port", type=int, default=None, help="Override dashboard port")
     args = parser.parse_args()

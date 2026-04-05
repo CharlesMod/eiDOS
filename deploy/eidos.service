@@ -1,13 +1,13 @@
 [Unit]
-Description=Kairos autonomous LLM agent
+Description=eiDOS autonomous LLM agent
 After=network.target llama-server.service
 Requires=llama-server.service
 
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/kairos
-ExecStart=/usr/bin/python3 kairos.py --config config.toml
+WorkingDirectory=/home/pi/eidos
+ExecStart=/usr/bin/python3 eidos.py --config config.toml
 Restart=always
 RestartSec=30
 RuntimeMaxSec=86400

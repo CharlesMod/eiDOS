@@ -372,7 +372,7 @@ class TestBriefingModel(unittest.TestCase):
         system = messages[0]["content"]
         # Briefing prompt is shorter than legacy
         self.assertLess(len(system), 1000)
-        self.assertIn("Kairos", system)
+        self.assertIn("eiDOS", system)
         self.assertIn("memorize", system)
         self.assertIn("recall", system)
 

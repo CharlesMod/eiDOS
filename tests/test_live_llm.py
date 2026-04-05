@@ -34,7 +34,7 @@ def _make_config():
     """Load real config.toml so we hit the actual LM Studio server."""
     config = load_config("config.toml")
     # Use a temp workspace so logs don't pollute the real one
-    tmp = tempfile.mkdtemp(prefix="kairos_live_")
+    tmp = tempfile.mkdtemp(prefix="eidos_live_")
     config.workspace_dir = tmp
     os.makedirs(os.path.join(tmp, "interventions"), exist_ok=True)
     os.makedirs(os.path.join(tmp, "outputs"), exist_ok=True)
@@ -42,7 +42,7 @@ def _make_config():
     return config, tmp
 
 
-LIVE = os.environ.get("KAIROS_TEST_LIVE") == "1"
+LIVE = os.environ.get("EIDOS_TEST_LIVE") == "1"
 
 
 def _check_server(config):
@@ -92,7 +92,7 @@ class TestLiveLLM:
         )
 
     def test_tool_format_response(self):
-        """Model can produce Kairos tool-call format when instructed."""
+        """Model can produce eiDOS tool-call format when instructed."""
         system = SYSTEM_PROMPT.format(workspace="/tmp/test_workspace")
         messages = [
             {"role": "system", "content": system},
@@ -211,7 +211,7 @@ class TestLiveCompaction:
         # Observations with distinctive facts the model should retain
         append_observation(self.config, {
             "tick": 1, "tool": "bash", "args": {"cmd": "cat /etc/hostname"},
-            "success": True, "output": "raspberrypi-kairos",
+            "success": True, "output": "raspberrypi-eidos",
         })
         append_observation(self.config, {
             "tick": 2, "tool": "bash", "args": {"cmd": "df -h /"},
@@ -229,7 +229,7 @@ class TestLiveCompaction:
 
         # At least some key facts should survive compaction
         mem_lower = mem.lower()
-        has_hostname = "raspberrypi" in mem_lower or "kairos" in mem_lower
+        has_hostname = "raspberrypi" in mem_lower or "eidos" in mem_lower
         has_disk = "32g" in mem_lower or "22g" in mem_lower or "disk" in mem_lower
         has_ssh = "ssh" in mem_lower or "key" in mem_lower
         retained = sum([has_hostname, has_disk, has_ssh])
@@ -240,7 +240,7 @@ class TestLiveCompaction:
 
 
 class TestLiveToolCompliance:
-    """Verify the real model produces valid tool calls from Kairos prompts."""
+    """Verify the real model produces valid tool calls from eiDOS prompts."""
 
     @pytest.fixture(autouse=True)
     def setup(self):
@@ -630,7 +630,7 @@ class TestLiveRecovery:
     def test_recovers_from_parse_error_feedback(self):
         """After a parse failure with corrective feedback, model self-corrects.
 
-        Simulates the exact feedback kairos.py now generates on parse failures,
+        Simulates the exact feedback eidos.py now generates on parse failures,
         then checks the model produces a valid tool call on the next tick.
         """
         # Tick 1: normal success
@@ -714,7 +714,7 @@ class TestLiveRecovery:
             "tick": 0, "tool": "system",
             "success": True,
             "output": (
-                "Kairos recovered from crash. Resuming at tick 5. "
+                "eiDOS recovered from crash. Resuming at tick 5. "
                 "State before crash: 0 consecutive LLM failures, "
                 "0 reasoning exhaustions, max_tokens was 1024. "
                 "Review recent observations — the last action may not have completed."
@@ -877,7 +877,7 @@ class TestLiveRecovery:
     def test_recovers_from_parse_error_feedback(self):
         """After a parse failure with corrective feedback, model self-corrects.
 
-        Simulates the exact feedback kairos.py now generates on parse failures,
+        Simulates the exact feedback eidos.py now generates on parse failures,
         then checks the model produces a valid tool call on the next tick.
         """
         # Tick 1: normal success
@@ -972,7 +972,7 @@ class TestLiveRecovery:
             "tick": 0, "tool": "system",
             "success": True,
             "output": (
-                "Kairos recovered from crash. Resuming at tick 5. "
+                "eiDOS recovered from crash. Resuming at tick 5. "
                 "State before crash: 0 consecutive LLM failures, "
                 "0 reasoning exhaustions, max_tokens was 1024. "
                 "Review recent observations — the last action may not have completed."

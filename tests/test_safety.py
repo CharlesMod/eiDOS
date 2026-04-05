@@ -28,8 +28,8 @@ class TestCommandBlocking(unittest.TestCase):
     def test_reboot(self):
         self.assertIsNotNone(is_command_blocked("reboot", self.patterns))
 
-    def test_kill_kairos(self):
-        self.assertIsNotNone(is_command_blocked("kill kairos_process", self.patterns))
+    def test_kill_eidos(self):
+        self.assertIsNotNone(is_command_blocked("kill eidos_process", self.patterns))
 
     def test_safe_commands(self):
         safe = ["ls -la", "echo hello", "cat /etc/hostname", "pip install requests", "pwd"]
@@ -42,8 +42,8 @@ class TestCommandBlocking(unittest.TestCase):
     def test_dd_to_device(self):
         self.assertIsNotNone(is_command_blocked("dd if=/dev/zero of=/dev/sda", self.patterns))
 
-    def test_systemctl_stop_kairos(self):
-        self.assertIsNotNone(is_command_blocked("systemctl stop kairos", self.patterns))
+    def test_systemctl_stop_eidos(self):
+        self.assertIsNotNone(is_command_blocked("systemctl stop eidos", self.patterns))
 
     def test_systemctl_start_ok(self):
         self.assertIsNone(is_command_blocked("systemctl start some_service", self.patterns))

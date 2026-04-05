@@ -41,9 +41,9 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: long-running simulation tests (deselect with -m 'not slow')")
     config.addinivalue_line("markers", "live: tests that call real LM Studio endpoint (deselect with -m 'not live')")
     if config.getoption("--live", default=False):
-        os.environ["KAIROS_TEST_LIVE"] = "1"
+        os.environ["EIDOS_TEST_LIVE"] = "1"
         # Show LLM token usage in terminal
-        llm_logger = logging.getLogger("kairos.llm")
+        llm_logger = logging.getLogger("eidos.llm")
         llm_logger.setLevel(logging.INFO)
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter("  %(name)s %(message)s"))
@@ -51,7 +51,7 @@ def pytest_configure(config):
 
 
 def pytest_unconfigure(config):
-    os.environ.pop("KAIROS_TEST_LIVE", None)
+    os.environ.pop("EIDOS_TEST_LIVE", None)
 
 
 def pytest_sessionstart(session):

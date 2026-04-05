@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kairos Field Exam — 10 graded tasks for pre-deployment validation.
+"""eiDOS Field Exam — 10 graded tasks for pre-deployment validation.
 
 Runs the LLM through 10 progressively harder sandbox scenarios that mirror
 real field work on a Raspberry Pi.  Each task is scored 0-10 with partial
@@ -588,7 +588,7 @@ def score_t10(config, stats):
 
 TASKS = [
     Task(1, "hello_world",
-         "Create a file called hello.txt containing the text 'Hello from Kairos!'. "
+         "Create a file called hello.txt containing the text 'Hello from eiDOS!'. "
          "Then signal goal_complete.",
          max_ticks=6,
          seed_files={},
@@ -780,7 +780,7 @@ _T10_POISON_MEMORY = (
 def run_task(task, llm_url, llm_model, timeout, verbose=True):
     """Run a single exam task. Returns (score, max_score, details, stats)."""
     run_id = f"exam_t{task.num}_{task.name}"
-    tmp_dir = tempfile.mkdtemp(prefix=f"kairos_exam_t{task.num}_")
+    tmp_dir = tempfile.mkdtemp(prefix=f"eidos_exam_t{task.num}_")
     config = _make_config(llm_url, llm_model, tmp_dir, timeout)
 
     try:
@@ -829,7 +829,7 @@ def letter_grade(pct):
 def print_report_card(results):
     """Print the final report card."""
     print(f"\n{'═'*72}")
-    print(f"{_BOLD}  KAIROS FIELD EXAM — REPORT CARD{_RESET}")
+    print(f"{_BOLD}  EIDOS FIELD EXAM — REPORT CARD{_RESET}")
     print(f"{'═'*72}")
 
     total_score = 0
@@ -880,7 +880,7 @@ def print_report_card(results):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Kairos field exam — 10 graded tasks",
+        description="eiDOS field exam — 10 graded tasks",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="\n".join(
             f"  T{t.num:>2}: {t.desc}" for t in TASKS
@@ -922,7 +922,7 @@ def main():
 
     selected = [t for t in TASKS if t.num in task_nums]
 
-    print(f"{_BOLD}Kairos Field Exam{_RESET}")
+    print(f"{_BOLD}eiDOS Field Exam{_RESET}")
     print(f"Endpoint: {url}")
     print(f"Model:    {args.model}")
     print(f"Tasks:    {len(selected)} of 10")

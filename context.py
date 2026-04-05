@@ -20,7 +20,7 @@ from env_snapshot import generate as generate_env_snapshot
 from env_snapshot import generate_alerts as generate_env_alerts
 from prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_BRIEFING, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED
 
-logger = logging.getLogger("kairos.context")
+logger = logging.getLogger("eidos.context")
 
 
 # ---------------------------------------------------------------------------

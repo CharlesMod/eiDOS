@@ -2,7 +2,7 @@
 
 heartbeat.json — atomic overwrite every tick. Single point-in-time snapshot.
 metrics.jsonl — append-only time series. One line per tick.
-Both are read-only by the dashboard; Kairos is the sole writer.
+Both are read-only by the dashboard; eiDOS is the sole writer.
 """
 
 import json

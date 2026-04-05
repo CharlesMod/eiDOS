@@ -31,21 +31,21 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(config.tick_interval_s, 300)
 
     def test_env_var_override(self):
-        os.environ["KAIROS_LLM_URL"] = "http://test:9999"
+        os.environ["EIDOS_LLM_URL"] = "http://test:9999"
         try:
             config = load_config("/nonexistent/config.toml")
             self.assertEqual(config.llm_url, "http://test:9999")
         finally:
-            del os.environ["KAIROS_LLM_URL"]
+            del os.environ["EIDOS_LLM_URL"]
 
     def test_mock_mode_env(self):
-        os.environ["KAIROS_MOCK"] = "1"
+        os.environ["EIDOS_MOCK"] = "1"
         try:
             config = load_config("/nonexistent/config.toml")
             self.assertTrue(config.mock_mode)
             self.assertEqual(config.tick_interval_s, 5)
         finally:
-            del os.environ["KAIROS_MOCK"]
+            del os.environ["EIDOS_MOCK"]
 
     def test_workspace_paths(self):
         config = Config()

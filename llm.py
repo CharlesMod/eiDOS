@@ -8,7 +8,7 @@ import urllib.error
 
 from config import Config
 
-logger = logging.getLogger("kairos.llm")
+logger = logging.getLogger("eidos.llm")
 
 
 def _log_interaction(config: Config, messages, payload, response_data, content, elapsed_s,

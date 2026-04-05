@@ -1,4 +1,4 @@
-# Kairos Pi Deployment Guide
+# eiDOS Pi Deployment Guide
 
 ## Architecture
 
@@ -6,7 +6,7 @@
 ┌──────────────────────────────────┐
 │  Raspberry Pi 4 (field node)     │
 │                                  │
-│  llama-server  ←  kairos.py      │
+│  llama-server  ←  eidos.py      │
 │  (port 8080)     (tick loop)     │
 │                                  │
 │  dashboard.py                    │
@@ -36,15 +36,15 @@ All monitoring is pull-based via Tailscale.
 
 ## Setup
 
-### 1. Copy Kairos to the Pi
+### 1. Copy eiDOS to the Pi
 
 ```bash
-scp -r . pi@<tailscale-ip>:/home/pi/kairos/
+scp -r . pi@<tailscale-ip>:/home/pi/eidos/
 ```
 
 ### 2. Production config.toml
 
-Edit `/home/pi/kairos/config.toml`:
+Edit `/home/pi/eidos/config.toml`:
 
 ```toml
 [llm]
@@ -71,21 +71,21 @@ port = 8099
 ### 3. Install systemd services
 
 ```bash
-sudo cp deploy/kairos.service /etc/systemd/system/
+sudo cp deploy/eidos.service /etc/systemd/system/
 sudo cp deploy/llama-server.service /etc/systemd/system/
 sudo cp deploy/dashboard.service /etc/systemd/system/
 
 # Edit paths if needed
 sudo systemctl daemon-reload
-sudo systemctl enable llama-server kairos dashboard
-sudo systemctl start llama-server kairos dashboard
+sudo systemctl enable llama-server eidos dashboard
+sudo systemctl start llama-server eidos dashboard
 ```
 
 ### 4. Verify
 
 ```bash
 # Check all services
-systemctl status llama-server kairos dashboard
+systemctl status llama-server eidos dashboard
 
 # Test dashboard
 curl http://localhost:8099/api/ping
@@ -123,22 +123,22 @@ watch -n 300 ./deploy/remote_poller.sh
 
 ```bash
 ssh pi@<tailscale-ip>
-echo "Monitor disk health and report SMART data every hour" > /home/pi/kairos/workspace/goal.md
+echo "Monitor disk health and report SMART data every hour" > /home/pi/eidos/workspace/goal.md
 ```
 
-Kairos will pick it up on the next tick.
+eiDOS will pick it up on the next tick.
 
 ## Logs & Diagnostics
 
 ```bash
-# Kairos logs
-journalctl -u kairos -f
+# eiDOS logs
+journalctl -u eidos -f
 
 # LLM server logs
 journalctl -u llama-server -f
 
 # Workspace files
-ls /home/pi/kairos/workspace/
+ls /home/pi/eidos/workspace/
 # heartbeat.json  — latest tick snapshot
 # metrics.jsonl   — time series
 # observations.jsonl — activity log
@@ -149,5 +149,5 @@ ls /home/pi/kairos/workspace/
 
 ## Daily Restart
 
-The systemd unit has `RuntimeMaxSec=86400` — Kairos restarts every 24 hours.  
+The systemd unit has `RuntimeMaxSec=86400` — eiDOS restarts every 24 hours.  
 WAL-based recovery makes this seamless. No state is lost.

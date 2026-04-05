@@ -1,5 +1,5 @@
 # eiDOS — Production configuration for Raspberry Pi deployment
-# This file is copied to /home/pi/kairos/config.toml by the setup script.
+# This file is copied to /home/pi/eidos/config.toml by the setup script.
 
 [llm]
 url = "http://127.0.0.1:8080"
@@ -39,9 +39,9 @@ protected_patterns = [
     "rm\\s+.*-r",
     "find\\s+.*-exec\\s+rm",
     "find\\s+.*-delete",
-    "systemctl\\s+(stop|disable|kill)\\s+.*kairos",
-    "pkill.*kairos",
-    "kill.*kairos",
+    "systemctl\\s+(stop|disable|kill)\\s+.*eidos",
+    "pkill.*eidos",
+    "kill.*eidos",
     "shutdown",
     "reboot",
     "halt",

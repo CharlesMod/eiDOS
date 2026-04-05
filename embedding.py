@@ -18,7 +18,7 @@ import numpy as np
 
 from config import Config
 
-logger = logging.getLogger("kairos.embedding")
+logger = logging.getLogger("eidos.embedding")
 
 # ---------------------------------------------------------------------------
 # Tokeniser helpers (basic whitespace + subword approximation)

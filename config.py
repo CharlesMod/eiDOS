@@ -1,4 +1,4 @@
-"""Configuration loading for Kairos. TOML config + env var overrides."""
+"""Configuration loading for eiDOS. TOML config + env var overrides."""
 
 import dataclasses
 import os
@@ -52,9 +52,9 @@ class Config:
         r"rm\s+.*-r",            # rm -r, rm -rf, rm -ri, etc.
         r"find\s+.*-exec\s+rm",  # find ... -exec rm
         r"find\s+.*-delete",     # find ... -delete
-        r"systemctl\s+(stop|disable|kill)\s+.*kairos",
-        r"pkill.*kairos",
-        r"kill.*kairos",
+        r"systemctl\s+(stop|disable|kill)\s+.*eidos",
+        r"pkill.*eidos",
+        r"kill.*eidos",
         r"shutdown",
         r"reboot",
         r"halt",
@@ -279,9 +279,9 @@ def load_config(path: str = "config.toml") -> Config:
         config.workspace_dir = paths.get("workspace", config.workspace_dir)
 
     # Env var overrides (highest precedence)
-    if url := os.environ.get("KAIROS_LLM_URL"):
+    if url := os.environ.get("EIDOS_LLM_URL"):
         config.llm_url = url
-    if os.environ.get("KAIROS_MOCK") == "1":
+    if os.environ.get("EIDOS_MOCK") == "1":
         config.mock_mode = True
         config.tick_interval_s = 5
 

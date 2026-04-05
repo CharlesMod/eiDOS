@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
 from config import Config
-from kairos import write_wal, read_wal, clear_wal, recover, run_loop, attempt_llm_restart
+from eidos import write_wal, read_wal, clear_wal, recover, run_loop, attempt_llm_restart
 from memory import (
     write_memory,
     read_memory,
@@ -51,7 +51,7 @@ def _make_config(tmp):
 
 
 class TestServiceRestartMidTick(unittest.TestCase):
-    """Simulate systemd stopping kairos while a tick is in progress.
+    """Simulate systemd stopping eidos while a tick is in progress.
 
     The WAL should allow clean resumption with no duplicated observations
     and no lost state.
@@ -298,12 +298,12 @@ class TestLLMCrashMidRequest(unittest.TestCase):
         self.config.tick_interval_s = 0   # no sleeping in tests
         self.config.persona_enabled = False
         # Reset the shutdown flag before each test
-        import kairos as _k
+        import eidos as _k
         _k._shutdown_requested = False
 
     def tearDown(self):
         import shutil
-        import kairos as _k
+        import eidos as _k
         _k._shutdown_requested = False
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -318,12 +318,12 @@ class TestLLMCrashMidRequest(unittest.TestCase):
 
         def fail_and_shutdown(*a, **kw):
             call_count[0] += 1
-            import kairos
-            kairos._shutdown_requested = True
+            import eidos
+            eidos._shutdown_requested = True
             raise LLMError("Connection refused")
 
-        with patch("kairos.complete", side_effect=fail_and_shutdown):
-            with patch("kairos.time.sleep"):
+        with patch("eidos.complete", side_effect=fail_and_shutdown):
+            with patch("eidos.time.sleep"):
                 run_loop(self.config, persona=None)
 
         # Should have logged the failure as an observation
@@ -344,12 +344,12 @@ class TestLLMCrashMidRequest(unittest.TestCase):
         def counting_side_effect(*a, **kw):
             tick_count[0] += 1
             if tick_count[0] >= 2:
-                import kairos
-                kairos._shutdown_requested = True
+                import eidos
+                eidos._shutdown_requested = True
             raise LLMError("Request timed out after 300s")
 
-        with patch("kairos.complete", side_effect=counting_side_effect):
-            with patch("kairos.time.sleep"):
+        with patch("eidos.complete", side_effect=counting_side_effect):
+            with patch("eidos.time.sleep"):
                 run_loop(self.config, persona=None)
 
         # Agent didn't hang — it ran at least one tick
@@ -369,13 +369,13 @@ class TestLLMCrashMidRequest(unittest.TestCase):
         def fail_then_shutdown(*a, **kw):
             failure_count[0] += 1
             if failure_count[0] > 4:
-                import kairos
-                kairos._shutdown_requested = True
+                import eidos
+                eidos._shutdown_requested = True
             raise LLMError("Connection refused")
 
-        with patch("kairos.complete", side_effect=fail_then_shutdown):
-            with patch("kairos.time.sleep"):
-                with patch("kairos.attempt_llm_restart", return_value=True) as mock_restart:
+        with patch("eidos.complete", side_effect=fail_then_shutdown):
+            with patch("eidos.time.sleep"):
+                with patch("eidos.attempt_llm_restart", return_value=True) as mock_restart:
                     run_loop(self.config, persona=None)
 
         # Should have attempted restart after 3 consecutive failures
@@ -407,13 +407,13 @@ class TestLLMCrashMidRequest(unittest.TestCase):
             if call_count[0] == 2:
                 self.assertGreater(max_tok, 1024,
                                    "max_tokens was not increased after reasoning exhaustion")
-                import kairos
-                kairos._shutdown_requested = True
+                import eidos
+                eidos._shutdown_requested = True
                 raise LLMError("stopping test")
             raise LLMError("stopping")
 
-        with patch("kairos.complete", side_effect=exhaust_then_shutdown):
-            with patch("kairos.time.sleep"):
+        with patch("eidos.complete", side_effect=exhaust_then_shutdown):
+            with patch("eidos.time.sleep"):
                 run_loop(self.config, persona=None)
 
         self.assertGreaterEqual(call_count[0], 2)
@@ -438,14 +438,14 @@ class TestLLMCrashMidRequest(unittest.TestCase):
             wal = read_wal(self.config)
             if wal:
                 wal_snapshots.append(wal)
-            import kairos
-            kairos._shutdown_requested = True
+            import eidos
+            eidos._shutdown_requested = True
 
         def fail_always(*a, **kw):
             raise LLMError("server gone")
 
-        with patch("kairos.complete", side_effect=fail_always):
-            with patch("kairos.time.sleep", side_effect=capture_wal_then_shutdown):
+        with patch("eidos.complete", side_effect=fail_always):
+            with patch("eidos.time.sleep", side_effect=capture_wal_then_shutdown):
                 run_loop(self.config, persona=None)
 
         # WAL was written during the error path (captured before shutdown cleared it)
@@ -469,12 +469,12 @@ class TestColdStart(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.config = _make_config(self.tmp)
-        import kairos as _k
+        import eidos as _k
         _k._shutdown_requested = False
 
     def tearDown(self):
         import shutil
-        import kairos as _k
+        import eidos as _k
         _k._shutdown_requested = False
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -499,7 +499,7 @@ class TestColdStart(unittest.TestCase):
         write_memory(self.config, "initial")
 
         # No goal.md — mock mode exits immediately
-        with patch("kairos.time.sleep"):
+        with patch("eidos.time.sleep"):
             run_loop(self.config, persona=None)
 
         # Should exit cleanly (no exceptions)
@@ -540,12 +540,12 @@ class TestColdStart(unittest.TestCase):
 
         def mock_complete(messages, cfg, max_tokens=None):
             tick_count[0] += 1
-            import kairos
-            kairos._shutdown_requested = True
+            import eidos
+            eidos._shutdown_requested = True
             return '<tool>bash</tool>\n<args>{"cmd": "echo 42"}</args>'
 
-        with patch("kairos.complete", side_effect=mock_complete):
-            with patch("kairos.time.sleep"):
+        with patch("eidos.complete", side_effect=mock_complete):
+            with patch("eidos.time.sleep"):
                 run_loop(self.config, persona=None)
 
         self.assertEqual(tick_count[0], 1)
@@ -576,12 +576,12 @@ class TestColdStart(unittest.TestCase):
 
         # 4. Run one tick
         def mock_complete(messages, cfg, max_tokens=None):
-            import kairos
-            kairos._shutdown_requested = True
+            import eidos
+            eidos._shutdown_requested = True
             return '<tool>bash</tool>\n<args>{"cmd": "echo hello"}</args>'
 
-        with patch("kairos.complete", side_effect=mock_complete):
-            with patch("kairos.time.sleep"):
+        with patch("eidos.complete", side_effect=mock_complete):
+            with patch("eidos.time.sleep"):
                 run_loop(self.config, persona=persona, wal=wal)
 
         # 5. Clean shutdown clears WAL (correct behavior)

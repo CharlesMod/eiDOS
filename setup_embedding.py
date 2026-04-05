@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download and set up the all-MiniLM-L6-v2 ONNX model for Kairos embedding.
+"""Download and set up the all-MiniLM-L6-v2 ONNX model for eiDOS embedding.
 
 Usage:
     python3 setup_embedding.py [--model-dir models/all-MiniLM-L6-v2]
@@ -46,7 +46,7 @@ def download_file(url: str, dest: Path, min_bytes: int = 0) -> None:
     print(f"  → {dest}")
 
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Kairos-Setup/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "eiDOS-Setup/1.0"})
         with urllib.request.urlopen(req) as resp:
             total = int(resp.headers.get("Content-Length", 0))
             downloaded = 0
@@ -78,7 +78,7 @@ def download_file(url: str, dest: Path, min_bytes: int = 0) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Set up MiniLM ONNX model for Kairos")
+    parser = argparse.ArgumentParser(description="Set up MiniLM ONNX model for eiDOS")
     parser.add_argument(
         "--model-dir",
         default="models/all-MiniLM-L6-v2",

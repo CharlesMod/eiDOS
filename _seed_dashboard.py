@@ -31,7 +31,7 @@ ws.mkdir(exist_ok=True)
     "# Working Memory\n"
     "## Progress\n"
     "- DHT22 sensor confirmed working on GPIO4. Reads take ~2s.\n"
-    "- adafruit-circuitpython-dht installed in venv at /home/pi/kairos-env\n"
+    "- adafruit-circuitpython-dht installed in venv at /home/pi/eidos-env\n"
     "- read_dht22.py written and tested -- outputs temp_c, humidity_pct to stdout\n"
     "\n## Next Steps\n"
     "- Need to add CSV writer to read_dht22.py\n"
@@ -65,7 +65,7 @@ hb = {
 
 # Persona
 persona = {
-    "name": "Kairos",
+    "name": "eiDOS",
     "born": "2026-04-01T08:00:00Z",
     "xp": 520,
     "level": 3,

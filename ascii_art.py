@@ -1,4 +1,4 @@
-"""ASCII creature sprites for the Kairos buddy dashboard.
+"""ASCII creature sprites for the eiDOS buddy dashboard.
 
 Sprites are organized by evolution stage (derived from level) and mood.
 Each sprite is a multiline string. The dashboard renders these in a <pre> block

@@ -86,10 +86,10 @@ ssh pi@eidos-XXXXXX    # where XXXXXX is the last 6 hex of the Pi serial
 sudo journalctl -u eidos-first-boot --no-pager
 
 # Check services
-systemctl status llama-server kairos dashboard
+systemctl status llama-server eidos dashboard
 
 # Check the creature identity
-cat ~/kairos/workspace/persona.json | python3 -m json.tool
+cat ~/eidos/workspace/persona.json | python3 -m json.tool
 
 # Check LLM health
 curl http://127.0.0.1:8080/health
@@ -105,10 +105,10 @@ curl -s http://127.0.0.1:8099 | head -5
 ├── .eidos-setup-done          # marker file (prevents re-run)
 ├── models/
 │   └── qwen3.5-4b-q4.gguf    # the GGUF model (~2.5GB)
-└── kairos/                    # eiDOS application
+└── eidos/                    # eiDOS application
     ├── .venv/                 # Python virtual environment
     ├── config.toml            # production config
-    ├── kairos.py              # main entry point
+    ├── eidos.py              # main entry point
     ├── workspace/
     │   ├── persona.json       # unique creature identity
     │   ├── goal.md            # current goal
@@ -116,7 +116,7 @@ curl -s http://127.0.0.1:8099 | head -5
     │   ├── outputs/
     │   └── snapshots/
     └── deploy/
-        ├── kairos.service
+        ├── eidos.service
         ├── llama-server.service
         └── dashboard.service
 ```
@@ -150,7 +150,7 @@ sudo bash /boot/firmware/eidos-setup.sh
 ```bash
 # Check each service
 sudo journalctl -u llama-server --no-pager -n 50
-sudo journalctl -u kairos --no-pager -n 50
+sudo journalctl -u eidos --no-pager -n 50
 sudo journalctl -u dashboard --no-pager -n 50
 ```
 

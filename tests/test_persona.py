@@ -305,7 +305,7 @@ class TestPersistence:
             p = load_persona(ws)
             assert p["xp"] == 0
             assert p["level"] == 1
-            assert p["name"] == "Kairos"
+            assert p["name"] == "eiDOS"
 
     def test_load_merges_new_fields(self):
         """If persona.json is from an older version, new fields get defaults."""
@@ -313,7 +313,7 @@ class TestPersistence:
             ws = Path(td)
             # Write a minimal persona
             with open(ws / "persona.json", "w") as f:
-                json.dump({"name": "Kairos", "xp": 99}, f)
+                json.dump({"name": "eiDOS", "xp": 99}, f)
             p = load_persona(ws)
             assert p["xp"] == 99
             assert p["total_ticks"] == 0  # new field gets default
@@ -344,7 +344,7 @@ class TestFormatting:
         p = _default_persona()
         p["level"] = 3
         p["mood"] = "focused"
-        assert format_prefix(p) == "[kairos ✦ Lv.3 focused]"
+        assert format_prefix(p) == "[eidos ✦ Lv.3 focused]"
 
     def test_format_prefix_default(self):
         p = _default_persona()

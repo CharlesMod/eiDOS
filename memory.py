@@ -55,7 +55,7 @@ def write_plan(config: Config, content: str) -> None:
         raise
 
 
-# --- Aliases for backward compatibility (used by kairos.py, compaction.py, tools.py) ---
+# --- Aliases for backward compatibility (used by eidos.py, compaction.py, tools.py) ---
 
 def read_memory(config: Config) -> str:
     """Read memory.md. Returns empty string if missing.

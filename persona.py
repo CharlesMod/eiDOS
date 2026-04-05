@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 def _default_persona() -> dict:
     """Return a fresh persona dict."""
     return {
-        "name": "Kairos",
+        "name": "eiDOS",
         "born": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "xp": 0,
         "level": 1,
@@ -224,10 +224,10 @@ def check_titles(persona: dict) -> List[str]:
 # --- Output formatting ---
 
 def format_prefix(persona: dict) -> str:
-    """Return the mood-aware prefix: [kairos ✦ Lv.3 focused]"""
+    """Return the mood-aware prefix: [eidos ✦ Lv.3 focused]"""
     level = persona.get("level", 1)
     mood = persona.get("mood", "neutral")
-    return f"[kairos ✦ Lv.{level} {mood}]"
+    return f"[eidos ✦ Lv.{level} {mood}]"
 
 
 def format_status_line(persona: dict) -> str:

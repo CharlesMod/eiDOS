@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kairos Validation Script.
+"""eiDOS Validation Script.
 
 Exercises every harness subsystem against a live LLM endpoint.
 Usage: python validate.py --url http://localhost:1234/v1
@@ -134,11 +134,11 @@ def stage_tool_execution(config: Config) -> ValidationResult:
     start = time.monotonic()
 
     # Use a known-good tool call
-    call = ToolCall(tool="bash", args={"cmd": "echo 'kairos_validate_test'"}, raw="")
+    call = ToolCall(tool="bash", args={"cmd": "echo 'eidos_validate_test'"}, raw="")
     result = execute_tool(call, config)
     r.duration = time.monotonic() - start
 
-    if result.success and "kairos_validate_test" in result.output:
+    if result.success and "eidos_validate_test" in result.output:
         # Also verify observation was logged
         append_observation(config, {
             "tick": 0,
@@ -165,7 +165,7 @@ def stage_multi_turn(config: Config) -> ValidationResult:
 
     # Set up goal
     config.goal_path.write_text(
-        "Create a file /tmp/kairos_validate.txt containing the text 'kairos_validated_ok', "
+        "Create a file /tmp/eidos_validate.txt containing the text 'eidos_validated_ok', "
         "then read it back to confirm it was written correctly."
     )
     write_memory(config, "# Working Memory\nFresh start. Goal: create and verify a test file.")
@@ -210,10 +210,10 @@ def stage_multi_turn(config: Config) -> ValidationResult:
                 break
 
             # Check if file exists with correct content
-            test_file = Path("/tmp/kairos_validate.txt")
+            test_file = Path("/tmp/eidos_validate.txt")
             if test_file.exists():
                 content = test_file.read_text().strip()
-                if "kairos_validated_ok" in content:
+                if "eidos_validated_ok" in content:
                     # Model did the write, may not have read back yet — that's fine
                     if tick >= 2:
                         break
@@ -221,8 +221,8 @@ def stage_multi_turn(config: Config) -> ValidationResult:
         r.duration = time.monotonic() - start
 
         # Verify result
-        test_file = Path("/tmp/kairos_validate.txt")
-        if test_file.exists() and "kairos_validated_ok" in test_file.read_text():
+        test_file = Path("/tmp/eidos_validate.txt")
+        if test_file.exists() and "eidos_validated_ok" in test_file.read_text():
             r.passed = True
             r.details["ticks"] = ticks_run
         else:
@@ -294,7 +294,7 @@ def stage_safety(config: Config) -> ValidationResult:
     dangerous_commands = [
         "rm -rf /",
         "shutdown -h now",
-        "kill kairos",
+        "kill eidos",
         "reboot",
         "mkfs.ext4 /dev/sda1",
     ]
@@ -444,7 +444,7 @@ def stage_cleanup(config: Config) -> ValidationResult:
 
     cleaned = []
     # Remove test file
-    test_file = Path("/tmp/kairos_validate.txt")
+    test_file = Path("/tmp/eidos_validate.txt")
     if test_file.exists():
         test_file.unlink()
         cleaned.append(str(test_file))
@@ -458,7 +458,7 @@ def stage_cleanup(config: Config) -> ValidationResult:
 def run_validation(llm_url: str, llm_model: str):
     """Run all validation stages sequentially."""
     # Create temporary workspace
-    tmp_dir = tempfile.mkdtemp(prefix="kairos_validate_")
+    tmp_dir = tempfile.mkdtemp(prefix="eidos_validate_")
     workspace_dir = os.path.join(tmp_dir, "workspace")
     os.makedirs(workspace_dir)
     os.makedirs(os.path.join(workspace_dir, "interventions"))
@@ -468,7 +468,7 @@ def run_validation(llm_url: str, llm_model: str):
     config = make_test_config(llm_url, workspace_dir, llm_model)
 
     # Ensure model is loaded before validation
-    print(f"\nKairos Validation — {llm_url}")
+    print(f"\neiDOS Validation — {llm_url}")
     print(f"Model: {llm_model}")
     print(f"Checking model availability...", end="", flush=True)
     try:
@@ -530,7 +530,7 @@ def run_validation(llm_url: str, llm_model: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Validate Kairos harness against a live LLM endpoint"
+        description="Validate eiDOS harness against a live LLM endpoint"
     )
     parser.add_argument(
         "--url",

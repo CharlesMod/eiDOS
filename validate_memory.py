@@ -71,7 +71,7 @@ class Result:
 
 def _make_config(llm_url, llm_model):
     """Create a config with temp workspace and briefing model enabled."""
-    tmp = tempfile.mkdtemp(prefix="kairos_mem_val_")
+    tmp = tempfile.mkdtemp(prefix="eidos_mem_val_")
     ws = os.path.join(tmp, "workspace")
     os.makedirs(ws)
     for d in ("interventions", "outputs", "snapshots"):
@@ -105,7 +105,7 @@ def _check_server(config):
     import urllib.request, urllib.error
     url = config.llm_url.rstrip("/") + "/v1/models"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Kairos-MemVal/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "eiDOS-MemVal/1.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
             models = [m.get("id", "?") for m in data.get("data", [])]
@@ -797,7 +797,7 @@ def run_validation(llm_url, llm_model):
         print(f"\033[31mERROR: Cannot reach LLM at {llm_url}\033[0m")
         sys.exit(1)
 
-    print(f"\nKairos Memory System Validation")
+    print(f"\neiDOS Memory System Validation")
     print(f"  Endpoint: {llm_url}")
     print(f"  Model:    {llm_model}")
     print(f"  Available: {', '.join(models[:3])}")
@@ -844,7 +844,7 @@ def run_validation(llm_url, llm_model):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Validate Kairos memory system (Phases 1-5) against a live LLM"
+        description="Validate eiDOS memory system (Phases 1-5) against a live LLM"
     )
     parser.add_argument(
         "--url", required=True,
