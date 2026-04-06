@@ -55,6 +55,34 @@ def write_plan(config: Config, content: str) -> None:
         raise
 
 
+def read_subgoals(config: Config) -> str:
+    """Read subgoals.md. Returns empty string if missing."""
+    try:
+        return config.subgoals_path.read_text().strip()
+    except FileNotFoundError:
+        return ""
+
+
+def write_subgoals(config: Config, content: str) -> None:
+    """Atomically write subgoals.md (temp file + rename)."""
+    config.workspace.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(config.workspace),
+        prefix=".subgoals_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.rename(tmp_path, str(config.subgoals_path))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 # --- Aliases for backward compatibility (used by eidos.py, compaction.py, tools.py) ---
 
 def read_memory(config: Config) -> str:

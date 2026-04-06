@@ -13,14 +13,35 @@ so we can tune limits based on real usage without blowing the context window.
 import json
 import logging
 import time
+from pathlib import Path
 
 from config import Config
-from memory import read_goal, read_memory, read_plan, read_recent_observations, read_interventions
+from memory import read_goal, read_memory, read_plan, read_subgoals, read_recent_observations, read_interventions
 from env_snapshot import generate as generate_env_snapshot
 from env_snapshot import generate_alerts as generate_env_alerts
 from prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_BRIEFING, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED
 
 logger = logging.getLogger("eidos.context")
+
+
+# ---------------------------------------------------------------------------
+# Chat reply reader
+# ---------------------------------------------------------------------------
+
+def _read_recent_replies(config: Config, n: int = 3) -> list:
+    """Read the last *n* entries from chat_replies.jsonl."""
+    path = config.workspace / "chat_replies.jsonl"
+    try:
+        lines = path.read_text().strip().splitlines()
+        result = []
+        for line in lines[-n:]:
+            try:
+                result.append(json.loads(line))
+            except (json.JSONDecodeError, ValueError):
+                continue
+        return result
+    except (FileNotFoundError, OSError):
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +311,14 @@ def _assemble_legacy(
     else:
         sections.append("## Goal\n(No goal set. Waiting for goal.md to be created.)")
 
+    # Subgoals
+    subgoals = read_subgoals(config)
+    if subgoals:
+        if len(subgoals) > config.context_subgoals_max_chars:
+            _log_overrun(config, tick_number, "subgoals", len(subgoals), config.context_subgoals_max_chars)
+            subgoals = _truncate(subgoals, config.context_subgoals_max_chars, "subgoals")
+        sections.append(f"## Subgoals\n{subgoals}")
+
     # 3. Memory — budget-capped
     memory = read_memory(config)
     mem_len = len(memory) if memory else 0
@@ -309,16 +338,22 @@ def _assemble_legacy(
 
     # 5. Pending interventions — budget-capped
     interventions = read_interventions(config)
+    recent_replies = _read_recent_replies(config, n=3)
+    chat_parts = []
+    if recent_replies:
+        for r in recent_replies:
+            chat_parts.append(f"[your reply @ {r.get('ts', '?')}]\n{r.get('text', '')}")
     if interventions:
-        intervention_text = "\n\n".join(
-            f"[{i['filename']}]\n{i['content']}" for i in interventions
-        )
+        for i in interventions:
+            chat_parts.append(f"[operator @ {i['filename']}]\n{i['content']}")
+    if chat_parts:
+        intervention_text = "\n\n".join(chat_parts)
         if len(intervention_text) > config.context_interventions_max_chars:
             _log_overrun(config, tick_number, "interventions",
                          len(intervention_text), config.context_interventions_max_chars)
             intervention_text = _truncate(intervention_text,
                                           config.context_interventions_max_chars, "interventions")
-        sections.append(f"## Interventions (from supervisor)\n{intervention_text}")
+        sections.append(f"## Chat with supervisor\n{intervention_text}")
 
     # 6. Recent observations — adaptive budget
     combined_budget = config.context_memory_max_chars + config.context_obs_max_chars
@@ -399,6 +434,14 @@ def _assemble_briefing(
             plan = _truncate(plan, config.context_plan_max_chars, "plan")
         sections.append(f"## Plan\n{plan}")
 
+    # Subgoals (immune to dream cycle rewrites)
+    subgoals = read_subgoals(config)
+    if subgoals:
+        if len(subgoals) > config.context_subgoals_max_chars:
+            _log_overrun(config, tick_number, "subgoals", len(subgoals), config.context_subgoals_max_chars)
+            subgoals = _truncate(subgoals, config.context_subgoals_max_chars, "subgoals")
+        sections.append(f"## Subgoals\n{subgoals}")
+
     # 3. INTELLIGENCE — auto-recalled knowledge from the knowledge store
     intel = _build_intelligence_section(config, goal, plan or "")
     if intel:
@@ -408,16 +451,22 @@ def _assemble_briefing(
 
     # Interventions first (urgent)
     interventions = read_interventions(config)
+    recent_replies = _read_recent_replies(config, n=3)
+    chat_parts = []
+    if recent_replies:
+        for r in recent_replies:
+            chat_parts.append(f"[your reply @ {r.get('ts', '?')}]\n{r.get('text', '')}")
     if interventions:
-        intervention_text = "\n\n".join(
-            f"[{i['filename']}]\n{i['content']}" for i in interventions
-        )
+        for i in interventions:
+            chat_parts.append(f"[operator @ {i['filename']}]\n{i['content']}")
+    if chat_parts:
+        intervention_text = "\n\n".join(chat_parts)
         if len(intervention_text) > config.context_interventions_max_chars:
             _log_overrun(config, tick_number, "interventions",
                          len(intervention_text), config.context_interventions_max_chars)
             intervention_text = _truncate(intervention_text,
                                           config.context_interventions_max_chars, "interventions")
-        sections.append(f"## Interventions (from supervisor)\n{intervention_text}")
+        sections.append(f"## Chat with supervisor\n{intervention_text}")
 
     # Environment — alerts only (zero chars when normal)
     env_alerts = generate_env_alerts(config)

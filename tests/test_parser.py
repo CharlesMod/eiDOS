@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
-from parser import parse_tool_call
+from parser import parse_tool_call, parse_reply
 
 
 class TestParser(unittest.TestCase):
@@ -310,6 +310,40 @@ class TestParserUnescapedQuotes(unittest.TestCase):
         # Empty cmd should still parse as valid JSON (it is), but cmd is empty
         self.assertIsNotNone(result)
         self.assertEqual(result.args["cmd"], "")
+
+
+class TestParseReply(unittest.TestCase):
+
+    def test_basic_reply(self):
+        text = '<reply>Hello operator, everything is fine.</reply>'
+        self.assertEqual(parse_reply(text), "Hello operator, everything is fine.")
+
+    def test_reply_with_tool_call(self):
+        text = ('<reply>Got it, checking now.</reply>\n'
+                '<tool>bash</tool>\n<args>{"cmd": "uptime"}</args>')
+        self.assertEqual(parse_reply(text), "Got it, checking now.")
+        # Tool call should also be parseable
+        self.assertIsNotNone(parse_tool_call(text))
+
+    def test_no_reply(self):
+        text = '<tool>bash</tool>\n<args>{"cmd": "ls"}</args>'
+        self.assertIsNone(parse_reply(text))
+
+    def test_empty_reply(self):
+        text = '<reply>  </reply>'
+        self.assertIsNone(parse_reply(text))
+
+    def test_multiline_reply(self):
+        text = '<reply>Line one.\nLine two.\nLine three.</reply>'
+        self.assertEqual(parse_reply(text), "Line one.\nLine two.\nLine three.")
+
+    def test_reply_case_insensitive(self):
+        text = '<Reply>Hello!</Reply>'
+        self.assertEqual(parse_reply(text), "Hello!")
+
+    def test_reply_with_surrounding_text(self):
+        text = 'I see the operator asked a question.\n<reply>Sure, here is the answer.</reply>\nNow back to work.'
+        self.assertEqual(parse_reply(text), "Sure, here is the answer.")
 
 
 if __name__ == "__main__":

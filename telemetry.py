@@ -7,10 +7,45 @@ Both are read-only by the dashboard; eiDOS is the sole writer.
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
 from config import Config
+
+
+# --- CPU % measurement (normalized to 0–100 regardless of core count) ---
+_prev_cpu_times = None
+
+def get_cpu_pct() -> float:
+    """Return total system CPU usage as 0–100%, normalized across all cores.
+
+    Uses delta between two reads of /proc/stat.
+    Falls back to 0.0 on non-Linux or on error.
+    """
+    global _prev_cpu_times
+    try:
+        with open("/proc/stat") as f:
+            parts = f.readline().split()
+        # parts: cpu user nice system idle iowait irq softirq steal ...
+        vals = [int(x) for x in parts[1:]]
+        idle = vals[3] + vals[4]   # idle + iowait
+        total = sum(vals)
+
+        if _prev_cpu_times is None:
+            _prev_cpu_times = (idle, total)
+            return 0.0
+
+        prev_idle, prev_total = _prev_cpu_times
+        _prev_cpu_times = (idle, total)
+
+        d_total = total - prev_total
+        d_idle = idle - prev_idle
+        if d_total <= 0:
+            return 0.0
+        return round((1.0 - d_idle / d_total) * 100.0, 1)
+    except (OSError, IndexError, ValueError):
+        return 0.0
 
 
 def write_activity(config: Config, state: str, *, detail: str = "",
@@ -36,7 +71,7 @@ def write_heartbeat(config: Config, *, tick: int, level: int, mood: str,
                     current_max_tokens: int, disk_free_gb: float,
                     ram_pct: float, cpu_temp_c, llm_elapsed_s: float,
                     tool_name: str, tool_success: bool, uptime_s: float,
-                    idle_since: float = None):
+                    cpu_pct: float = 0.0, idle_since: float = None):
     """Atomically write the current heartbeat snapshot."""
     hb = {
         "ts": time.time(),
@@ -50,6 +85,7 @@ def write_heartbeat(config: Config, *, tick: int, level: int, mood: str,
         "current_max_tokens": current_max_tokens,
         "disk_free_gb": round(disk_free_gb, 2),
         "ram_pct": round(ram_pct, 1),
+        "cpu_pct": round(cpu_pct, 1),
         "cpu_temp_c": round(cpu_temp_c, 1) if cpu_temp_c is not None else None,
         "llm_elapsed_s": round(llm_elapsed_s, 2),
         "tool_name": tool_name,
@@ -70,6 +106,7 @@ def append_metrics(config: Config, *, tick: int, level: int, mood: str,
                    current_max_tokens: int, disk_free_gb: float,
                    ram_pct: float, cpu_temp_c, llm_elapsed_s: float,
                    tool_name: str, tool_success: bool, uptime_s: float,
+                   cpu_pct: float = 0.0,
                    prompt_tokens: int = 0, completion_tokens: int = 0,
                    reasoning_tokens: int = 0, ctx_chars: int = 0,
                    memory_chars: int = 0, obs_count: int = 0,
@@ -85,6 +122,7 @@ def append_metrics(config: Config, *, tick: int, level: int, mood: str,
         "current_max_tokens": current_max_tokens,
         "disk_free_gb": round(disk_free_gb, 2),
         "ram_pct": round(ram_pct, 1),
+        "cpu_pct": round(cpu_pct, 1),
         "cpu_temp_c": round(cpu_temp_c, 1) if cpu_temp_c is not None else None,
         "llm_elapsed_s": round(llm_elapsed_s, 2),
         "tool_name": tool_name,

@@ -371,7 +371,7 @@ class TestBriefingModel(unittest.TestCase):
         messages = self._assemble()
         system = messages[0]["content"]
         # Briefing prompt is shorter than legacy
-        self.assertLess(len(system), 1000)
+        self.assertLess(len(system), 1800)
         self.assertIn("eiDOS", system)
         self.assertIn("memorize", system)
         self.assertIn("recall", system)
@@ -461,7 +461,7 @@ class TestBriefingModel(unittest.TestCase):
         (self.config.interventions_dir / "001_hint.md").write_text("Check the logs")
         messages = self._assemble()
         content = messages[1]["content"]
-        self.assertIn("## Interventions", content)
+        self.assertIn("## Chat with supervisor", content)
         self.assertIn("Check the logs", content)
 
     def test_loop_detection_in_briefing(self):
@@ -472,6 +472,19 @@ class TestBriefingModel(unittest.TestCase):
             )
         tick_msg = messages[2]["content"]
         self.assertIn("repeated the same action", tick_msg.lower())
+
+    def test_subgoals_section_shown(self):
+        from memory import write_subgoals
+        write_subgoals(self.config, "- [ ] Step 1\n- [ ] Step 2")
+        messages = self._assemble()
+        content = messages[1]["content"]
+        self.assertIn("## Subgoals", content)
+        self.assertIn("- [ ] Step 1", content)
+
+    def test_no_subgoals_no_section(self):
+        messages = self._assemble()
+        content = messages[1]["content"]
+        self.assertNotIn("## Subgoals", content)
 
 
 # -------------------------------------------------------------------

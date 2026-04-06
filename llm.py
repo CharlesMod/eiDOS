@@ -5,6 +5,7 @@ import logging
 import time
 import urllib.request
 import urllib.error
+from pathlib import Path
 
 from config import Config
 
@@ -264,3 +265,121 @@ def _read_stream(resp, on_token):
         on_token(final)
 
     return "".join(content_parts), "".join(reasoning_parts), usage
+
+
+# ---------------------------------------------------------------------------
+# Planning model hot-swap
+# ---------------------------------------------------------------------------
+
+def planning_complete(
+    messages: list[dict],
+    config: Config,
+    *,
+    run_id: str = "",
+    tick: int = 0,
+) -> str:
+    """Call the planning model (larger, hot-swapped) for subgoal generation.
+
+    Hot-swap sequence:
+    1. Rewrite llama-server.service with the planning model path/params
+    2. Restart llama-server, wait for it to be healthy
+    3. Run the completion
+    4. Restore the original service file and restart
+
+    Falls back to the current model if no restart_cmd is configured.
+    """
+    import subprocess
+
+    if not config.llm_restart_cmd:
+        # No hot-swap available — just use the current model
+        logger.info("planning_complete: no restart_cmd, using current model")
+        return complete(messages, config, temperature=0.6, max_tokens=1024,
+                        run_id=run_id, tick=tick)
+
+    service_path = "/etc/systemd/system/llama-server.service"
+
+    # Read current service file
+    try:
+        original_service = Path(service_path).read_text()
+    except OSError as e:
+        logger.warning("Cannot read service file, falling back: %s", e)
+        return complete(messages, config, temperature=0.6, max_tokens=1024,
+                        run_id=run_id, tick=tick)
+
+    # Build the planning service config
+    planning_service = _build_planning_service(original_service, config)
+    if planning_service == original_service:
+        # Same model, no swap needed
+        logger.info("planning_complete: planning model same as active, no swap")
+        return complete(messages, config, temperature=0.6, max_tokens=1024,
+                        run_id=run_id, tick=tick)
+
+    logger.info("planning_complete: hot-swapping to planning model")
+    try:
+        # Write planning service file and restart
+        _sudo_write(service_path, planning_service)
+        _restart_llama(config)
+
+        # Run the completion on the bigger model
+        result = complete(messages, config, temperature=0.6, max_tokens=1024,
+                          run_id=run_id, tick=tick)
+        return result
+    finally:
+        # Always restore original service and restart
+        logger.info("planning_complete: restoring original model")
+        try:
+            _sudo_write(service_path, original_service)
+            _restart_llama(config)
+        except Exception as e:
+            logger.error("Failed to restore original model: %s", e)
+
+
+def _build_planning_service(original: str, config: Config) -> str:
+    """Rewrite the llama-server service file for the planning model."""
+    import re
+    result = original
+    # Swap model path
+    result = re.sub(r'-m\s+\S+', f'-m {config.planning_model_path}', result)
+    # Swap context size
+    result = re.sub(r'-c\s+\d+', f'-c {config.planning_context_size}', result)
+    # Swap or add reasoning budget
+    if '--reasoning-budget' in result:
+        result = re.sub(r'--reasoning-budget\s+\d+',
+                         f'--reasoning-budget {config.planning_reasoning_budget}', result)
+    return result
+
+
+def _sudo_write(path: str, content: str) -> None:
+    """Write a file via sudo tee (service files are root-owned)."""
+    import subprocess
+    proc = subprocess.run(
+        ["sudo", "tee", path],
+        input=content.encode(),
+        capture_output=True,
+        timeout=10,
+    )
+    if proc.returncode != 0:
+        raise OSError(f"sudo tee {path} failed: {proc.stderr.decode()[:200]}")
+
+
+def _restart_llama(config: Config) -> None:
+    """Restart llama-server and wait for health."""
+    import subprocess
+    subprocess.run(
+        "sudo systemctl daemon-reload && sudo systemctl restart llama-server",
+        shell=True, timeout=30, capture_output=True,
+    )
+    # Poll health endpoint for up to 60s
+    import urllib.request
+    health_url = config.llm_url.rstrip("/") + "/health"
+    for _ in range(30):
+        time.sleep(2)
+        try:
+            with urllib.request.urlopen(health_url, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+                if data.get("status") == "ok":
+                    logger.info("llama-server healthy after restart")
+                    return
+        except Exception:
+            continue
+    logger.warning("llama-server did not become healthy within 60s")

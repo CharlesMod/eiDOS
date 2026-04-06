@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import load_config, Config
 from ascii_art import get_creature
 from persona import load_persona, compute_level
+from telemetry import get_cpu_pct
 
 
 def _read_json(path: Path) -> dict:
@@ -133,6 +134,7 @@ def build_status(config: Config) -> dict:
     goal = _read_text(config.workspace / "goal.md")
     memory = _read_text(config.workspace / "memory.md")
     plan = _read_text(config.workspace / "plan.md")[:2000]
+    subgoals = _read_text(config.workspace / "subgoals.md")[:2000]
     observations = _tail_jsonl(config.workspace / "observations.jsonl", 20)
     paused = (config.workspace / "paused").exists()
     flavor = _read_json(config.workspace / "flavor.json")
@@ -173,6 +175,7 @@ def build_status(config: Config) -> dict:
         "creature": creature,
         "goal": goal[:500],
         "plan": plan,
+        "subgoals": subgoals,
         "memory": memory[:3000],
         "observations": observations,
         "narration": narration,
@@ -205,7 +208,7 @@ def build_ping(config: Config) -> dict:
 
 
 def build_chat(config: Config) -> dict:
-    """Build chat history from interventions and pending questions."""
+    """Build chat history from interventions, replies, and pending questions."""
     messages = []
 
     # Operator → LLM: intervention files (pending + consumed)
@@ -229,7 +232,17 @@ def build_chat(config: Config) -> dict:
             except OSError:
                 continue
 
-    # LLM → Operator: pending questions
+    # LLM → Operator: chat replies
+    replies = _tail_jsonl(config.workspace / "chat_replies.jsonl", 50)
+    for r in replies:
+        messages.append({
+            "direction": "incoming",
+            "ts": r.get("ts", ""),
+            "text": r.get("text", ""),
+            "status": "delivered",
+        })
+
+    # LLM → Operator: pending questions (proactive, via ask_supervisor)
     questions = _tail_jsonl(config.workspace / "pending_questions.jsonl", 50)
     for q in questions:
         messages.append({
@@ -241,6 +254,124 @@ def build_chat(config: Config) -> dict:
 
     messages.sort(key=lambda m: m.get("ts", ""))
     return {"messages": messages}
+
+
+def _tool_preview(name: str, args) -> str:
+    """Build a human-readable preview of a tool call."""
+    if not isinstance(args, dict):
+        return name
+    if name == "bash":
+        return "$ " + (args.get("cmd", "") or "")[:100]
+    if name == "write_file":
+        return "writing " + (args.get("path", "") or "")
+    if name == "read_file":
+        return "reading " + (args.get("path", "") or "")
+    if name == "memorize":
+        return (args.get("fact", "") or "")[:100] or "memorizing"
+    if name == "remember":
+        return (args.get("note", "") or "")[:100] or "noting something"
+    if name == "recall":
+        return "recalling: " + (args.get("query", "") or "")[:80]
+    if name == "http_get":
+        return "fetching " + (args.get("url", "") or "")[:80]
+    if name == "bg_run":
+        return "starting: " + (args.get("cmd", "") or "")[:80]
+    if name == "bg_check":
+        return "checking on " + (args.get("name", "") or "")
+    if name == "goal_complete":
+        return (args.get("summary", "") or "")[:100] or "done!"
+    if name == "ask_supervisor":
+        return (args.get("question", "") or "")[:100] or "asking..."
+    if name == "update_plan":
+        return (args.get("note", "") or "")[:100] or "updating plan"
+    return name
+
+
+def build_thoughts(config: Config, limit: int = 30) -> dict:
+    """Parse llm_log.jsonl into per-tick thought threads for the Buddy Thoughts panel."""
+    import re
+
+    entries = _tail_jsonl(config.workspace / "llm_log.jsonl", limit)
+    thoughts = []
+    for entry in reversed(entries):  # newest first
+        raw = entry.get("response_preview", "")
+        if not raw:
+            continue
+
+        tick = entry.get("tick", 0)
+        ts = entry.get("ts", "")
+        elapsed = entry.get("elapsed_s", 0)
+
+        # Split response into segments: thinking text vs tool calls
+        segments = []
+        pos = 0
+        for m in re.finditer(
+            r'<tool>(\w+)</tool>\s*\n?<args>(.*?)</args>',
+            raw, re.DOTALL
+        ):
+            # Thinking text before this tool call
+            thinking = raw[pos:m.start()].strip()
+            if thinking:
+                segments.append({"type": "thinking", "text": thinking})
+            # The tool call itself
+            tool_name = m.group(1)
+            try:
+                tool_args = json.loads(m.group(2))
+            except (json.JSONDecodeError, ValueError):
+                tool_args = m.group(2)
+            segments.append({"type": "tool", "name": tool_name, "args": tool_args})
+            pos = m.end()
+
+        # Trailing thinking text after last tool call
+        trailing = raw[pos:].strip()
+        if trailing:
+            segments.append({"type": "thinking", "text": trailing})
+
+        # If no tool tags found, treat entire response as thinking
+        if not segments and raw.strip():
+            segments.append({"type": "thinking", "text": raw.strip()})
+
+        # Build a short preview — prefer thinking text, else describe the tool action
+        preview = ""
+        for seg in segments:
+            if seg["type"] == "thinking":
+                preview = seg["text"][:120]
+                break
+        if not preview:
+            for seg in segments:
+                if seg["type"] == "tool":
+                    preview = _tool_preview(seg["name"], seg.get("args", {}))
+                    break
+
+        # Raw tail for thought bubble display
+        raw_tail = raw[-60:].replace('\n', ' ').strip() if raw else ''
+
+        thoughts.append({
+            "tick": tick,
+            "ts": ts,
+            "elapsed_s": elapsed,
+            "preview": preview,
+            "raw_tail": raw_tail,
+            "segments": segments,
+        })
+
+    return {"thoughts": thoughts}
+
+
+def build_metrics(config: Config, limit: int = 60) -> dict:
+    """Return last N metrics points for charting."""
+    entries = _tail_jsonl(config.workspace / "metrics.jsonl", limit)
+    pts = []
+    for e in entries:
+        pts.append({
+            "ts": e.get("ts", 0),
+            "tick": e.get("tick", 0),
+            "cpu_pct": e.get("cpu_pct", 0),
+            "ram_pct": e.get("ram_pct", 0),
+            "cpu_temp_c": e.get("cpu_temp_c"),
+            "llm_elapsed_s": e.get("llm_elapsed_s", 0),
+        })
+    return {"metrics": pts}
 
 
 # --- HTML Template ---
@@ -292,6 +423,8 @@ body::after {
     padding: 12px;
     background: #0d0d0d;
     border-radius: 4px;
+    overflow: hidden;
+    min-width: 0;
 }
 .panel-title {
     color: #ffb000;
@@ -533,6 +666,84 @@ body::after {
     color: #668866;
     font-style: italic;
 }
+/* Buddy Thoughts expanded list */
+.thoughts-list {
+    max-height: 400px;
+    overflow-y: auto;
+    font-size: 11px;
+}
+.thought-entry {
+    border-bottom: 1px solid #1a3a1a;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.thought-entry:hover {
+    background: #111;
+}
+.thought-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 6px 4px;
+}
+.thought-tick {
+    color: #555;
+    font-size: 10px;
+    flex-shrink: 0;
+    min-width: 40px;
+}
+.thought-time {
+    color: #444;
+    font-size: 10px;
+    flex-shrink: 0;
+}
+.thought-preview {
+    color: #668866;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.thought-elapsed {
+    color: #444;
+    font-size: 10px;
+    flex-shrink: 0;
+}
+.thought-body {
+    display: none;
+    padding: 4px 8px 10px 52px;
+    line-height: 1.5;
+}
+.thought-entry.expanded .thought-body {
+    display: block;
+}
+.thought-entry.expanded {
+    background: #0f1a0f;
+}
+.thought-seg-thinking {
+    color: #aaddaa;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 4px 0;
+}
+.thought-seg-tool {
+    color: #ffb000;
+    font-style: italic;
+    margin: 4px 0;
+    padding: 2px 6px;
+    border-left: 2px solid #332200;
+    background: rgba(255,176,0,0.05);
+}
+.thought-seg-tool .tool-args {
+    color: #666;
+    font-style: normal;
+    font-size: 10px;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 600px;
+}
 /* Goal Progress */
 .plan-progress {
     max-height: 300px;
@@ -673,18 +884,14 @@ body::after {
     margin: 0 auto 8px auto;
     text-align: center;
     min-height: 28px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     transition: opacity 0.4s, border-color 0.4s;
-}
-#thought-bubble.has-tokens {
-    text-align: left;
-    font-size: 10px;
-    max-height: 120px;
-    overflow-y: auto;
-    word-break: break-word;
 }
 #thought-bubble.state-idle {
     border-color: #2a4a2a;
-    color: #445544;
+    color: #556655;
 }
 #thought-bubble::after {
     content: '';
@@ -788,33 +995,42 @@ body::after {
             <div class="gauge"><span class="gauge-label">Disk Free</span><span class="gauge-bar" id="g-disk"></span><span class="gauge-val" id="v-disk"></span></div>
             <div class="gauge"><span class="gauge-label">LLM Latency</span><span class="gauge-bar" id="g-llm"></span><span class="gauge-val" id="v-llm"></span></div>
         </div>
+        <div style="margin:8px 0;">
+            <canvas id="cpu-chart" width="300" height="80" style="width:100%;height:80px;border:1px solid #1a3a1a;border-radius:4px;background:#0a0a0a;"></canvas>
+            <div style="font-size:9px;color:#555;text-align:center;margin-top:2px;">CPU %</div>
+        </div>
         <hr style="border-color:#1a3a1a;margin:8px 0;">
         <div style="font-size:12px;">
-            <div><span style="color:#aaa;">Goal:</span> <span id="current-goal" style="color:#00ff41;"></span></div>
+            <div><span style="color:#aaa;">Goal:</span> <span id="current-goal" style="color:#00ff41;word-break:break-word;"></span></div>
             <div><span style="color:#aaa;">Tick:</span> <span id="current-tick"></span> · <span style="color:#aaa;">Uptime:</span> <span id="uptime"></span></div>
             <div><span style="color:#aaa;">Failures:</span> <span id="failures"></span> · <span style="color:#aaa;">Max Tokens:</span> <span id="max-tokens"></span></div>
         </div>
     </div>
 
-    <!-- Buddy Thoughts -->
+    <!-- Buddy Thoughts + Goal Progress: side by side -->
     <div class="panel">
-        <div class="panel-title">Buddy Thoughts</div>
+        <div class="panel-title">Buddy Thoughts <span id="thoughts-status" style="float:right;font-size:10px;color:#555;"></span></div>
         <div id="narration" class="narration-box"></div>
+        <div id="thoughts-list" class="thoughts-list"></div>
     </div>
 
-    <!-- Goal Progress -->
     <div class="panel">
         <div class="panel-title">Goal Progress <span id="plan-meter" style="float:right;font-size:10px;color:#555;"></span></div>
         <div id="plan-progress" class="plan-progress"></div>
     </div>
 
-    <!-- Activity Feed -->
-    <div class="panel" style="grid-column: 1 / -1;">
+    <!-- Activity Feed + Dream Journal: side by side -->
+    <div class="panel">
         <div class="panel-title">Activity Feed</div>
         <div class="feed" id="feed"></div>
     </div>
 
-    <!-- Operator Chat -->
+    <div class="panel">
+        <div class="panel-title">Dream Journal</div>
+        <div class="dream-list" id="dream-list"></div>
+    </div>
+
+    <!-- Operator Chat: full width -->
     <div class="panel" style="grid-column: 1 / -1;">
         <div class="panel-title">Operator Chat
             <span style="float:right;">
@@ -824,25 +1040,18 @@ body::after {
         </div>
         <div class="chat-messages" id="chat-messages"></div>
         <div class="chat-input-row">
-            <textarea id="chat-input" placeholder="Send a message to eiDOS (auto-pauses tick loop)..." rows="1"></textarea>
+            <textarea id="chat-input" placeholder="Send a message to eiDOS..." rows="1"></textarea>
             <button id="chat-send" onclick="sendChat()">Send ▸</button>
         </div>
     </div>
 
-    <!-- Knowledge Nuggets -->
+    <!-- Knowledge Nuggets + Working Memory: side by side -->
     <div class="panel">
         <div class="panel-title">Knowledge Nuggets</div>
         <div class="knowledge-list" id="knowledge-list"></div>
     </div>
 
-    <!-- Dream Journal -->
     <div class="panel">
-        <div class="panel-title">Dream Journal</div>
-        <div class="dream-list" id="dream-list"></div>
-    </div>
-
-    <!-- Memory -->
-    <div class="panel" style="grid-column: 1 / -1;">
         <div class="panel-title">Working Memory</div>
         <div class="memory-view" id="memory"></div>
     </div>
@@ -954,14 +1163,42 @@ function updatePlan(data) {
     let el = document.getElementById('plan-progress');
     let meterEl = document.getElementById('plan-meter');
     if (!el) return;
+    let subgoals = data.subgoals || '';
     let plan = data.plan || '';
-    if (!plan) {
+    let source = subgoals || plan;
+    if (!source) {
         el.innerHTML = '<span style="color:#333;">No plan yet.</span>';
         if (meterEl) meterEl.textContent = '';
         return;
     }
 
-    let lines = plan.split('\n');
+    let parts = [];
+
+    // Render subgoals first if present
+    if (subgoals) {
+        parts.push(_renderChecklist(subgoals, 'Subgoals'));
+    }
+
+    // Render plan below
+    if (plan) {
+        parts.push(_renderChecklist(plan, subgoals ? 'Working Plan' : ''));
+    }
+
+    // Combine meter counts
+    let totalChecked = 0, totalItems = 0;
+    parts.forEach(function(p) { totalChecked += p.checked; totalItems += p.total; });
+    if (totalItems > 0) {
+        let pct = Math.round((totalChecked / totalItems) * 100);
+        if (meterEl) meterEl.textContent = totalChecked + '/' + totalItems + ' (' + pct + '%)';
+    } else {
+        if (meterEl) meterEl.textContent = '';
+    }
+
+    el.innerHTML = parts.map(function(p) { return p.html; }).join('');
+}
+
+function _renderChecklist(text, heading) {
+    let lines = text.split('\n');
     let items = [];
     let currentItem = null;
     let checked = 0;
@@ -992,14 +1229,9 @@ function updatePlan(data) {
     });
     if (currentItem) items.push(currentItem);
 
-    if (total > 0) {
-        let pct = Math.round((checked / total) * 100);
-        if (meterEl) meterEl.textContent = checked + '/' + total + ' (' + pct + '%)';
-    } else {
-        if (meterEl) meterEl.textContent = '';
-    }
+    let headingHtml = heading ? '<div class="plan-header" style="color:#00ff41;margin-bottom:4px;">' + escapeHtml(heading) + '</div>' : '';
 
-    el.innerHTML = items.map(function(item) {
+    let html = headingHtml + items.map(function(item) {
         if (item.header) {
             return '<div class="plan-header">' + escapeHtml(item.text) + '</div>';
         }
@@ -1014,6 +1246,8 @@ function updatePlan(data) {
             checkIcon + '<span' + textCls + '>' + escapeHtml(item.text) + '</span>' +
             detail + '</div>';
     }).join('');
+
+    return { html: html, checked: checked, total: total };
 }
 
 function updatePauseState(paused) {
@@ -1032,68 +1266,8 @@ function updatePauseState(paused) {
 
 var _hasGoal = false;
 
-// Creature-voice idle thoughts (rotated between ticks)
-var _idleMusings = [
-    'hmm\u2026',
-    '\u2026',
-    'i wonder\u2026',
-    'what was i\u2026',
-    'oh\u2026',
-    'hm',
-    'thinking\u2026',
-    'wait\u2026',
-    '\u2026\u2026',
-    'let me think\u2026',
-];
-var _lastMusingIdx = -1;
-
-function pickMusing() {
-    let idx;
-    do { idx = Math.floor(Math.random() * _idleMusings.length); } while (idx === _lastMusingIdx);
-    _lastMusingIdx = idx;
-    return _idleMusings[idx];
-}
-var _currentMusing = pickMusing();
-var _musingRotateAt = Date.now() + 6000;
-
-// Map tool names to creature verbs for inline replacement
-var _toolVerbs = {
-    'bash': '\u2699 tinkering\u2026',
-    'memorize': '\ud83d\udcad making a mental note\u2026',
-    'remember': '\ud83d\udcad searching memory\u2026',
-    'recall': '\ud83d\udcad trying to remember\u2026',
-    'write_file': '\u270d writing something down\u2026',
-    'read_file': '\ud83d\udc41 reading\u2026',
-    'update_plan': '\ud83d\udcdd making plans\u2026',
-    'http_get': '\ud83c\udf10 reaching out\u2026',
-    'bg_run': '\u2699 starting something\u2026',
-    'bg_check': '\ud83d\udc41 checking on something\u2026',
-    'goal_complete': '\u2728 i did it!',
-    'ask_supervisor': '\u270b need to ask\u2026',
-};
-
-// Strip tool XML, replace with creature verbs, keep thinking-out-loud text
-function humanizePartial(partial) {
-    if (!partial) return '';
-    // Replace <tool>name</tool>\n<args>...json...</args> with verb
-    let out = partial.replace(/<tool>(\w+)<\/tool>\s*\n?<args>[^<]*<\/args>/g, function(_, name) {
-        return '\n' + (_toolVerbs[name] || '\u2699 doing something\u2026') + '\n';
-    });
-    // Handle incomplete tool tags at the end (still streaming)
-    out = out.replace(/<tool>(\w+)<\/tool>\s*\n?<args>[^<]*$/, function(_, name) {
-        return '\n' + (_toolVerbs[name] || '\u2699 doing something\u2026');
-    });
-    out = out.replace(/<tool>(\w+)<\/tool>\s*$/, function(_, name) {
-        return '\n' + (_toolVerbs[name] || '\u2699 doing something\u2026');
-    });
-    out = out.replace(/<tool>\w*$/, '');
-    out = out.replace(/<tool>[^<]*$/, '');
-    return out.trim();
-}
-
-function interpretTool(toolName) {
-    return _toolVerbs[toolName] || 'doing something\u2026';
-}
+// Last real snippet from LLM output (populated by loadThoughts)
+var _lastSnippet = '';
 
 function updateThoughtBubble(activity) {
     let bubble = document.getElementById('thought-bubble');
@@ -1102,51 +1276,32 @@ function updateThoughtBubble(activity) {
     if (!bubble || !textEl) return;
 
     let state = (activity && activity.state) || 'sleeping';
-    let detail = (activity && activity.detail) || '';
-    let since = (activity && activity.since) || 0;
     let partial = (activity && activity.partial) || '';
+    let since = (activity && activity.since) || 0;
 
-    // Remove all state classes, then add current
     bubble.className = '';
 
-    let dots = '<span class="thinking-dots"><span>\u00b7</span><span>\u00b7</span><span>\u00b7</span></span>';
+    // Get the last ~60 raw chars of whatever is streaming
+    var tail = partial.length > 60 ? partial.substring(partial.length - 60) : partial;
+    // Collapse whitespace for display
+    tail = tail.replace(/\s+/g, ' ').trim();
 
-    if (state === 'thinking') {
+    if (state === 'thinking' || state === 'executing' || state === 'dreaming') {
         bubble.classList.add('state-thinking');
-        let humanized = humanizePartial(partial);
-        if (humanized) {
-            bubble.classList.add('has-tokens');
-            // Escape HTML, then convert newlines to <br>, then inject cursor
-            let html = escapeHtml(humanized).replace(/\n/g, '<br>');
-            textEl.innerHTML = html + '<span class="blink">\u258c</span>';
-            bubble.scrollTop = bubble.scrollHeight;
+        if (tail) {
+            textEl.innerHTML = '\u2026' + escapeHtml(tail) + '<span class="blink">\u258c</span>';
         } else {
-            textEl.innerHTML = dots;
+            textEl.innerHTML = '\u2026<span class="blink">\u258c</span>';
         }
-    } else if (state === 'dreaming') {
-        bubble.classList.add('state-dreaming');
-        textEl.innerHTML = 'dreaming ' + dots;
-    } else if (state === 'executing') {
-        bubble.classList.add('state-executing');
-        textEl.textContent = interpretTool(detail);
-    } else if (state === 'sleeping' && _hasGoal) {
-        // Between ticks but has purpose — creature is idling, not asleep
+    } else if (_lastSnippet) {
         bubble.classList.add('state-idle');
-        if (Date.now() > _musingRotateAt) {
-            _currentMusing = pickMusing();
-            _musingRotateAt = Date.now() + 6000 + Math.random() * 4000;
-        }
-        textEl.innerHTML = _currentMusing + ' <span class="blink">\u258c</span>';
-    } else if (state === 'sleeping') {
-        // No goal — genuinely idle
-        bubble.classList.add('state-sleeping');
-        textEl.textContent = 'zzz';
-    } else if (state === 'error') {
-        bubble.classList.add('state-error');
-        textEl.textContent = '\u26a0 ' + (detail || 'something went wrong');
+        textEl.innerHTML = '\u2026' + escapeHtml(_lastSnippet) + '\u2026';
+    } else if (_hasGoal) {
+        bubble.classList.add('state-idle');
+        textEl.textContent = '\u2026';
     } else {
         bubble.classList.add('state-sleeping');
-        textEl.textContent = '\u2026';
+        textEl.textContent = 'zzz';
     }
 
     // Elapsed time — only during active states
@@ -1174,6 +1329,7 @@ async function pollActivity() {
             let data = await resp.json();
             _lastActivity = data;
             updateThoughtBubble(data);
+            if (typeof data.cpu_pct === 'number') pushCpu(data.cpu_pct);
             // Active states get fast polling, sleeping gets slow
             let active = data.state === 'thinking' || data.state === 'executing' || data.state === 'dreaming';
             schedulePoll(active ? 500 : 3000);
@@ -1252,6 +1408,101 @@ function renderDreams(dreams) {
             '<span style="color:#555;">' + (d.chars || 0) + ' chars</span>' +
             '<div class="dream-preview">' + escapeHtml(d.preview || '') + '</div>' +
             '</div>';
+    }).join('');
+}
+
+async function loadThoughts() {
+    try {
+        let resp = await fetch('/api/thoughts');
+        if (resp.ok) {
+            let data = await resp.json();
+            let thoughts = data.thoughts || [];
+            renderThoughts(thoughts);
+            // Extract last real tokens for thought bubble
+            if (thoughts.length > 0) {
+                let latest = thoughts[0]; // newest first
+                // Use the raw last tokens for thought bubble
+                let snippet = latest.raw_tail || latest.preview || '';
+                snippet = snippet.replace(/\s+/g, ' ').trim();
+                if (snippet.length > 60) snippet = snippet.substring(snippet.length - 60);
+                _lastSnippet = snippet;
+            }
+        }
+    } catch(e) {}
+}
+
+function thoughtToolVerb(name) {
+    var verbs = {
+        'bash': '\u2699 tinkering',
+        'memorize': '\ud83d\udcad making a mental note',
+        'remember': '\ud83d\udcad noting something',
+        'recall': '\ud83d\udcad trying to remember',
+        'write_file': '\u270d writing something',
+        'read_file': '\ud83d\udc41 reading',
+        'update_plan': '\ud83d\udcdd making plans',
+        'http_get': '\ud83c\udf10 reaching out',
+        'bg_run': '\u2699 starting something',
+        'bg_check': '\ud83d\udc41 checking',
+        'goal_complete': '\u2728 done!',
+        'ask_supervisor': '\u270b asking',
+    };
+    return verbs[name] || name;
+}
+
+function renderThoughtSegments(segments) {
+    return segments.map(function(seg) {
+        if (seg.type === 'thinking') {
+            return '<div class="thought-seg-thinking">' + escapeHtml(seg.text) + '</div>';
+        } else if (seg.type === 'tool') {
+            let argStr = '';
+            if (typeof seg.args === 'object') {
+                // Show a compact summary of args
+                var keys = Object.keys(seg.args);
+                var parts = [];
+                keys.forEach(function(k) {
+                    var v = seg.args[k];
+                    if (typeof v === 'string') v = v.substring(0, 80);
+                    parts.push(k + ': ' + v);
+                });
+                argStr = parts.join(' · ');
+            } else {
+                argStr = String(seg.args).substring(0, 120);
+            }
+            return '<div class="thought-seg-tool">' +
+                thoughtToolVerb(seg.name) +
+                (argStr ? '<span class="tool-args">' + escapeHtml(argStr) + '</span>' : '') +
+                '</div>';
+        }
+        return '';
+    }).join('');
+}
+
+function renderThoughts(thoughts) {
+    let el = document.getElementById('thoughts-list');
+    let statusEl = document.getElementById('thoughts-status');
+    if (!el) return;
+    if (!thoughts.length) {
+        el.innerHTML = '<div style="color:#333;text-align:center;padding:12px;">No thoughts yet.</div>';
+        if (statusEl) statusEl.textContent = '';
+        return;
+    }
+    if (statusEl) statusEl.textContent = thoughts.length + ' ticks';
+
+    el.innerHTML = thoughts.map(function(t) {
+        let ts = (t.ts || '');
+        if (ts.length > 16) ts = ts.substring(11, 16);
+        let elapsed = t.elapsed_s ? t.elapsed_s.toFixed(1) + 's' : '';
+        let preview = t.preview || '...';
+
+        return '<div class="thought-entry" onclick="this.classList.toggle(\'expanded\')">' +
+            '<div class="thought-header">' +
+                '<span class="thought-tick">t' + (t.tick || 0) + '</span>' +
+                '<span class="thought-time">' + ts + '</span>' +
+                '<span class="thought-preview">' + escapeHtml(preview) + '</span>' +
+                '<span class="thought-elapsed">' + elapsed + '</span>' +
+            '</div>' +
+            '<div class="thought-body">' + renderThoughtSegments(t.segments || []) + '</div>' +
+        '</div>';
     }).join('');
 }
 
@@ -1338,7 +1589,7 @@ function update(data) {
 
     // Status info
     document.getElementById('current-goal').textContent =
-        data.goal ? data.goal.substring(0, 120) : '(no goal — sleeping)';
+        data.goal ? (data.goal.length > 300 ? data.goal.substring(0, 300) + '…' : data.goal) : '(no goal — sleeping)';
     document.getElementById('current-tick').textContent = hb.tick || '—';
     document.getElementById('uptime').textContent = formatUptime(hb.uptime_s);
     let failEl = document.getElementById('failures');
@@ -1352,7 +1603,7 @@ function update(data) {
     feedEl.innerHTML = obs.map(renderFeedEntry).join('');
 
     // Memory
-    document.getElementById('memory').textContent = data.memory || '(empty)';
+    document.getElementById('memory').textContent = data.plan || data.memory || '(empty)';
 
     // New panels
     updateNarration(data);
@@ -1411,10 +1662,69 @@ async function sendChat() {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({message: msg})
         });
-        if (resp.ok) { input.value = ''; loadChat(); updatePauseState(true); }
+        if (resp.ok) { input.value = ''; loadChat(); }
     } catch(e) {}
     btn.disabled = false;
     btn.textContent = 'Send \u25b8';
+}
+
+// --- CPU chart (real-time, fed by /api/activity polling) ---
+var _cpuData = [];
+var _cpuMax = 120; // ~2min at 1s polling
+function pushCpu(pct) {
+    if (typeof pct !== 'number') return;
+    _cpuData.push(pct);
+    if (_cpuData.length > _cpuMax) _cpuData.shift();
+    drawCpuChart(_cpuData);
+}
+function drawCpuChart(pts) {
+    var canvas = document.getElementById('cpu-chart');
+    if (!canvas) return;
+    var dpr = window.devicePixelRatio || 1;
+    var rect = canvas.getBoundingClientRect();
+    if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+    }
+    var ctx = canvas.getContext('2d');
+    var W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    // Grid lines at 25, 50, 75%
+    ctx.strokeStyle = '#1a3a1a';
+    ctx.lineWidth = 0.5 * dpr;
+    for (var g = 0.25; g < 1; g += 0.25) {
+        var gy = H - g * H;
+        ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+    }
+    if (pts.length < 2) return;
+    // Fill under the curve
+    ctx.fillStyle = 'rgba(0,255,65,0.08)';
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    for (var i = 0; i < pts.length; i++) {
+        var x = (i / (_cpuMax - 1)) * W;
+        var y = H - (pts[i] / 100) * H;
+        ctx.lineTo(x, y);
+    }
+    ctx.lineTo(((pts.length - 1) / (_cpuMax - 1)) * W, H);
+    ctx.closePath();
+    ctx.fill();
+    // Draw line
+    ctx.strokeStyle = '#00ff41';
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    for (var i = 0; i < pts.length; i++) {
+        var x = (i / (_cpuMax - 1)) * W;
+        var y = H - (pts[i] / 100) * H;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // Latest value label
+    var last = pts[pts.length - 1];
+    ctx.fillStyle = '#00ff41';
+    ctx.font = (10 * dpr) + 'px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(Math.round(last) + '%', W - 4 * dpr, 14 * dpr);
 }
 
 async function poll() {
@@ -1429,6 +1739,7 @@ async function poll() {
     loadChat();
     loadKnowledge();
     loadDreams();
+    loadThoughts();
 }
 
 // Initial load + periodic poll
@@ -1437,6 +1748,7 @@ poll();
 loadChat();
 loadKnowledge();
 loadDreams();
+loadThoughts();
 setInterval(poll, {{INTERVAL_MS}});
 setInterval(spawnParticle, 3000);
 // Kick off activity polling (self-scheduling: fast when active, slow when idle)
@@ -1481,6 +1793,7 @@ def _make_handler(config: Config):
 
             elif self.path == "/api/activity":
                 activity = _read_json(config.workspace / "activity.json")
+                activity["cpu_pct"] = get_cpu_pct()
                 self._respond(200, "application/json", json.dumps(activity))
 
             elif self.path == "/api/chat":
@@ -1493,6 +1806,14 @@ def _make_handler(config: Config):
 
             elif self.path == "/api/dreams":
                 data = build_dream_list(config)
+                self._respond(200, "application/json", json.dumps(data))
+
+            elif self.path == "/api/thoughts":
+                data = build_thoughts(config)
+                self._respond(200, "application/json", json.dumps(data))
+
+            elif self.path == "/api/metrics":
+                data = build_metrics(config)
                 self._respond(200, "application/json", json.dumps(data))
 
             elif self.path == "/api/pause":
@@ -1530,10 +1851,6 @@ def _make_handler(config: Config):
                     fname = f"dash_{ts}_{n}.md"
                     fpath = idir / fname
                 fpath.write_text(message)
-                # Auto-pause tick loop when operator sends a message
-                pause_path = config.workspace / "paused"
-                if not pause_path.exists():
-                    pause_path.write_text("auto-paused: operator chat")
                 self._respond(200, "application/json", json.dumps({"ok": True, "filename": fname}))
             elif self.path == "/api/pause":
                 pause_path = config.workspace / "paused"

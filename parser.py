@@ -169,3 +169,24 @@ def _extract_cmd_fallback(s: str) -> Optional[dict]:
         return None
     # Escape internal quotes so the value is clean for downstream use
     return {"cmd": cmd}
+
+
+# --- Reply parsing ---
+
+REPLY_PATTERN = re.compile(
+    r'<reply>\s*(.*?)\s*</reply>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def parse_reply(text: str) -> Optional[str]:
+    """Extract the first <reply>...</reply> from LLM output.
+
+    Returns the reply text or None if no reply tag found.
+    """
+    match = REPLY_PATTERN.search(text)
+    if match:
+        reply = match.group(1).strip()
+        if reply:
+            return reply
+    return None

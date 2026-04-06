@@ -90,6 +90,7 @@ class Config:
     context_goal_max_chars: int = 2000
     context_memory_max_chars: int = 4000
     context_plan_max_chars: int = 800           # briefing model: plan section budget
+    context_subgoals_max_chars: int = 1500       # subgoals section budget
     context_intelligence_max_chars: int = 1200  # briefing model: auto-recalled knowledge
     context_env_max_chars: int = 800
     context_interventions_max_chars: int = 2000
@@ -122,6 +123,11 @@ class Config:
     knowledge_embedding_cohost: bool = False    # keep model in RAM between dream cycles
     embedding_model_dir: str = "models/all-MiniLM-L6-v2"
 
+    # Planning model (hot-swap for subgoal generation)
+    planning_model_path: str = "/home/ei/models/qwen3.5-4b-q4.gguf"
+    planning_context_size: int = 4096
+    planning_reasoning_budget: int = 512
+
     # Mock mode
     mock_mode: bool = False
 
@@ -140,6 +146,10 @@ class Config:
     @property
     def plan_path(self) -> Path:
         return self.workspace / "plan.md"
+
+    @property
+    def subgoals_path(self) -> Path:
+        return self.workspace / "subgoals.md"
 
     @property
     def observations_path(self) -> Path:
@@ -248,6 +258,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.context_goal_max_chars = ctx.get("goal_max_chars", config.context_goal_max_chars)
         config.context_memory_max_chars = ctx.get("memory_max_chars", config.context_memory_max_chars)
         config.context_plan_max_chars = ctx.get("plan_max_chars", config.context_plan_max_chars)
+        config.context_subgoals_max_chars = ctx.get("subgoals_max_chars", config.context_subgoals_max_chars)
         config.context_intelligence_max_chars = ctx.get("intelligence_max_chars", config.context_intelligence_max_chars)
         config.context_env_max_chars = ctx.get("env_max_chars", config.context_env_max_chars)
         config.context_interventions_max_chars = ctx.get("interventions_max_chars", config.context_interventions_max_chars)
@@ -266,6 +277,11 @@ def load_config(path: str = "config.toml") -> Config:
 
         dashboard = data.get("dashboard", {})
         config.dashboard_port = dashboard.get("port", config.dashboard_port)
+
+        planning = data.get("planning", {})
+        config.planning_model_path = planning.get("model_path", config.planning_model_path)
+        config.planning_context_size = planning.get("context_size", config.planning_context_size)
+        config.planning_reasoning_budget = planning.get("reasoning_budget", config.planning_reasoning_budget)
 
         knowledge = data.get("knowledge", {})
         config.knowledge_enabled = knowledge.get("enabled", config.knowledge_enabled)
