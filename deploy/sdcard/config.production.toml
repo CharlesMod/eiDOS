@@ -13,7 +13,7 @@ min_p = 0.0
 presence_penalty = 1.5
 
 [tick]
-interval_s = 300
+interval_s = 5
 loop_detect_window = 3
 
 [compaction]
@@ -32,7 +32,6 @@ truncation_chars = 2000
 cmd_timeout_s = 120
 disk_min_gb = 1.0
 ram_max_pct = 85.0
-thermal_pause_c = 100.0
 bg_output_max_bytes = 10000000
 protected_patterns = [
     "rm\\s+-rf\\s+/",

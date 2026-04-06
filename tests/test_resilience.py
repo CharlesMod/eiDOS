@@ -538,7 +538,7 @@ class TestColdStart(unittest.TestCase):
 
         tick_count = [0]
 
-        def mock_complete(messages, cfg, max_tokens=None):
+        def mock_complete(messages, cfg, max_tokens=None, **kwargs):
             tick_count[0] += 1
             import eidos
             eidos._shutdown_requested = True
@@ -575,7 +575,7 @@ class TestColdStart(unittest.TestCase):
         self.config.goal_path.write_text("Say hello")
 
         # 4. Run one tick
-        def mock_complete(messages, cfg, max_tokens=None):
+        def mock_complete(messages, cfg, max_tokens=None, **kwargs):
             import eidos
             eidos._shutdown_requested = True
             return '<tool>bash</tool>\n<args>{"cmd": "echo hello"}</args>'

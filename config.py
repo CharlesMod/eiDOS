@@ -29,7 +29,7 @@ class Config:
     llm_presence_penalty: float = 1.5
 
     # Tick
-    tick_interval_s: int = 300
+    tick_interval_s: int = 5
     loop_detect_window: int = 3
 
     # Compaction
@@ -45,7 +45,6 @@ class Config:
     cmd_timeout_s: int = 120
     disk_min_gb: float = 1.0
     ram_max_pct: float = 85.0
-    thermal_pause_c: float = 75.0
     bg_output_max_bytes: int = 10_000_000  # 10MB cap for bg_run output files
     protected_patterns: List[str] = dataclasses.field(default_factory=lambda: [
         r"rm\s+-rf\s+/",
@@ -222,7 +221,6 @@ def load_config(path: str = "config.toml") -> Config:
         config.cmd_timeout_s = safety.get("cmd_timeout_s", config.cmd_timeout_s)
         config.disk_min_gb = safety.get("disk_min_gb", config.disk_min_gb)
         config.ram_max_pct = safety.get("ram_max_pct", config.ram_max_pct)
-        config.thermal_pause_c = safety.get("thermal_pause_c", config.thermal_pause_c)
         config.bg_output_max_bytes = safety.get("bg_output_max_bytes", config.bg_output_max_bytes)
         if "protected_patterns" in safety:
             config.protected_patterns = safety["protected_patterns"]

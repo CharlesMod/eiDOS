@@ -26,7 +26,7 @@ from memory import (
     validate_observations,
     write_memory,
 )
-from parser import parse_tool_call
+from parser import parse_tool_call, parse_reply
 from persona import (
     load_persona,
     save_persona,
@@ -43,7 +43,7 @@ from persona import (
 from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rotate_metrics, cleanup_old_snapshots
 from safety import check_ram, get_cpu_temp, kill_child_processes, check_disk_space
 from session import human_present, take_workspace_snapshot, workspace_diff
-from telemetry import write_heartbeat, append_metrics
+from telemetry import write_heartbeat, append_metrics, write_activity, get_cpu_pct
 from tools import execute_tool, refresh_jobs
 
 logger = logging.getLogger("eidos")
@@ -105,6 +105,45 @@ def _pfx(persona, config):
     if config.persona_enabled and persona:
         return format_prefix(persona)
     return "[eidos]"
+
+
+def _write_chat_reply(config: Config, tick_number: int, reply_text: str):
+    """Append a chat reply to chat_replies.jsonl."""
+    path = config.workspace / "chat_replies.jsonl"
+    entry = json.dumps({
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "tick": tick_number,
+        "text": reply_text[:2000],
+    })
+    with open(path, "a") as f:
+        f.write(entry + "\n")
+
+
+def _has_pending_interventions(config: Config) -> bool:
+    """Check if any un-consumed intervention files exist."""
+    idir = config.interventions_dir
+    if not idir.exists():
+        return False
+    for p in idir.iterdir():
+        if not p.name.startswith(".") and p.suffix != ".done":
+            return True
+    return False
+
+
+def _interruptible_sleep(config: Config):
+    """Sleep for tick_interval_s, but wake early if a chat message arrives."""
+    elapsed = 0.0
+    poll = 2.0
+    while elapsed < config.tick_interval_s:
+        remaining = config.tick_interval_s - elapsed
+        nap = min(poll, remaining)
+        time.sleep(nap)
+        elapsed += nap
+        if _shutdown_requested:
+            break
+        if _has_pending_interventions(config):
+            logger.info("Early wake: pending intervention detected")
+            break
 
 
 def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
@@ -273,33 +312,6 @@ def recover(config: Config) -> dict:
     return wal
 
 
-def _wait_for_llm(config: Config, pfx: str, max_wait: int = 120, interval: int = 5):
-    """Poll the LLM health endpoint until it's ready, up to max_wait seconds."""
-    import urllib.request
-    import urllib.error
-    health_url = config.llm_url.rstrip("/") + "/health"
-    deadline = time.monotonic() + max_wait
-    printed = False
-    while time.monotonic() < deadline:
-        if _shutdown_requested:
-            return
-        try:
-            req = urllib.request.Request(health_url)
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = resp.read().decode()
-                if '"ok"' in data:
-                    if printed:
-                        print(f"{pfx} LLM ready.")
-                    return
-        except (urllib.error.URLError, OSError, TimeoutError):
-            pass
-        if not printed:
-            print(f"{pfx} Waiting for LLM at {health_url}...")
-            printed = True
-        time.sleep(interval)
-    print(f"{pfx} LLM not ready after {max_wait}s — entering tick loop anyway")
-
-
 def run_loop(config: Config, persona=None, wal=None):
     """Main tick loop with session detection and compaction."""
     global _shutdown_requested
@@ -321,13 +333,10 @@ def run_loop(config: Config, persona=None, wal=None):
     idle_since = None  # timestamp when goal went missing
     operator_paused = False
     loop_start = time.monotonic()
+    last_goal_hash = None  # track goal changes
 
     pfx = _pfx(persona, config)
     print(f"{pfx} Starting tick loop (interval={config.tick_interval_s}s, mock={config.mock_mode})")
-
-    # Wait for LLM to be ready before entering tick loop (local deployments)
-    if not config.mock_mode and config.llm_local_only:
-        _wait_for_llm(config, pfx)
 
     while not _shutdown_requested and not goal_complete:
         # --- Session detection (skip in mock mode) ---
@@ -364,19 +373,6 @@ def run_loop(config: Config, persona=None, wal=None):
                         print(f"{pfx} Workspace changes detected on resume")
                     standby_snapshot = None
 
-        # --- Thermal check (Linux only) ---
-        cpu_temp = get_cpu_temp()
-        if cpu_temp is not None and cpu_temp > config.thermal_pause_c:
-            print(f"{pfx} Thermal throttle ({cpu_temp:.0f}°C > {config.thermal_pause_c}°C), skipping tick")
-            append_observation(config, {
-                "tick": tick_number,
-                "tool": "system",
-                "success": False,
-                "output": f"Thermal throttle: {cpu_temp:.0f}°C, pausing tick.",
-            })
-            time.sleep(config.tick_interval_s)
-            continue
-
         # --- Operator pause check ---
         pause_path = config.workspace / "paused"
         if pause_path.exists():
@@ -409,15 +405,34 @@ def run_loop(config: Config, persona=None, wal=None):
             if config.mock_mode:
                 print("[eidos] No goal.md — exiting (mock mode)")
                 break
-            time.sleep(config.tick_interval_s)
+            _interruptible_sleep(config)
             continue
         else:
             idle_since = None
+
+        # --- Goal change detection ---
+        import hashlib
+        goal_hash = hashlib.md5(goal.encode()).hexdigest()
+        if last_goal_hash is not None and goal_hash != last_goal_hash:
+            print(f"{pfx} NEW GOAL DETECTED — prompting subgoal planning")
+            goal_start_time = time.time()
+            append_observation(config, {
+                "tick": tick_number,
+                "tool": "system",
+                "success": True,
+                "output": (
+                    "NEW GOAL DETECTED. Your goal has changed. "
+                    "Use plan_goal to break this into subgoals with measurable end criteria. "
+                    "Call: plan_goal with goal=<the new goal text> and context=<any relevant context>."
+                ),
+            })
+        last_goal_hash = goal_hash
 
         # --- Compaction check ---
         tick_compacted = False
         if should_compact(config, ticks_since_compaction):
             print(f"{pfx} Dreaming... consolidating memories.")
+            write_activity(config, "dreaming", detail="consolidating memories")
             try:
                 if config.briefing_model:
                     compact_briefing(config, persona=persona)
@@ -485,13 +500,21 @@ def run_loop(config: Config, persona=None, wal=None):
                 print(content[:2000] if len(content) > 2000 else content)
 
         # --- LLM call ---
+        get_cpu_pct()  # prime CPU counter so post-LLM read captures active period
         llm_start = time.monotonic()
         tick_tool_name = ""
         tick_tool_success = False
         tick_tool_duration = 0.0
         tick_compacted = False
+        write_activity(config, "thinking", detail=f"tick {tick_number}")
+
+        def _on_token(partial_text):
+            write_activity(config, "thinking", detail=f"tick {tick_number}",
+                           partial=partial_text)
+
         try:
-            response = complete(messages, config, max_tokens=current_max_tokens)
+            response = complete(messages, config, max_tokens=current_max_tokens,
+                                on_token=_on_token)
             llm_elapsed = time.monotonic() - llm_start
             consecutive_failures = 0  # reset on success
 
@@ -559,26 +582,6 @@ def run_loop(config: Config, persona=None, wal=None):
 
         except LLMError as e:
             llm_elapsed = time.monotonic() - llm_start
-            err_str = str(e)
-
-            # 503 "Loading model" is a transient startup condition, not a real failure.
-            # Don't count it toward consecutive failures or trigger self-healing.
-            if "503" in err_str and "Loading model" in err_str:
-                print(f"{pfx} LLM still loading on tick {tick_number}, will retry next tick")
-                append_observation(config, {
-                    "tick": tick_number,
-                    "tool": "llm_loading",
-                    "success": False,
-                    "output": "LLM server still loading model. Waiting.",
-                })
-                write_wal(config, tick_number, ticks_since_compaction,
-                          goal_start_time, consecutive_failures,
-                          reasoning_exhaustions, current_max_tokens)
-                time.sleep(config.tick_interval_s)
-                tick_number += 1
-                ticks_since_compaction += 1
-                continue
-
             consecutive_failures += 1
             print(f"{pfx} LLM error on tick {tick_number} "
                   f"({consecutive_failures}/{config.llm_max_consecutive_failures}): {e}")
@@ -615,38 +618,57 @@ def run_loop(config: Config, persona=None, wal=None):
             print(f"\n--- RESPONSE ---")
             print(response)
 
+        # --- Parse reply (chat response to operator) ---
+        reply_text = parse_reply(response)
+        if reply_text:
+            _write_chat_reply(config, tick_number, reply_text)
+            print(f"{pfx} Tick {tick_number}: chat reply sent ({len(reply_text)} chars)")
+
         # --- Parse tool call ---
         call = parse_tool_call(response)
         if not call:
-            # Give the model actionable feedback so it can self-correct.
-            # Include the raw output snippet so it can see what went wrong,
-            # plus the expected format so it doesn't have to guess.
-            raw_snippet = response[:300].replace('\n', ' ').strip()
-            feedback = (
-                f"Could not parse a tool call from your response. "
-                f"Your output began with: {raw_snippet!r}\n\n"
-                f"Required format (exactly):\n"
-                f"<tool>TOOL_NAME</tool>\n"
-                f"<args>{{\"key\": \"value\"}}</args>\n\n"
-                f"Common mistakes: unescaped quotes inside JSON strings, "
-                f"missing </args> tag, arguments not valid JSON. "
-                f"Try again with a single, correctly-formatted tool call."
-            )
-            append_observation(config, {
-                "tick": tick_number,
-                "tool": "parse_error",
-                "success": False,
-                "output": feedback,
-            })
-            print(f"{pfx} Tick {tick_number}: no valid tool call parsed")
-            # Hash as empty for loop detection
-            recent_hashes.append("__no_tool__")
-            if persona and config.persona_enabled:
-                record_tick(persona, None, False)
-                last_tick_failed = True
-                tick_tool_name = "parse_error"
+            if reply_text:
+                # Reply-only turn: no tool call needed — valid chat response
+                append_observation(config, {
+                    "tick": tick_number,
+                    "tool": "chat_reply",
+                    "success": True,
+                    "output": f"Replied to operator: {reply_text[:200]}",
+                })
+                recent_hashes.append("__chat_reply__")
+                if persona and config.persona_enabled:
+                    record_tick(persona, "chat_reply", True)
+                    tick_tool_name = "chat_reply"
+                    tick_tool_success = True
+            else:
+                # Give the model actionable feedback so it can self-correct.
+                raw_snippet = response[:300].replace('\n', ' ').strip()
+                feedback = (
+                    f"Could not parse a tool call from your response. "
+                    f"Your output began with: {raw_snippet!r}\n\n"
+                    f"Required format (exactly):\n"
+                    f"<tool>TOOL_NAME</tool>\n"
+                    f"<args>{{\"key\": \"value\"}}</args>\n\n"
+                    f"Common mistakes: unescaped quotes inside JSON strings, "
+                    f"missing </args> tag, arguments not valid JSON. "
+                    f"Try again with a single, correctly-formatted tool call."
+                )
+                append_observation(config, {
+                    "tick": tick_number,
+                    "tool": "parse_error",
+                    "success": False,
+                    "output": feedback,
+                })
+                print(f"{pfx} Tick {tick_number}: no valid tool call parsed")
+                # Hash as empty for loop detection
+                recent_hashes.append("__no_tool__")
+                if persona and config.persona_enabled:
+                    record_tick(persona, None, False)
+                    last_tick_failed = True
+                    tick_tool_name = "parse_error"
         else:
             # --- Execute tool ---
+            write_activity(config, "executing", detail=call.tool)
             result = execute_tool(call, config)
             tick_tool_name = call.tool
             tick_tool_success = result.success
@@ -741,6 +763,7 @@ def run_loop(config: Config, persona=None, wal=None):
         _disk_ok, _disk_free = check_disk_space(min_gb=0)
         _ram_ok, _ram_pct = check_ram(config.ram_max_pct)
         _cpu_temp = get_cpu_temp()
+        _cpu_pct = get_cpu_pct()
         _uptime = time.monotonic() - loop_start
         _p_level = persona.get("level", 1) if persona else 1
         _p_mood = persona.get("mood", "neutral") if persona else "neutral"
@@ -763,7 +786,7 @@ def run_loop(config: Config, persona=None, wal=None):
             consecutive_failures=consecutive_failures,
             current_max_tokens=current_max_tokens,
             disk_free_gb=_disk_free, ram_pct=_ram_pct,
-            cpu_temp_c=_cpu_temp, llm_elapsed_s=llm_elapsed,
+            cpu_pct=_cpu_pct, cpu_temp_c=_cpu_temp, llm_elapsed_s=llm_elapsed,
             tool_name=tick_tool_name, tool_success=tick_tool_success,
             uptime_s=_uptime,
         )
@@ -783,7 +806,8 @@ def run_loop(config: Config, persona=None, wal=None):
                   reasoning_exhaustions, current_max_tokens)
 
         if not goal_complete and not _shutdown_requested:
-            time.sleep(config.tick_interval_s)
+            write_activity(config, "sleeping", detail=f"next tick in {config.tick_interval_s}s")
+            _interruptible_sleep(config)
 
     # --- Shutdown ---
     clear_wal(config)  # clean exit — no stale WAL

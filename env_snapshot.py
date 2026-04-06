@@ -119,8 +119,6 @@ def generate_alerts(config: Config) -> str:
             temp_path = "/sys/class/thermal/thermal_zone0/temp"
             with open(temp_path) as f:
                 temp_c = int(f.read().strip()) / 1000.0
-            if temp_c > config.thermal_pause_c:
-                alerts.append(f"⚠ THERMAL: {temp_c:.1f}°C (threshold {config.thermal_pause_c}°C)")
         except (OSError, ValueError):
             pass
 

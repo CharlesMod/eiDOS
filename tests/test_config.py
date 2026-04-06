@@ -15,7 +15,7 @@ class TestConfig(unittest.TestCase):
     def test_defaults(self):
         config = Config()
         self.assertEqual(config.llm_url, "http://127.0.0.1:8080")
-        self.assertEqual(config.tick_interval_s, 300)
+        self.assertEqual(config.tick_interval_s, 5)
         self.assertEqual(config.cmd_timeout_s, 120)
         self.assertGreater(len(config.protected_patterns), 0)
 
@@ -28,7 +28,7 @@ class TestConfig(unittest.TestCase):
             # Just verify it loads without error and overrides defaults
             self.assertIsInstance(config.llm_url, str)
             self.assertTrue(config.llm_url.startswith("http"))
-            self.assertEqual(config.tick_interval_s, 300)
+            self.assertEqual(config.tick_interval_s, 5)
 
     def test_env_var_override(self):
         os.environ["EIDOS_LLM_URL"] = "http://test:9999"

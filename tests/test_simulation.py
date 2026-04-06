@@ -1346,11 +1346,11 @@ class TestTimeoutScoping(SimulationTestBase):
                          "Default LLM timeout should be 300s for slow Pi")
         self.assertEqual(default_config.cmd_timeout_s, 120,
                          "Default cmd timeout should be 120s for Pi")
-        # A Pi 4 running a 4B model at ~3 t/s needs ~20 min per tick for
+        # A Pi 4 running a 4B model at ~3 t/s needs ~4 min per tick for
         # inference alone.  The tick interval is the sleep BETWEEN ticks so
-        # 5 min (300 s) is the correct default — actual wall time is ~25 min.
-        self.assertEqual(default_config.tick_interval_s, 300,
-                         "Default tick interval should be 300s (5 min between ticks)")
+        # 5s keeps ticks back-to-back for continuous operation.
+        self.assertEqual(default_config.tick_interval_s, 5,
+                         "Default tick interval should be 5s (back-to-back ticks)")
 
     def test_truncation_limits_memory(self):
         """Output truncation prevents memory overflow from large outputs."""
