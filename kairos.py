@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""eiDOS — autonomous LLM supervisor for Raspberry Pi.
+"""Kairos — autonomous LLM supervisor for Raspberry Pi.
 
 Entry point: crash recovery, tick loop, signal handling, session detection.
 """
@@ -43,10 +43,10 @@ from persona import (
 from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rotate_metrics, cleanup_old_snapshots
 from safety import check_ram, get_cpu_temp, kill_child_processes, check_disk_space
 from session import human_present, take_workspace_snapshot, workspace_diff
-from telemetry import write_heartbeat, append_metrics
+from telemetry import write_heartbeat, append_metrics, write_activity
 from tools import execute_tool, refresh_jobs
 
-logger = logging.getLogger("eidos")
+logger = logging.getLogger("kairos")
 
 
 # --- Globals for signal handling ---
@@ -59,7 +59,7 @@ def _handle_signal(signum, frame):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="eiDOS autonomous supervisor")
+    parser = argparse.ArgumentParser(description="Kairos autonomous supervisor")
     parser.add_argument("--config", default="config.toml", help="Path to config file")
     parser.add_argument("--llm-url", default=None, help="Override LLM endpoint URL")
     args = parser.parse_args()
@@ -104,7 +104,7 @@ def _pfx(persona, config):
     """Return persona prefix or fallback."""
     if config.persona_enabled and persona:
         return format_prefix(persona)
-    return "[eidos]"
+    return "[kairos]"
 
 
 def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
@@ -169,18 +169,18 @@ def recover(config: Config) -> dict:
     """Crash recovery: validate state, fix corruption, log restart.
     Returns WAL state dict (may be empty on fresh start).
     """
-    print("[eidos] Running crash recovery...")
+    print("[kairos] Running crash recovery...")
 
     # 0. Read WAL (tick state from before crash)
     wal = read_wal(config)
     if wal:
-        print(f"[eidos] WAL recovered: tick={wal.get('tick_number')}, "
+        print(f"[kairos] WAL recovered: tick={wal.get('tick_number')}, "
               f"compaction_gap={wal.get('ticks_since_compaction')}")
 
     # 1. Verify goal.md
     goal = read_goal(config)
     if not goal:
-        print("[eidos] WARNING: No goal.md found. Agent will idle until one is created.")
+        print("[kairos] WARNING: No goal.md found. Agent will idle until one is created.")
 
     # 2. Create memory.md if missing, or restore from snapshot if empty
     mem_missing = not config.memory_path.exists()
@@ -206,7 +206,7 @@ def recover(config: Config) -> dict:
                     if content.strip():
                         write_memory(config, content)
                         restored = True
-                        print(f"[eidos] Restored memory.md from snapshot: {snapshots[0].name}")
+                        print(f"[kairos] Restored memory.md from snapshot: {snapshots[0].name}")
                         append_observation(config, {
                             "tick": 0,
                             "tool": "system",
@@ -217,12 +217,12 @@ def recover(config: Config) -> dict:
                     pass
         if not restored:
             write_memory(config, "# Working Memory\nFresh start. No prior context.")
-            print("[eidos] Created initial memory.md")
+            print("[kairos] Created initial memory.md")
 
     # 3. Validate observations.jsonl
     truncated = validate_observations(config)
     if truncated:
-        print(f"[eidos] Truncated {truncated} malformed line(s) from observations.jsonl")
+        print(f"[kairos] Truncated {truncated} malformed line(s) from observations.jsonl")
         append_observation(config, {
             "tick": 0,
             "tool": "system",
@@ -235,7 +235,7 @@ def recover(config: Config) -> dict:
     jobs = refresh_jobs(config)
     dead = [j for j in jobs if j["status"] != "running"]
     if dead:
-        print(f"[eidos] Found {len(dead)} completed/dead background jobs")
+        print(f"[kairos] Found {len(dead)} completed/dead background jobs")
         dead_names = ", ".join(j.get("cmd", "?")[:60] for j in dead)
         append_observation(config, {
             "tick": 0,
@@ -248,14 +248,14 @@ def recover(config: Config) -> dict:
     # 5. Log recovery with full crash context
     if wal:
         recovery_detail = (
-            f"eiDOS recovered from crash. Resuming at tick {wal.get('tick_number', '?')}. "
+            f"Kairos recovered from crash. Resuming at tick {wal.get('tick_number', '?')}. "
             f"State before crash: {wal.get('consecutive_failures', 0)} consecutive LLM failures, "
             f"{wal.get('reasoning_exhaustions', 0)} reasoning exhaustions, "
             f"max_tokens was {wal.get('current_max_tokens', config.llm_max_tokens)}. "
             f"Review recent observations — the last action may not have completed."
         )
     else:
-        recovery_detail = "eiDOS starting fresh. No prior crash state found."
+        recovery_detail = "Kairos starting fresh. No prior crash state found."
     append_observation(config, {
         "tick": 0,
         "tool": "system",
@@ -265,39 +265,12 @@ def recover(config: Config) -> dict:
 
     # 6. Rotate logs and clean old archives
     if rotate_if_needed(config):
-        print("[eidos] Rotated observations.jsonl")
+        print("[kairos] Rotated observations.jsonl")
     deleted = cleanup_old_archives(config)
     if deleted:
-        print(f"[eidos] Cleaned {deleted} old archive(s)")
+        print(f"[kairos] Cleaned {deleted} old archive(s)")
 
     return wal
-
-
-def _wait_for_llm(config: Config, pfx: str, max_wait: int = 120, interval: int = 5):
-    """Poll the LLM health endpoint until it's ready, up to max_wait seconds."""
-    import urllib.request
-    import urllib.error
-    health_url = config.llm_url.rstrip("/") + "/health"
-    deadline = time.monotonic() + max_wait
-    printed = False
-    while time.monotonic() < deadline:
-        if _shutdown_requested:
-            return
-        try:
-            req = urllib.request.Request(health_url)
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = resp.read().decode()
-                if '"ok"' in data:
-                    if printed:
-                        print(f"{pfx} LLM ready.")
-                    return
-        except (urllib.error.URLError, OSError, TimeoutError):
-            pass
-        if not printed:
-            print(f"{pfx} Waiting for LLM at {health_url}...")
-            printed = True
-        time.sleep(interval)
-    print(f"{pfx} LLM not ready after {max_wait}s — entering tick loop anyway")
 
 
 def run_loop(config: Config, persona=None, wal=None):
@@ -324,10 +297,6 @@ def run_loop(config: Config, persona=None, wal=None):
 
     pfx = _pfx(persona, config)
     print(f"{pfx} Starting tick loop (interval={config.tick_interval_s}s, mock={config.mock_mode})")
-
-    # Wait for LLM to be ready before entering tick loop (local deployments)
-    if not config.mock_mode and config.llm_local_only:
-        _wait_for_llm(config, pfx)
 
     while not _shutdown_requested and not goal_complete:
         # --- Session detection (skip in mock mode) ---
@@ -407,7 +376,7 @@ def run_loop(config: Config, persona=None, wal=None):
             if idle_since is None:
                 idle_since = time.time()
             if config.mock_mode:
-                print("[eidos] No goal.md — exiting (mock mode)")
+                print("[kairos] No goal.md — exiting (mock mode)")
                 break
             time.sleep(config.tick_interval_s)
             continue
@@ -418,6 +387,7 @@ def run_loop(config: Config, persona=None, wal=None):
         tick_compacted = False
         if should_compact(config, ticks_since_compaction):
             print(f"{pfx} Dreaming... consolidating memories.")
+            write_activity(config, "dreaming", detail="consolidating memories")
             try:
                 if config.briefing_model:
                     compact_briefing(config, persona=persona)
@@ -490,8 +460,15 @@ def run_loop(config: Config, persona=None, wal=None):
         tick_tool_success = False
         tick_tool_duration = 0.0
         tick_compacted = False
+        write_activity(config, "thinking", detail=f"tick {tick_number}")
+
+        def _on_token(partial_text):
+            write_activity(config, "thinking", detail=f"tick {tick_number}",
+                           partial=partial_text)
+
         try:
-            response = complete(messages, config, max_tokens=current_max_tokens)
+            response = complete(messages, config, max_tokens=current_max_tokens,
+                                on_token=_on_token)
             llm_elapsed = time.monotonic() - llm_start
             consecutive_failures = 0  # reset on success
 
@@ -559,26 +536,6 @@ def run_loop(config: Config, persona=None, wal=None):
 
         except LLMError as e:
             llm_elapsed = time.monotonic() - llm_start
-            err_str = str(e)
-
-            # 503 "Loading model" is a transient startup condition, not a real failure.
-            # Don't count it toward consecutive failures or trigger self-healing.
-            if "503" in err_str and "Loading model" in err_str:
-                print(f"{pfx} LLM still loading on tick {tick_number}, will retry next tick")
-                append_observation(config, {
-                    "tick": tick_number,
-                    "tool": "llm_loading",
-                    "success": False,
-                    "output": "LLM server still loading model. Waiting.",
-                })
-                write_wal(config, tick_number, ticks_since_compaction,
-                          goal_start_time, consecutive_failures,
-                          reasoning_exhaustions, current_max_tokens)
-                time.sleep(config.tick_interval_s)
-                tick_number += 1
-                ticks_since_compaction += 1
-                continue
-
             consecutive_failures += 1
             print(f"{pfx} LLM error on tick {tick_number} "
                   f"({consecutive_failures}/{config.llm_max_consecutive_failures}): {e}")
@@ -647,6 +604,7 @@ def run_loop(config: Config, persona=None, wal=None):
                 tick_tool_name = "parse_error"
         else:
             # --- Execute tool ---
+            write_activity(config, "executing", detail=call.tool)
             result = execute_tool(call, config)
             tick_tool_name = call.tool
             tick_tool_success = result.success
@@ -700,7 +658,7 @@ def run_loop(config: Config, persona=None, wal=None):
                         print(f"{pfx} Earned title: {t}")
                     save_persona(config.workspace, persona)
                 else:
-                    print(f"[eidos] Goal declared complete: {summary}")
+                    print(f"[kairos] Goal declared complete: {summary}")
                 append_observation(config, {
                     "tick": tick_number,
                     "tool": "system",
@@ -783,6 +741,7 @@ def run_loop(config: Config, persona=None, wal=None):
                   reasoning_exhaustions, current_max_tokens)
 
         if not goal_complete and not _shutdown_requested:
+            write_activity(config, "sleeping", detail=f"next tick in {config.tick_interval_s}s")
             time.sleep(config.tick_interval_s)
 
     # --- Shutdown ---
@@ -795,12 +754,12 @@ def run_loop(config: Config, persona=None, wal=None):
         pfx = _pfx(persona, config)
         print(f"{pfx} Shutting down. See you next time.")
     else:
-        print("[eidos] Shutting down...")
+        print("[kairos] Shutting down...")
     append_observation(config, {
         "tick": tick_number,
         "tool": "system",
         "success": True,
-        "output": "eiDOS shutting down cleanly.",
+        "output": "Kairos shutting down cleanly.",
     })
 
 

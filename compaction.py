@@ -22,6 +22,7 @@ from memory import (
     write_plan,
     read_recent_observations,
     count_observation_chars,
+    truncate_observations,
     append_observation,
 )
 from llm import complete, ReasoningExhausted
@@ -159,12 +160,17 @@ def compact(config: Config, persona: dict = None) -> None:
     # Atomic write
     write_memory(config, new_memory.strip())
 
-    # Log the compaction event
+    # Truncate observations — they've been distilled into memory.
+    # Without this, the file grows forever and should_compact() fires every tick.
+    removed = truncate_observations(config)
+    logger.info("compaction: truncated %d observations after distillation", removed)
+
+    # Log the compaction event (this goes into the now-clean file)
     append_observation(config, {
         "tick": "compaction",
         "tool": "dream",
         "success": True,
-        "output": f"Compacted memory. Before: {len(current_memory)} chars, after: {len(new_memory)} chars.",
+        "output": f"Compacted memory. Before: {len(current_memory)} chars, after: {len(new_memory)} chars. Cleared {removed} observations.",
     })
 
 
@@ -408,14 +414,19 @@ def compact_briefing(config: Config, persona: dict = None) -> None:
     # Store knowledge extractions
     stored = _store_extractions(config, extractions, source_goal=goal or "")
 
-    # Log the dream event
+    # Truncate observations — they've been distilled into plan/knowledge.
+    # Without this, the file grows forever and should_compact() fires every tick.
+    removed = truncate_observations(config)
+    logger.info("dream: truncated %d observations after distillation", removed)
+
+    # Log the dream event (this goes into the now-clean file)
     append_observation(config, {
         "tick": "compaction",
         "tool": "dream",
         "success": True,
         "output": (
             f"Dream cycle complete. Plan: {len(current_plan)} → {len(new_plan or '')} chars. "
-            f"Knowledge: {stored} entries extracted."
+            f"Knowledge: {stored} entries extracted. Cleared {removed} observations."
         ),
     })
 

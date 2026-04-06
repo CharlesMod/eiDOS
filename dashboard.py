@@ -129,6 +129,7 @@ def build_status(config: Config) -> dict:
     heartbeat = _read_json(config.workspace / "heartbeat.json")
     persona = _read_json(config.workspace / "persona.json")
     wal = _read_json(config.workspace / "wal.json")
+    activity = _read_json(config.workspace / "activity.json")
     goal = _read_text(config.workspace / "goal.md")
     memory = _read_text(config.workspace / "memory.md")
     plan = _read_text(config.workspace / "plan.md")[:2000]
@@ -177,6 +178,7 @@ def build_status(config: Config) -> dict:
         "narration": narration,
         "flavor": flavor,
         "paused": paused,
+        "activity": activity,
         "wal": {
             "tick": wal.get("tick_number", 0),
             "consecutive_failures": wal.get("consecutive_failures", 0),
@@ -653,6 +655,99 @@ body::after {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+/* Thought Bubble */
+.thought-bubble-wrap {
+    position: relative;
+    min-height: 50px;
+    margin-bottom: 4px;
+}
+#thought-bubble {
+    position: relative;
+    background: #111;
+    border: 1px solid #1a3a1a;
+    border-radius: 12px;
+    padding: 6px 12px;
+    font-size: 11px;
+    color: #668866;
+    max-width: 320px;
+    margin: 0 auto 8px auto;
+    text-align: center;
+    min-height: 28px;
+    transition: opacity 0.4s, border-color 0.4s;
+}
+#thought-bubble.has-tokens {
+    text-align: left;
+    font-size: 10px;
+    max-height: 120px;
+    overflow-y: auto;
+    word-break: break-word;
+}
+#thought-bubble.state-idle {
+    border-color: #2a4a2a;
+    color: #445544;
+}
+#thought-bubble::after {
+    content: '';
+    position: absolute;
+    bottom: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 8px solid #1a3a1a;
+}
+#thought-bubble.state-thinking {
+    border-color: #00ff41;
+    color: #00ff41;
+    text-shadow: 0 0 6px rgba(0,255,65,0.3);
+}
+#thought-bubble.state-dreaming {
+    border-color: #aa88ff;
+    color: #aa88ff;
+    text-shadow: 0 0 6px rgba(170,136,255,0.3);
+}
+#thought-bubble.state-executing {
+    border-color: #ffb000;
+    color: #ffb000;
+}
+#thought-bubble.state-sleeping {
+    border-color: #1a3a1a;
+    color: #333;
+}
+#thought-bubble.state-error {
+    border-color: #ff4444;
+    color: #ff4444;
+}
+@keyframes pulse-dots {
+    0%, 80%, 100% { opacity: 0.2; }
+    40% { opacity: 1; }
+}
+.thinking-dots span {
+    animation: pulse-dots 1.4s infinite;
+    display: inline-block;
+    font-size: 16px;
+}
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink-cursor {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+.blink {
+    display: inline;
+    animation: blink-cursor 1.2s step-end infinite;
+    color: inherit;
+}
+.tool-verb {
+    color: #557755;
+    font-style: italic;
+}
+.thought-elapsed {
+    font-size: 9px;
+    color: #555;
+    margin-top: 2px;
+}
 </style>
 </head>
 <body>
@@ -667,6 +762,12 @@ body::after {
     <div class="panel">
         <div class="panel-title">Buddy</div>
         <div id="creature-box">
+            <div class="thought-bubble-wrap">
+                <div id="thought-bubble" class="state-sleeping">
+                    <span id="thought-text">zzz</span>
+                    <div class="thought-elapsed" id="thought-elapsed"></div>
+                </div>
+            </div>
             <pre id="creature-art"></pre>
             <div class="creature-info">
                 <span id="name-level"></span> · <span id="mood-display"></span><br>
@@ -929,6 +1030,166 @@ function updatePauseState(paused) {
     }
 }
 
+var _hasGoal = false;
+
+// Creature-voice idle thoughts (rotated between ticks)
+var _idleMusings = [
+    'hmm\u2026',
+    '\u2026',
+    'i wonder\u2026',
+    'what was i\u2026',
+    'oh\u2026',
+    'hm',
+    'thinking\u2026',
+    'wait\u2026',
+    '\u2026\u2026',
+    'let me think\u2026',
+];
+var _lastMusingIdx = -1;
+
+function pickMusing() {
+    let idx;
+    do { idx = Math.floor(Math.random() * _idleMusings.length); } while (idx === _lastMusingIdx);
+    _lastMusingIdx = idx;
+    return _idleMusings[idx];
+}
+var _currentMusing = pickMusing();
+var _musingRotateAt = Date.now() + 6000;
+
+// Map tool names to creature verbs for inline replacement
+var _toolVerbs = {
+    'bash': '\u2699 tinkering\u2026',
+    'memorize': '\ud83d\udcad making a mental note\u2026',
+    'remember': '\ud83d\udcad searching memory\u2026',
+    'recall': '\ud83d\udcad trying to remember\u2026',
+    'write_file': '\u270d writing something down\u2026',
+    'read_file': '\ud83d\udc41 reading\u2026',
+    'update_plan': '\ud83d\udcdd making plans\u2026',
+    'http_get': '\ud83c\udf10 reaching out\u2026',
+    'bg_run': '\u2699 starting something\u2026',
+    'bg_check': '\ud83d\udc41 checking on something\u2026',
+    'goal_complete': '\u2728 i did it!',
+    'ask_supervisor': '\u270b need to ask\u2026',
+};
+
+// Strip tool XML, replace with creature verbs, keep thinking-out-loud text
+function humanizePartial(partial) {
+    if (!partial) return '';
+    // Replace <tool>name</tool>\n<args>...json...</args> with verb
+    let out = partial.replace(/<tool>(\w+)<\/tool>\s*\n?<args>[^<]*<\/args>/g, function(_, name) {
+        return '\n' + (_toolVerbs[name] || '\u2699 doing something\u2026') + '\n';
+    });
+    // Handle incomplete tool tags at the end (still streaming)
+    out = out.replace(/<tool>(\w+)<\/tool>\s*\n?<args>[^<]*$/, function(_, name) {
+        return '\n' + (_toolVerbs[name] || '\u2699 doing something\u2026');
+    });
+    out = out.replace(/<tool>(\w+)<\/tool>\s*$/, function(_, name) {
+        return '\n' + (_toolVerbs[name] || '\u2699 doing something\u2026');
+    });
+    out = out.replace(/<tool>\w*$/, '');
+    out = out.replace(/<tool>[^<]*$/, '');
+    return out.trim();
+}
+
+function interpretTool(toolName) {
+    return _toolVerbs[toolName] || 'doing something\u2026';
+}
+
+function updateThoughtBubble(activity) {
+    let bubble = document.getElementById('thought-bubble');
+    let textEl = document.getElementById('thought-text');
+    let elapsedEl = document.getElementById('thought-elapsed');
+    if (!bubble || !textEl) return;
+
+    let state = (activity && activity.state) || 'sleeping';
+    let detail = (activity && activity.detail) || '';
+    let since = (activity && activity.since) || 0;
+    let partial = (activity && activity.partial) || '';
+
+    // Remove all state classes, then add current
+    bubble.className = '';
+
+    let dots = '<span class="thinking-dots"><span>\u00b7</span><span>\u00b7</span><span>\u00b7</span></span>';
+
+    if (state === 'thinking') {
+        bubble.classList.add('state-thinking');
+        let humanized = humanizePartial(partial);
+        if (humanized) {
+            bubble.classList.add('has-tokens');
+            // Escape HTML, then convert newlines to <br>, then inject cursor
+            let html = escapeHtml(humanized).replace(/\n/g, '<br>');
+            textEl.innerHTML = html + '<span class="blink">\u258c</span>';
+            bubble.scrollTop = bubble.scrollHeight;
+        } else {
+            textEl.innerHTML = dots;
+        }
+    } else if (state === 'dreaming') {
+        bubble.classList.add('state-dreaming');
+        textEl.innerHTML = 'dreaming ' + dots;
+    } else if (state === 'executing') {
+        bubble.classList.add('state-executing');
+        textEl.textContent = interpretTool(detail);
+    } else if (state === 'sleeping' && _hasGoal) {
+        // Between ticks but has purpose — creature is idling, not asleep
+        bubble.classList.add('state-idle');
+        if (Date.now() > _musingRotateAt) {
+            _currentMusing = pickMusing();
+            _musingRotateAt = Date.now() + 6000 + Math.random() * 4000;
+        }
+        textEl.innerHTML = _currentMusing + ' <span class="blink">\u258c</span>';
+    } else if (state === 'sleeping') {
+        // No goal — genuinely idle
+        bubble.classList.add('state-sleeping');
+        textEl.textContent = 'zzz';
+    } else if (state === 'error') {
+        bubble.classList.add('state-error');
+        textEl.textContent = '\u26a0 ' + (detail || 'something went wrong');
+    } else {
+        bubble.classList.add('state-sleeping');
+        textEl.textContent = '\u2026';
+    }
+
+    // Elapsed time — only during active states
+    if (since > 0 && (state === 'thinking' || state === 'executing' || state === 'dreaming')) {
+        let elapsed = Math.max(0, Math.floor(Date.now() / 1000 - since));
+        let m = Math.floor(elapsed / 60);
+        let s = elapsed % 60;
+        elapsedEl.textContent = (m > 0 ? m + 'm ' : '') + s + 's';
+    } else {
+        elapsedEl.textContent = '';
+    }
+}
+
+// Poll activity — fast during active states, gentle during idle
+var _pollTimer = null;
+function schedulePoll(ms) {
+    if (_pollTimer) clearTimeout(_pollTimer);
+    _pollTimer = setTimeout(pollActivity, ms);
+}
+
+async function pollActivity() {
+    try {
+        let resp = await fetch('/api/activity');
+        if (resp.ok) {
+            let data = await resp.json();
+            _lastActivity = data;
+            updateThoughtBubble(data);
+            // Active states get fast polling, sleeping gets slow
+            let active = data.state === 'thinking' || data.state === 'executing' || data.state === 'dreaming';
+            schedulePoll(active ? 500 : 3000);
+            return;
+        }
+    } catch(e) {}
+    schedulePoll(3000);
+}
+
+// Also tick idle musings even without a network poll
+setInterval(function() {
+    if (_lastActivity && _lastActivity.state === 'sleeping' && _hasGoal) {
+        updateThoughtBubble(_lastActivity);
+    }
+}, 2000);
+
 async function togglePause() {
     try {
         let resp = await fetch('/api/pause', { method: 'POST' });
@@ -1097,6 +1358,9 @@ function update(data) {
     updateNarration(data);
     updatePlan(data);
     updatePauseState(data.paused);
+    _hasGoal = !!(data.goal && data.goal.trim());
+    updateThoughtBubble(data.activity);
+    _lastActivity = data.activity || {};
 
     // Last update
     document.getElementById('last-update').textContent =
@@ -1168,12 +1432,15 @@ async function poll() {
 }
 
 // Initial load + periodic poll
+let _lastActivity = {};
 poll();
 loadChat();
 loadKnowledge();
 loadDreams();
 setInterval(poll, {{INTERVAL_MS}});
 setInterval(spawnParticle, 3000);
+// Kick off activity polling (self-scheduling: fast when active, slow when idle)
+pollActivity();
 document.getElementById('chat-input').addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
 });
@@ -1211,6 +1478,10 @@ def _make_handler(config: Config):
             elif self.path == "/api/ping":
                 ping = build_ping(config)
                 self._respond(200, "application/json", json.dumps(ping))
+
+            elif self.path == "/api/activity":
+                activity = _read_json(config.workspace / "activity.json")
+                self._respond(200, "application/json", json.dumps(activity))
 
             elif self.path == "/api/chat":
                 chat = build_chat(config)

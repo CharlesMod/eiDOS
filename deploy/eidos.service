@@ -1,7 +1,7 @@
 [Unit]
 Description=eiDOS autonomous LLM agent
 After=network.target llama-server.service
-Requires=llama-server.service
+Wants=llama-server.service
 
 [Service]
 Type=simple

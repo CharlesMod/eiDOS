@@ -154,6 +154,28 @@ def count_observation_chars(config: Config) -> int:
         return 0
 
 
+def truncate_observations(config: Config) -> int:
+    """Clear observations.jsonl after successful compaction.
+
+    The distilled content now lives in memory/plan, so the raw
+    observations are no longer needed.  Without this, the file grows
+    monotonically and should_compact() fires every tick.
+
+    Returns the number of lines removed.
+    """
+    try:
+        with open(config.observations_path) as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return 0
+
+    removed = len(lines)
+    # Atomic rewrite: empty the file
+    with open(config.observations_path, "w") as f:
+        pass
+    return removed
+
+
 def count_observation_lines(config: Config) -> int:
     """Count lines in observations.jsonl."""
     try:

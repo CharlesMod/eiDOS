@@ -2,6 +2,7 @@
 
 heartbeat.json — atomic overwrite every tick. Single point-in-time snapshot.
 metrics.jsonl — append-only time series. One line per tick.
+activity.json — current agent state (thinking, executing, sleeping, dreaming).
 Both are read-only by the dashboard; eiDOS is the sole writer.
 """
 
@@ -10,6 +11,24 @@ import time
 from pathlib import Path
 
 from config import Config
+
+
+def write_activity(config: Config, state: str, *, detail: str = "",
+                   partial: str = ""):
+    """Write current activity state for dashboard live display.
+
+    States: sleeping, thinking, executing, dreaming, error
+    *partial* contains streaming LLM output for live token display.
+    """
+    path = config.workspace / "activity.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({
+        "state": state,
+        "since": time.time(),
+        "detail": detail,
+        "partial": partial[-500:] if partial else "",
+    }))
+    tmp.rename(path)
 
 
 def write_heartbeat(config: Config, *, tick: int, level: int, mood: str,

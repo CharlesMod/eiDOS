@@ -216,17 +216,48 @@ class TestCompactionTriggers(unittest.TestCase):
 
     @patch("compaction.complete", return_value="# New consolidated memory.")
     def test_compact_logs_compaction_observation(self, _mock):
-        """Compaction appends a compaction event to observations.jsonl."""
+        """Compaction appends a compaction event to observations.jsonl.
+        After truncation, the compaction event should be the only entry."""
         write_memory(self.config, "old memory")
         append_observation(self.config, {"tick": 1, "tool": "bash", "success": True, "output": "work"})
         compact(self.config)
         import json
         with open(self.config.observations_path) as f:
             lines = f.readlines()
+        self.assertEqual(len(lines), 1)  # Only the compaction event survives
         last = json.loads(lines[-1])
         self.assertEqual(last["tick"], "compaction")
         self.assertEqual(last["tool"], "dream")
         self.assertTrue(last["success"])
+
+    @patch("compaction.complete", return_value="# New consolidated memory.")
+    def test_compact_truncates_observations(self, _mock):
+        """After compaction, observations.jsonl should contain only the
+        compaction event — not the pre-compaction observations.
+        This is THE bug: without truncation, should_compact() fires every tick."""
+        write_memory(self.config, "old memory")
+        for i in range(100):
+            append_observation(self.config, {"tick": i, "tool": "bash", "success": True, "output": "x" * 50})
+
+        # Precondition: file is large enough to trigger compaction
+        from memory import count_observation_chars
+        self.assertGreater(count_observation_chars(self.config), self.config.compaction_token_threshold)
+
+        compact(self.config)
+
+        # Post-condition: file should be tiny (just the compaction event)
+        self.assertLess(count_observation_chars(self.config), self.config.compaction_token_threshold)
+
+    @patch("compaction.complete", return_value="# New consolidated memory.")
+    def test_should_compact_false_after_compaction(self, _mock):
+        """The full lifecycle: accumulate → compact → should_compact is False."""
+        write_memory(self.config, "old memory")
+        for i in range(100):
+            append_observation(self.config, {"tick": i, "tool": "bash", "success": True, "output": "x" * 50})
+
+        self.assertTrue(should_compact(self.config, ticks_since_last=0))
+        compact(self.config)
+        self.assertFalse(should_compact(self.config, ticks_since_last=0))
 
     @patch("compaction.complete", return_value="# Consolidated with personality.")
     def test_compact_with_persona(self, mock_complete):
