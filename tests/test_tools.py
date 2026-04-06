@@ -383,9 +383,9 @@ class TestTools(unittest.TestCase):
         self.assertIn("'fact' required", result.output)
 
     def test_memorize_no_tags(self):
+        """Missing tags defaults to ['general'] and succeeds."""
         result = tool_memorize({"fact": "something"}, self.config)
-        self.assertFalse(result.success)
-        self.assertIn("'tags' required", result.output)
+        self.assertTrue(result.success)
 
     def test_memorize_tags_as_string(self):
         """Tags can be provided as comma-separated string."""

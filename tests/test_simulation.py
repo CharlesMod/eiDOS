@@ -476,7 +476,7 @@ class TestLLMTimeoutAndErrors(SimulationTestBase):
         garbage = [
             "I think we should maybe do something",  # no tool tags
             "```json\n{\"cmd\": \"ls\"}\n```",        # wrong format
-            "<tool>bash</tool><args>NOT JSON</args>",  # bad JSON in args
+            "<tool>bash</tool><args>{not: json}</args>",  # broken JSON (looks like JSON attempt)
             "",                                          # empty
             "   \n\n  ",                                # whitespace only
         ]

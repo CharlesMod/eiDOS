@@ -41,9 +41,27 @@ def _truncate(text: str, limit: int, full_path: Optional[str]) -> str:
     return text[:limit] + suffix
 
 
+def _normalize_workspace_path(path: str, config: Config) -> Path:
+    """Resolve a file path against the workspace, stripping redundant workspace prefix.
+
+    The model often emits "workspace/foo.md" because the prompt says
+    'Working directory: workspace/'. That creates workspace/workspace/foo.md.
+    Strip the leading workspace dir name to avoid double-nesting.
+    """
+    p = Path(path)
+    if not p.is_absolute():
+        # Strip leading workspace dir name (e.g. "workspace/foo" -> "foo")
+        ws_name = Path(config.workspace_dir).name
+        parts = p.parts
+        if parts and parts[0] == ws_name:
+            p = Path(*parts[1:]) if len(parts) > 1 else Path(".")
+        p = Path(config.workspace_dir) / p
+    return p
+
+
 def tool_bash(args: dict, config: Config) -> ToolResult:
     """Run a shell command with safety checks and output truncation."""
-    cmd = args.get("cmd", "")
+    cmd = args.get("cmd", "") or args.get("command", "")
     if not cmd:
         return ToolResult(output="Error: no 'cmd' argument provided", full_output_path=None, success=False, duration_s=0)
 
@@ -127,10 +145,7 @@ def tool_write_file(args: dict, config: Config) -> ToolResult:
 
     start = time.monotonic()
     try:
-        p = Path(path)
-        # Resolve relative paths against workspace dir
-        if not p.is_absolute():
-            p = Path(config.workspace_dir) / p
+        p = _normalize_workspace_path(path, config)
         # Prevent path traversal outside workspace
         resolved = p.resolve()
         workspace_resolved = Path(config.workspace_dir).resolve()
@@ -152,10 +167,7 @@ def tool_read_file(args: dict, config: Config) -> ToolResult:
 
     start = time.monotonic()
     try:
-        p = Path(path)
-        # Resolve relative paths against workspace dir
-        if not p.is_absolute():
-            p = Path(config.workspace_dir) / p
+        p = _normalize_workspace_path(path, config)
         # Prevent path traversal outside workspace
         resolved = p.resolve()
         workspace_resolved = Path(config.workspace_dir).resolve()
@@ -380,7 +392,9 @@ def tool_memorize(args: dict, config: Config) -> ToolResult:
     """Store a durable knowledge entry in the long-term knowledge store."""
     from knowledge import store_entry
 
-    fact = args.get("fact", "")
+    # Accept common model hallucinations: "value"/"content"/"knowledge" as "fact",
+    # and "key" as a fallback tag source.
+    fact = args.get("fact", "") or args.get("value", "") or args.get("content", "") or args.get("knowledge", "")
     if not fact:
         return ToolResult(output="Error: 'fact' required", full_output_path=None, success=False, duration_s=0)
 
@@ -394,8 +408,13 @@ def tool_memorize(args: dict, config: Config) -> ToolResult:
     tags = args.get("tags", [])
     if isinstance(tags, str):
         tags = [t.strip() for t in tags.split(",") if t.strip()]
+    # Fall back: use "key" as a single tag if no tags provided
     if not tags:
-        return ToolResult(output="Error: 'tags' required (list of strings)", full_output_path=None, success=False, duration_s=0)
+        key = args.get("key", "")
+        if key:
+            tags = [key]
+    if not tags:
+        tags = ["general"]
 
     category = args.get("category", "facts")
     confidence = args.get("confidence", "tentative")

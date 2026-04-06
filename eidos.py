@@ -23,6 +23,7 @@ from llm import complete, LLMError, ReasoningExhausted
 from memory import (
     append_observation,
     read_goal,
+    read_subgoals,
     validate_observations,
     write_memory,
 )
@@ -410,22 +411,13 @@ def run_loop(config: Config, persona=None, wal=None):
         else:
             idle_since = None
 
-        # --- Goal change detection ---
+        # --- Goal change detection (hash tracking only) ---
         import hashlib
         goal_hash = hashlib.md5(goal.encode()).hexdigest()
-        if last_goal_hash is not None and goal_hash != last_goal_hash:
-            print(f"{pfx} NEW GOAL DETECTED — prompting subgoal planning")
+        goal_changed = last_goal_hash is not None and goal_hash != last_goal_hash
+        fresh_goal = last_goal_hash is None and not read_subgoals(config)
+        if goal_changed:
             goal_start_time = time.time()
-            append_observation(config, {
-                "tick": tick_number,
-                "tool": "system",
-                "success": True,
-                "output": (
-                    "NEW GOAL DETECTED. Your goal has changed. "
-                    "Use plan_goal to break this into subgoals with measurable end criteria. "
-                    "Call: plan_goal with goal=<the new goal text> and context=<any relevant context>."
-                ),
-            })
         last_goal_hash = goal_hash
 
         # --- Compaction check ---
@@ -466,6 +458,22 @@ def run_loop(config: Config, persona=None, wal=None):
             })
             print(f"{pfx} RAM pressure: {ram_pct:.0f}%, killed children")
 
+        # --- Planning prompt (after compaction so it survives) ---
+        if goal_changed or fresh_goal:
+            label = "NEW GOAL DETECTED" if goal_changed else "FRESH GOAL — no subgoals exist"
+            print(f"{pfx} {label} — prompting subgoal planning")
+            append_observation(config, {
+                "tick": tick_number,
+                "tool": "system",
+                "success": True,
+                "output": (
+                    f"{label}. Before taking any other action, use plan_goal to break "
+                    "this goal into subgoals with measurable end criteria. "
+                    "Call: <tool>plan_goal</tool>\n"
+                    "<args>{\"goal\": \"" + goal[:300] + "\", \"context\": \"first tick\"}</args>"
+                ),
+            })
+
         # --- Loop detection ---
         loop_detected = False
         repeat_count = 0
@@ -505,7 +513,6 @@ def run_loop(config: Config, persona=None, wal=None):
         tick_tool_name = ""
         tick_tool_success = False
         tick_tool_duration = 0.0
-        tick_compacted = False
         write_activity(config, "thinking", detail=f"tick {tick_number}")
 
         def _on_token(partial_text):
@@ -514,7 +521,7 @@ def run_loop(config: Config, persona=None, wal=None):
 
         try:
             response = complete(messages, config, max_tokens=current_max_tokens,
-                                on_token=_on_token)
+                                on_token=_on_token, tick=tick_number)
             llm_elapsed = time.monotonic() - llm_start
             consecutive_failures = 0  # reset on success
 

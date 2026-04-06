@@ -80,6 +80,15 @@ def _clean_json(s: str) -> str:
     return s
 
 
+# Tools whose first (required) arg is a plain text string.
+# When the model emits raw text instead of JSON, we wrap it automatically.
+_TEXT_ARG_TOOLS = {
+    "bash": "cmd",
+    "remember": "note",
+    "update_plan": "note",
+}
+
+
 def parse_tool_call(text: str) -> Optional[ToolCall]:
     """Extract the first <tool>...</tool><args>...</args> from LLM output.
 
@@ -87,6 +96,7 @@ def parse_tool_call(text: str) -> Optional[ToolCall]:
     Falls back to handle common 4B-model mistakes:
       - Missing closing </args> tag
       - Missing <args> block entirely (for tools with known defaults)
+      - Raw text args instead of JSON (e.g. <args>df -h</args> for bash)
     """
     match = TOOL_PATTERN.search(text)
     if match:
@@ -95,6 +105,11 @@ def parse_tool_call(text: str) -> Optional[ToolCall]:
         args = _try_parse_json(args_str)
         if args is not None:
             return ToolCall(tool=tool_name, args=args, raw=match.group(0))
+        # Raw text args (not JSON at all): if it's a known text-arg tool, wrap it.
+        # Only apply when the text doesn't look like a JSON attempt (no leading { or [).
+        if tool_name in _TEXT_ARG_TOOLS and args_str and not args_str.startswith(("{", "[")):
+            key = _TEXT_ARG_TOOLS[tool_name]
+            return ToolCall(tool=tool_name, args={key: args_str}, raw=match.group(0))
 
     # Fallback: <tool>name</tool><args>{...} without closing </args>
     match = TOOL_PATTERN_UNCLOSED.search(text)

@@ -65,7 +65,7 @@ def _compute_narration(heartbeat: dict, persona: dict, goal: str, flavor: dict) 
 
     if failures >= 3:
         return "Struggling... something isn't working. Might need a different approach."
-    if temp and temp > 70:
+    if temp and temp > 100:
         return f"Getting warm in here ({temp:.0f}\u00b0C). Might need to slow down."
     if not goal.strip():
         return "No goal set. Waiting for instructions."
@@ -151,7 +151,7 @@ def build_status(config: Config) -> dict:
     cf = heartbeat.get("consecutive_failures", 0)
     if cf >= 5:
         special = "dead"
-    elif heartbeat.get("cpu_temp_c") and heartbeat["cpu_temp_c"] > 75:
+    elif heartbeat.get("cpu_temp_c") and heartbeat["cpu_temp_c"] > 100:
         special = "thermal"
     elif not goal.strip():
         special = "sleeping"
@@ -1561,11 +1561,11 @@ function update(data) {
 
     // Gauges
     let temp = hb.cpu_temp_c;
-    let tempPct = temp != null ? Math.min(100, (temp / 85) * 100) : 0;
+    let tempPct = temp != null ? Math.min(100, (temp / 105) * 100) : 0;
     document.getElementById('g-temp').textContent = temp != null ? makeBar(tempPct) : '[  n/a   ]';
     let tempEl = document.getElementById('v-temp');
     tempEl.textContent = temp != null ? temp + '°C' : 'n/a';
-    tempEl.className = temp != null ? gaugeClass(temp, 65, 75) : 'gauge-val';
+    tempEl.className = temp != null ? gaugeClass(temp, 85, 100) : 'gauge-val';
 
     let ram = hb.ram_pct || 0;
     document.getElementById('g-ram').textContent = makeBar(ram);

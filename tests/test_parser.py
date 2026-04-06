@@ -185,9 +185,17 @@ class TestParserSloppyJSON(unittest.TestCase):
 
     # --- Things that should still fail ---
 
-    def test_truly_broken_json_still_fails(self):
-        """Unrecoverable garbage should return None, not crash."""
+    def test_raw_text_args_wrapped_for_bash(self):
+        """Raw text (non-JSON, no leading {) args for bash are auto-wrapped as cmd."""
         text = '<tool>bash</tool>\n<args>NOT JSON AT ALL</args>'
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.tool, "bash")
+        self.assertEqual(result.args, {"cmd": "NOT JSON AT ALL"})
+
+    def test_truly_broken_json_for_unknown_tool_fails(self):
+        """Unrecoverable garbage for a non-text-arg tool should return None."""
+        text = '<tool>http_get</tool>\n<args>NOT JSON AT ALL</args>'
         result = parse_tool_call(text)
         self.assertIsNone(result)
 
