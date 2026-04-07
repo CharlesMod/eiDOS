@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from config import Config
-from memory import read_goal, read_memory, read_plan, read_subgoals, read_recent_observations, read_interventions
+from memory import read_goal, read_memory, read_plan, read_subgoals, read_recent_observations, read_interventions, current_subtask
 from env_snapshot import generate as generate_env_snapshot
 from env_snapshot import generate_alerts as generate_env_alerts
 from prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_BRIEFING, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED
@@ -245,6 +245,9 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
         elif remaining <= 2:
             urgency_note = f" — {remaining} tick{'s' if remaining != 1 else ''} remaining: wrap up and call goal_complete if ready"
 
+    subtask = current_subtask(config)
+    subtask_line = f"Current task: {subtask}" if subtask else "No subtasks defined — focus on the goal directly."
+
     if loop_detected:
         return TICK_PROMPT_LOOP_DETECTED.format(
             tick_number=tick_number,
@@ -252,12 +255,14 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
             timestamp=now, elapsed=elapsed,
             repeat_count=repeat_count,
             urgency_note=urgency_note,
+            subtask_line=subtask_line,
         )
     return TICK_PROMPT.format(
         tick_number=tick_number,
         max_ticks=max_ticks if max_ticks else "?",
         timestamp=now, elapsed=elapsed,
         urgency_note=urgency_note,
+        subtask_line=subtask_line,
     )
 
 

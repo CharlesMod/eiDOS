@@ -83,6 +83,20 @@ def write_subgoals(config: Config, content: str) -> None:
         raise
 
 
+import re
+from typing import Optional
+
+def current_subtask(config: Config) -> Optional[str]:
+    """Return the first unchecked subtask from subgoals.md, or None."""
+    text = read_subgoals(config)
+    if not text:
+        return None
+    for line in text.splitlines():
+        if re.match(r"^\s*-\s*\[ \]", line):
+            return re.sub(r"^\s*-\s*\[ \]\s*", "", line)
+    return None
+
+
 # --- Aliases for backward compatibility (used by eidos.py, compaction.py, tools.py) ---
 
 def read_memory(config: Config) -> str:

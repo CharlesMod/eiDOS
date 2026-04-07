@@ -290,10 +290,12 @@ def planning_complete(
     """
     import subprocess
 
+    planning_max_tokens = config.planning_max_tokens
+
     if not config.llm_restart_cmd:
         # No hot-swap available — just use the current model
         logger.info("planning_complete: no restart_cmd, using current model")
-        return complete(messages, config, temperature=0.6, max_tokens=1024,
+        return complete(messages, config, temperature=0.6, max_tokens=planning_max_tokens,
                         run_id=run_id, tick=tick)
 
     service_path = "/etc/systemd/system/llama-server.service"
@@ -303,16 +305,20 @@ def planning_complete(
         original_service = Path(service_path).read_text()
     except OSError as e:
         logger.warning("Cannot read service file, falling back: %s", e)
-        return complete(messages, config, temperature=0.6, max_tokens=1024,
+        return complete(messages, config, temperature=0.6, max_tokens=planning_max_tokens,
+                        run_id=run_id, tick=tick)
+
+    # Check if planning model is different from currently loaded model
+    import re as _re
+    _cur_model = _re.search(r'-m\s+(\S+)', original_service)
+    if _cur_model and Path(_cur_model.group(1)).resolve() == Path(config.planning_model_path).resolve():
+        # Same model — no need to hot-swap (just use current server)
+        logger.info("planning_complete: planning model same as active, no swap")
+        return complete(messages, config, temperature=0.6, max_tokens=planning_max_tokens,
                         run_id=run_id, tick=tick)
 
     # Build the planning service config
     planning_service = _build_planning_service(original_service, config)
-    if planning_service == original_service:
-        # Same model, no swap needed
-        logger.info("planning_complete: planning model same as active, no swap")
-        return complete(messages, config, temperature=0.6, max_tokens=1024,
-                        run_id=run_id, tick=tick)
 
     logger.info("planning_complete: hot-swapping to planning model")
     try:
@@ -321,7 +327,7 @@ def planning_complete(
         _restart_llama(config)
 
         # Run the completion on the bigger model
-        result = complete(messages, config, temperature=0.6, max_tokens=1024,
+        result = complete(messages, config, temperature=0.6, max_tokens=planning_max_tokens,
                           run_id=run_id, tick=tick)
         return result
     finally:
@@ -329,7 +335,7 @@ def planning_complete(
         logger.info("planning_complete: restoring original model")
         try:
             _sudo_write(service_path, original_service)
-            _restart_llama(config)
+            _restart_llama(config, timeout_s=120)
         except Exception as e:
             logger.error("Failed to restore original model: %s", e)
 
@@ -362,17 +368,21 @@ def _sudo_write(path: str, content: str) -> None:
         raise OSError(f"sudo tee {path} failed: {proc.stderr.decode()[:200]}")
 
 
-def _restart_llama(config: Config) -> None:
-    """Restart llama-server and wait for health."""
+def _restart_llama(config: Config, *, timeout_s: int = 90) -> None:
+    """Restart llama-server and wait for health.
+
+    Raises LLMError if the server doesn't become healthy within *timeout_s*.
+    """
     import subprocess
     subprocess.run(
         "sudo systemctl daemon-reload && sudo systemctl restart llama-server",
         shell=True, timeout=30, capture_output=True,
     )
-    # Poll health endpoint for up to 60s
+    # Poll health endpoint
     import urllib.request
     health_url = config.llm_url.rstrip("/") + "/health"
-    for _ in range(30):
+    polls = timeout_s // 2
+    for _ in range(polls):
         time.sleep(2)
         try:
             with urllib.request.urlopen(health_url, timeout=5) as resp:
@@ -382,4 +392,4 @@ def _restart_llama(config: Config) -> None:
                     return
         except Exception:
             continue
-    logger.warning("llama-server did not become healthy within 60s")
+    raise LLMError(f"llama-server did not become healthy within {timeout_s}s")

@@ -339,6 +339,26 @@ def run_loop(config: Config, persona=None, wal=None):
     pfx = _pfx(persona, config)
     print(f"{pfx} Starting tick loop (interval={config.tick_interval_s}s, mock={config.mock_mode})")
 
+    # --- Wait for LLM health before entering tick loop (cold-boot safety) ---
+    if not config.mock_mode:
+        import urllib.request as _ur
+        health_url = config.llm_url.rstrip("/") + "/health"
+        print(f"{pfx} Waiting for LLM server health at {health_url}")
+        _health_wait = 0
+        while not _shutdown_requested:
+            try:
+                with _ur.urlopen(health_url, timeout=5) as _resp:
+                    _data = json.loads(_resp.read().decode())
+                    if _data.get("status") == "ok":
+                        print(f"{pfx} LLM server healthy (waited {_health_wait}s)")
+                        break
+            except Exception:
+                pass
+            _health_wait += 5
+            if _health_wait % 60 == 0:
+                print(f"{pfx} Still waiting for LLM server... ({_health_wait}s)")
+            time.sleep(5)
+
     while not _shutdown_requested and not goal_complete:
         # --- Session detection (skip in mock mode) ---
         if not config.mock_mode:
@@ -458,21 +478,35 @@ def run_loop(config: Config, persona=None, wal=None):
             })
             print(f"{pfx} RAM pressure: {ram_pct:.0f}%, killed children")
 
-        # --- Planning prompt (after compaction so it survives) ---
+        # --- Auto-plan on fresh/changed goal (call plan_goal directly) ---
         if goal_changed or fresh_goal:
             label = "NEW GOAL DETECTED" if goal_changed else "FRESH GOAL — no subgoals exist"
-            print(f"{pfx} {label} — prompting subgoal planning")
-            append_observation(config, {
-                "tick": tick_number,
-                "tool": "system",
-                "success": True,
-                "output": (
-                    f"{label}. Before taking any other action, use plan_goal to break "
-                    "this goal into subgoals with measurable end criteria. "
-                    "Call: <tool>plan_goal</tool>\n"
-                    "<args>{\"goal\": \"" + goal[:300] + "\", \"context\": \"first tick\"}</args>"
-                ),
-            })
+            print(f"{pfx} {label} — auto-generating subgoals")
+            write_activity(config, "planning", detail="breaking goal into subgoals")
+            try:
+                from tools import tool_plan_goal
+                plan_result = tool_plan_goal(
+                    {"goal": goal[:500], "context": "auto-plan on fresh goal"},
+                    config,
+                )
+                append_observation(config, {
+                    "tick": tick_number,
+                    "tool": "plan_goal",
+                    "success": plan_result.success,
+                    "output": plan_result.output[:500],
+                })
+                if plan_result.success:
+                    print(f"{pfx} Subgoals generated ({plan_result.duration_s:.0f}s)")
+                else:
+                    print(f"{pfx} Auto-plan failed: {plan_result.output[:100]}")
+            except Exception as e:
+                print(f"{pfx} Auto-plan error: {e}")
+                append_observation(config, {
+                    "tick": tick_number,
+                    "tool": "plan_goal",
+                    "success": False,
+                    "output": f"Auto-plan failed: {e}",
+                })
 
         # --- Loop detection ---
         loop_detected = False

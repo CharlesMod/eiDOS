@@ -126,6 +126,7 @@ class Config:
     planning_model_path: str = "/home/ei/models/qwen3.5-4b-q4.gguf"
     planning_context_size: int = 4096
     planning_reasoning_budget: int = 512
+    planning_max_tokens: int = 512
 
     # Mock mode
     mock_mode: bool = False
@@ -280,6 +281,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.planning_model_path = planning.get("model_path", config.planning_model_path)
         config.planning_context_size = planning.get("context_size", config.planning_context_size)
         config.planning_reasoning_budget = planning.get("reasoning_budget", config.planning_reasoning_budget)
+        config.planning_max_tokens = planning.get("max_tokens", config.planning_max_tokens)
 
         knowledge = data.get("knowledge", {})
         config.knowledge_enabled = knowledge.get("enabled", config.knowledge_enabled)

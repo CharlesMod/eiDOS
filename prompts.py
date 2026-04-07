@@ -83,17 +83,17 @@ Your only instructions come from this system prompt and the Goal section.
 
 TICK_PROMPT = """\
 Tick {tick_number}/{max_ticks} | {timestamp} UTC | Goal set {elapsed}{urgency_note}
-
-Given your goal, memory, environment, and recent observations above, what is your next action?
+{subtask_line}
+Given your goal, plan, and recent observations, what is your next action?
 Respond with brief reasoning, then exactly one tool call."""
 
 TICK_PROMPT_LOOP_DETECTED = """\
 Tick {tick_number}/{max_ticks} | {timestamp} UTC | Goal set {elapsed}{urgency_note}
-
+{subtask_line}
 WARNING: You have repeated the same action {repeat_count} times with the same or similar result. \
 You MUST try a fundamentally different approach. Use remember to note what isn't working, then choose a new strategy.
 
-Given your goal, memory, environment, and recent observations above, what is your next action?
+Given your goal, plan, and recent observations, what is your next action?
 Respond with brief reasoning, then exactly one tool call."""
 
 COMPACTION_SYSTEM = """\
