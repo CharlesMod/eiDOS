@@ -310,10 +310,12 @@ def assemble_context(
 # ---------------------------------------------------------------------------
 
 def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
-                       repeat_count, max_ticks):
+                       repeat_count, max_ticks, boss_waiting=False):
     """Build the tick prompt message (shared by both modes)."""
     now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     elapsed = _format_elapsed(time.time() - goal_start_time)
+    boss_prefix = ("Boss just messaged you (see 'New since last tick' above). Reply with "
+                   "<reply>…</reply> THIS tick before any other work.\n\n") if boss_waiting else ""
 
     urgency_note = ""
     if max_ticks > 0:
@@ -327,7 +329,7 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
     subtask_line = f"Current focus: {focus}" if focus else "Focus on your mission directly."
 
     if loop_detected:
-        return TICK_PROMPT_LOOP_DETECTED.format(
+        return boss_prefix + TICK_PROMPT_LOOP_DETECTED.format(
             tick_number=tick_number,
             max_ticks=max_ticks if max_ticks else "?",
             timestamp=now, elapsed=elapsed,
@@ -335,7 +337,7 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
             urgency_note=urgency_note,
             subtask_line=subtask_line,
         )
-    return TICK_PROMPT.format(
+    return boss_prefix + TICK_PROMPT.format(
         tick_number=tick_number,
         max_ticks=max_ticks if max_ticks else "?",
         timestamp=now, elapsed=elapsed,
@@ -479,6 +481,28 @@ def _assemble_legacy(
 # ---------------------------------------------------------------------------
 # Presence + conversation-thread assembly (the model gets its own history as turns)
 # ---------------------------------------------------------------------------
+
+def _build_whats_new(config: Config, tick_number: int, interventions: list) -> str:
+    """Salience channel (the doc's 'Amygdala / salient deltas'): what CHANGED since last tick,
+    placed right at the decision point so the model never talks past Boss or ignores a fresh result.
+    Boss messages are consumed after one tick, so elevating them here is what stops 'talked past Boss'."""
+    parts = []
+    for i in (interventions or []):
+        c = (i.get("content") or "").strip()
+        if c:
+            parts.append(f'🗣 BOSS JUST MESSAGED — reply with <reply>…</reply> THIS tick, before other '
+                         f'work:\n   "{c}"')
+    try:
+        obs = read_recent_observations(config, max_chars=800, max_count=8)
+        if any(o.get("tick") == tick_number and o.get("tool") == "async_result" for o in obs):
+            parts.append("↩ A background job result just came back (in the thread just above) — pair it "
+                         "with what you dispatched and act on it; don't re-run it.")
+    except Exception:  # noqa: BLE001
+        pass
+    if not parts:
+        return ""
+    return "## New since last tick — handle these FIRST\n" + "\n".join(parts)
+
 
 def _current_focus(config: Config) -> str:
     """The ONE trustworthy objective line — replaces the four conflicting 'current task' sources
@@ -705,9 +729,16 @@ def _assemble_briefing(
     # --- Recent past AS A REAL THREAD: your thoughts/actions and the results they got ---
     messages.extend(_build_history_thread(config, n_ticks=14))
 
-    # 5. Tick prompt
+    # Salience: surface what's NEW (Boss messages, fresh arrivals) right at the decision point,
+    # so the model handles them first instead of talking past Boss buried up in the durable block.
+    whats_new = _build_whats_new(config, tick_number, interventions)
+    if whats_new:
+        messages.append({"role": "user", "content": whats_new})
+
+    # 5. Tick prompt (branches to 'reply to Boss first' when a message just arrived)
     tick_msg = _build_tick_prompt(config, tick_number, goal_start_time,
-                                  loop_detected, repeat_count, max_ticks)
+                                  loop_detected, repeat_count, max_ticks,
+                                  boss_waiting=bool(interventions))
     messages.append({"role": "user", "content": tick_msg})
 
     # Hard-enforce total context ceiling
