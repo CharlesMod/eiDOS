@@ -659,6 +659,28 @@ def tool_check_messages(args: dict, config: Config) -> ToolResult:
                       full_output_path=None, success=True, duration_s=0)
 
 
+def tool_check_system(args: dict, config: Config) -> ToolResult:
+    """Show your architecture — the authoritative map of what the platform ALREADY provides
+    (chat, memory, skills, the loop, background work, self-improvement, the house/services) so you
+    operate it instead of rebuilding it. Read this BEFORE building any subsystem.
+    """
+    try:
+        from skills import list_skills as _ls
+        nsk = len(_ls(config).get("skills", {}))
+    except Exception:  # noqa: BLE001
+        nsk = 0
+    header = (f"You have {len(TOOLS)} built-in tools and {nsk} authored skills "
+              f"(call check_tools for the full list).\n\n")
+    doc_path = Path(__file__).resolve().parent / "eidos_capabilities.md"
+    try:
+        doc = doc_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        doc = ("(architecture doc missing) — core rule: the platform already provides chat, memory "
+               "(memorize/recall), skills, the loop, background jobs, and self-improvement. Operate "
+               "them via your tools; build house automation, not your own plumbing.")
+    return ToolResult(output=header + doc, full_output_path=None, success=True, duration_s=0)
+
+
 def tool_memorize(args: dict, config: Config) -> ToolResult:
     """Store a durable knowledge entry in the long-term knowledge store."""
     from knowledge import store_entry
@@ -1062,6 +1084,7 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "list_skills": tool_list_skills,
     "check_tools": tool_list_skills,        # alias — "inspect your toolkit" on demand
     "check_messages": tool_check_messages,  # inspect your conversation with Boss
+    "check_system": tool_check_system,      # the architecture map: what already exists, don't rebuild it
     "rollback_skill": tool_rollback_skill,
 }
 

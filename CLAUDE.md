@@ -21,6 +21,14 @@ services.
 - eidos boots **paused** (kill-switch design). Control endpoints: `/api/control/{start,stop,resume,pause,status}`.
 - Always `PYTHONUTF8=1` (unicode in prompts/output).
 
+## IMPORTANT: keep eiDOS's self-knowledge current
+`eidos_capabilities.md` is the authoritative map of what the platform provides — eiDOS reads it via
+the `check_system` tool so it operates existing subsystems instead of rebuilding them (it kept
+reinventing chat loggers and JSON memory stores at Lv.0). **When you add or change a subsystem/
+capability, update `eidos_capabilities.md`** (and, for a critical "never rebuild this", the condensed
+block in `prompts.py SYSTEM_PROMPT_BRIEFING`). That single update is how eiDOS learns the feature
+exists — far better than re-teaching it each time. Bootstrap facts also live in `seed_knowledge.py`.
+
 ## Self-improvement system (live)
 eiDOS can be coached and improve itself from the :8099 dashboard. Principle: **eiDOS PROPOSES, the
 operator-controlled dashboard APPLIES** (git-reversible accident-safety, not adversary-proof).
