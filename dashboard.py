@@ -133,7 +133,7 @@ def build_knowledge_list(config: Config) -> dict:
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         entries = []
     entries.sort(key=lambda e: e.get("created", ""), reverse=True)
-    return {"entries": entries[:10]}
+    return {"entries": entries[:25]}
 
 
 def build_dream_list(config: Config) -> dict:
@@ -847,13 +847,19 @@ body::after {
 }
 /* Knowledge Nuggets */
 .knowledge-list {
-    max-height: 250px;
+    max-height: 360px;
     overflow-y: auto;
     font-size: 11px;
 }
 .knowledge-entry {
-    padding: 4px 0;
+    padding: 6px 0;
     border-bottom: 1px solid #111;
+}
+.knowledge-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.45;
+    color: #b8d8b8;
 }
 .knowledge-category {
     font-size: 9px;
@@ -1635,7 +1641,7 @@ function renderKnowledge(entries) {
         let tags = (e.tags || []).join(', ');
         return '<div class="knowledge-entry">' +
             '<span class="knowledge-category knowledge-category-' + escapeHtml(cat) + '">' + escapeHtml(cat) + '</span> ' +
-            escapeHtml((e.content_preview || '').substring(0, 200)) +
+            '<span class="knowledge-text">' + escapeHtml(e.content_preview || '') + '</span>' +
             '<div class="knowledge-tags">' + escapeHtml(tags) + ' &middot; ' + (e.created || '').substring(0, 10) + '</div>' +
             '</div>';
     }).join('');

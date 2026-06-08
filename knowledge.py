@@ -230,9 +230,10 @@ def _write_index(config: Config, index: list[dict]) -> None:
 def _add_to_index(config: Config, meta: dict, content: str) -> None:
     """Add an entry's metadata + content snippet to the index."""
     index = load_index(config)
-    # Store content in index for BM25 search without reading files
+    # Store content in index for BM25 search without reading files. Generous cap so concise
+    # nuggets are kept in full (the dashboard renders this; recall is separately budgeted).
     entry = dict(meta)
-    entry["content_preview"] = content[:500]
+    entry["content_preview"] = content[:1500]
     index.append(entry)
     _write_index(config, index)
     _invalidate_bm25_cache()
@@ -255,7 +256,7 @@ def rebuild_index(config: Config) -> int:
                     meta["id"] = path.stem
                 meta.setdefault("category", cat)
                 entry = dict(meta)
-                entry["content_preview"] = body[:500]
+                entry["content_preview"] = body[:1500]
                 entries.append(entry)
             except OSError:
                 continue
