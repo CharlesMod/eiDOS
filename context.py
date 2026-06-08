@@ -12,7 +12,9 @@ so we can tune limits based on real usage without blowing the context window.
 
 import json
 import logging
+import re
 import time
+from collections import Counter
 from pathlib import Path
 
 from config import Config
@@ -90,12 +92,27 @@ def _log_overrun(config: Config, tick_number: int, section: str,
 # Inverted-pyramid observation rendering (briefing model)
 # ---------------------------------------------------------------------------
 
+def _norm_cmd(s: str) -> str:
+    """Collapse cosmetic differences (version suffixes, IP octets, ports, quoting/interp
+    punctuation, whitespace) so near-identical command retries share ONE signature. This is what
+    catches the `port_probe → v3 → v4 → v5 …` spiral the exact-match signature missed."""
+    s = s.lower()
+    s = re.sub(r"[\"'`(){}$:]", "", s)   # strip quoting / interpolation punctuation
+    s = re.sub(r"\d+", "#", s)            # collapse all numbers (ip octets, ports, version tags)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:120]
+
+
 def _obs_sig(o: dict):
-    """Signature for detecting repeated actions (same tool + same args/output)."""
-    a = o.get("args")
+    """Signature for detecting repeated actions. For bash we normalize the command so tiny
+    variations (different ports/versions/quoting) collapse to the same signature."""
+    tool = o.get("tool")
+    a = o.get("args") or {}
+    if tool == "bash" and isinstance(a, dict):
+        return (tool, _norm_cmd(a.get("cmd") or a.get("command") or ""))
     if a:
-        return (o.get("tool"), str(a))
-    return (o.get("tool"), (o.get("output", "") or "")[:80])
+        return (tool, str(a))
+    return (tool, (o.get("output", "") or "")[:80])
 
 
 def _render_observations_pyramid(observations: list[dict], full_budget: int = 2000) -> str:
@@ -114,11 +131,19 @@ def _render_observations_pyramid(observations: list[dict], full_budget: int = 20
     _skip = {"system", "watchdog", "thought", "dream"}
     action_sigs = [_obs_sig(o) for o in observations if o.get("tool") not in _skip]
     loop_note = ""
-    if len(action_sigs) >= 4 and 1 <= len(set(action_sigs)) <= 2:
-        names = " and ".join(sorted({str(s[0]) for s in action_sigs}))
-        loop_note = (f"⚠ You have been repeating the same action(s) — {names} — with no "
-                     f"new result. You ALREADY have this information. Stop repeating it; decide "
-                     f"and take a different, concrete next step.\n\n")
+    if len(action_sigs) >= 4:
+        counts = Counter(action_sigs)
+        _top_sig, top_n = counts.most_common(1)[0]
+        # Fire on EITHER the whole window being 1-2 distinct actions, OR any single (normalized)
+        # action recurring ≥4× even when interleaved with others — the retry-with-tweaks spiral.
+        if (1 <= len(set(action_sigs)) <= 2) or top_n >= 4:
+            names = " and ".join(sorted({str(s[0]) for s in action_sigs}))
+            loop_note = (f"⚠ STUCK: you keep repeating the same kind of action ({names}) — {top_n} "
+                         f"near-identical attempts with no new result. STOP retrying tiny variations "
+                         f"(different ports/quotes/versions of the same command). Either (a) a result "
+                         f"you already have answers this — use it, or (b) the whole approach is wrong "
+                         f"— change METHOD entirely (e.g. a different tool/command) or ask Boss. Do "
+                         f"NOT re-issue another tweaked version of this command.\n\n")
 
     # Collapse consecutive identical entries.
     collapsed = []

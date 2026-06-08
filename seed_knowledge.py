@@ -49,14 +49,21 @@ NUGGETS = [
      "So write the PowerShell DIRECTLY — do NOT wrap it as `powershell -Command \"...\"`; that nests "
      "quotes and causes parse errors. Just write e.g. `Test-Connection -Count 1 192.168.86.48` or "
      "`arp -a`. Get-* cmdlets, $vars, pipelines, and native exes (git, curl.exe, nvidia-smi, arp, "
-     "ipconfig) all work. Gotchas: (1) a colon right after a variable in a double-quoted string needs "
-     "braces — write \"${ip}:${port}\", not \"$ip:$port\". (2) -ErrorAction only works on cmdlets, not "
-     ".NET method calls. (3) 'ForEach-Object -Parallel' and 'wmic' are unavailable — use a plain "
-     "pipeline / 'Get-CimInstance' / 'tasklist'. To run a cmd.exe command, prefix it with 'cmd /c'."),
-    ("procedures", ["lan", "discovery", "devices"],
-     "To discover devices on the LAN, run `arp -a` to list IP/MAC neighbors; smart plugs "
-     "and IP cameras appear there. Probe a candidate IP with http_get to identify it. Map "
-     "devices once, then build skills to control them."),
+     "ipconfig) all work. Gotchas — these cause real parse failures, get them right the FIRST time: "
+     "(1) Use DOUBLE quotes for any string with a variable; SINGLE quotes are literal — '192.168.86.$_' "
+     "does NOT expand and scans a broken host. (2) A colon (or other punctuation) right after a variable "
+     "in a double-quoted string needs braces — write \"${ip}:${port}\", not \"$ip:$port\". (3) Iterate a "
+     "range with a pipeline, NOT bash: `40..50 | ForEach-Object { $ip = \"192.168.86.$_\"; ... }` — there "
+     "is no `for/do/done` or `fi`. (4) -ErrorAction only works on cmdlets, not .NET method calls. "
+     "(5) 'ForEach-Object -Parallel' and 'wmic' are unavailable — use a plain pipeline / 'Get-CimInstance' "
+     "/ 'tasklist'. To run a cmd.exe command, prefix it with 'cmd /c'."),
+    ("procedures", ["lan", "discovery", "devices", "arp", "fast"],
+     "To discover devices on the LAN, run `arp -a` FIRST — it lists every IP/MAC neighbor the "
+     "machine already knows INSTANTLY (smart plugs and IP cameras appear there). Do NOT ping-sweep "
+     "the whole subnet (`1..254 | Test-Connection ...` is sequential and SLOW — it times out and "
+     "wastes ticks). Take the arp neighbor list, then probe a specific candidate IP with http_get or "
+     "`Test-NetConnection <ip> -Port 80`. Map devices once with `memorize`, then build skills to "
+     "control them."),
     ("procedures", ["tts", "voice", "speak"],
      "To speak aloud, send text to the TTS service at http://127.0.0.1:8004 (or the GLaDOS "
      "FX proxy :8005). Capture this as a reusable 'speak' skill instead of re-deriving the "

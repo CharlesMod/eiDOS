@@ -128,6 +128,47 @@ _PS_UNWRAP_RE = re.compile(r"^\s*(?:powershell|pwsh)(?:\.exe)?\b.*?\s-(?:c|comma
 _PS_LIST = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
 
 
+# --- Pre-flight linter ----------------------------------------------------
+# The local model repeatedly makes a few Windows/PowerShell syntax mistakes that DEFINITELY fail
+# (observed live: a 10-attempt, 3-minute port-scan rumination spiral). We catch the near-certain
+# ones BEFORE dispatch and hand back a one-line correction, turning a doomed background job +
+# re-derivation into a single corrected tick. Conservative — only the highest-confidence patterns.
+_RE_BASH_FOR = re.compile(r"\bfor\s+\w+\s+in\b.*?;\s*do\b", re.IGNORECASE | re.DOTALL)
+_RE_BASH_DONE = re.compile(r";\s*done\b|\bdone\s*$|;\s*fi\b|\bfi\s*$", re.IGNORECASE)
+_RE_SQUOTE_INTERP = re.compile(r"'[^']*(?:\$_|\$\{)[^']*'")  # single-quoted string w/ $_ or ${...}
+
+
+def _lint_windows_command(cmd: str):
+    """Return a short correction string if cmd has a near-certain Windows/PowerShell syntax error,
+    else None. Blocking on these saves the model from the doomed-retry spiral."""
+    c = cmd.strip()
+    low = c.lower()
+    if low.startswith(("cmd ", "cmd.exe", "cmd/")):
+        return None  # operator explicitly chose cmd.exe — don't second-guess
+    # 1) Unix bash loop syntax on Windows (observed: `for i in {40..50}; do ...; done`).
+    if _RE_BASH_FOR.search(c) or _RE_BASH_DONE.search(c):
+        return ("That's Unix bash syntax (`for … do … done` / `fi`) — you're in PowerShell, not bash. "
+                "Use a range pipeline instead, e.g.  40..50 | ForEach-Object { $ip = \"192.168.86.$_\"; "
+                "... }")
+    # 2) `powershell -Command \"...\"` wrapping whose inner payload has nested double-quotes — that
+    #    nesting is the actual parse-breaker. You're ALREADY in PowerShell; run the script directly.
+    m = _PS_UNWRAP_RE.match(c)
+    if m:
+        inner = m.group(1).strip()
+        if len(inner) >= 2 and inner[0] == inner[-1] and inner[0] in "\"'":
+            inner = inner[1:-1]
+        if '"' in inner:
+            return ("Don't wrap in `powershell -Command \"...\"` — the nested double-quotes inside break "
+                    "the parse. You're already in PowerShell; run the inner script directly:\n" + inner)
+    # 3) Single-quoted string containing $_ or ${...} — single quotes DON'T expand in PowerShell, so
+    #    the variable stays literal (observed: `$ip='192.168.86.$_'` scanned the literal host).
+    if _RE_SQUOTE_INTERP.search(c):
+        return ("Single quotes don't expand variables in PowerShell — `'…$_…'` stays literal text. Use "
+                "DOUBLE quotes, and brace a name before punctuation: \"192.168.86.$_\" or "
+                "\"${ip}:${port}\".")
+    return None
+
+
 def _route_windows_command(cmd: str):
     """(popen_arg, use_shell) for a Windows command. Always prefer list-form PowerShell so
     cmd.exe never re-parses (and corrupts) the model's PowerShell."""
@@ -172,6 +213,16 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                 full_output_path=None,
                 success=False,
                 duration_s=0,
+            )
+
+    # Pre-flight: reject near-certain Windows/PowerShell syntax mistakes with a one-line fix
+    # BEFORE dispatch, so a bad command costs one corrected tick instead of a doomed background job.
+    if os.name == "nt":
+        fix = _lint_windows_command(cmd)
+        if fix:
+            return ToolResult(
+                output=f"NOT RUN — fix the command first:\n{fix}",
+                full_output_path=None, success=False, duration_s=0,
             )
 
     start = time.monotonic()
@@ -895,6 +946,18 @@ def _write_jobs(config: Config, jobs: list[dict]) -> None:
     config.jobs_path.write_text(json.dumps(jobs, indent=2))
 
 
+_JOB_DONE = ("completed", "timed_out", "reaped")
+
+
+def _prune_jobs(jobs: list[dict], keep_delivered: int = 15) -> list[dict]:
+    """Keep every still-live or undelivered job; cap already-delivered (notified) finished jobs to
+    the most-recent N so jobs.json can't grow without bound across a long run."""
+    live = [j for j in jobs if not (j.get("notified") and j.get("status") in _JOB_DONE)]
+    done = [j for j in jobs if (j.get("notified") and j.get("status") in _JOB_DONE)]
+    done.sort(key=lambda j: j.get("started_ts") or 0)
+    return live + done[-keep_delivered:]
+
+
 def refresh_jobs(config: Config) -> list[dict]:
     """Check all tracked jobs, update statuses, return current list."""
     jobs = _read_jobs(config)
@@ -1004,8 +1067,9 @@ def collect_finished_jobs(config: Config) -> list[dict]:
             finished.append({**j, "tail": _read_job_tail(j.get("output_path", ""))})
             j["notified"] = True
             changed = True
-    if changed:
-        _write_jobs(config, jobs)
+    pruned = _prune_jobs(jobs)
+    if changed or len(pruned) != len(jobs):
+        _write_jobs(config, pruned)
     return finished
 
 
@@ -1024,8 +1088,12 @@ def tool_create_skill(args: dict, config: Config) -> ToolResult:
     t = time.monotonic()
     r = skills.create_skill(config, name, code, description, schema if isinstance(schema, dict) else {})
     if r.get("success"):
-        return ToolResult(output=r.get("message", f"Skill '{name}' created and live."),
-                          full_output_path=None, success=True, duration_s=time.monotonic() - t)
+        msg = r.get("message", f"Skill '{name}' created and live.")
+        return ToolResult(
+            output=(f"{msg}\n➤ You now HAVE a reusable tool '{name}'. NEXT time you need this, CALL it "
+                    f"as a tool: {{\"tool\": \"{name}\", \"args\": {{...}}}} — do NOT hand-write the same "
+                    f"steps in bash again. Re-deriving what you already captured is wasted work."),
+            full_output_path=None, success=True, duration_s=time.monotonic() - t)
     return ToolResult(output="create_skill failed:\n- " + "\n- ".join(r.get("errors", ["unknown"])),
                       full_output_path=None, success=False, duration_s=time.monotonic() - t)
 
