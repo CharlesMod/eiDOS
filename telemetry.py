@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from config import Config
+from atomicio import replace_with_retry
 
 
 # --- CPU % measurement (normalized to 0–100 regardless of core count) ---
@@ -57,13 +58,16 @@ def write_activity(config: Config, state: str, *, detail: str = "",
     """
     path = config.workspace / "activity.json"
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({
-        "state": state,
-        "since": time.time(),
-        "detail": detail,
-        "partial": partial[-500:] if partial else "",
-    }))
-    tmp.rename(path)
+    try:
+        tmp.write_text(json.dumps({
+            "state": state,
+            "since": time.time(),
+            "detail": detail,
+            "partial": partial[-500:] if partial else "",
+        }))
+        replace_with_retry(tmp, path)
+    except OSError:
+        pass  # telemetry is best-effort — never crash the consciousness loop
 
 
 def write_heartbeat(config: Config, *, tick: int, level: int, mood: str,
@@ -97,8 +101,11 @@ def write_heartbeat(config: Config, *, tick: int, level: int, mood: str,
 
     path = config.workspace / "heartbeat.json"
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(hb))
-    tmp.rename(path)
+    try:
+        tmp.write_text(json.dumps(hb))
+        replace_with_retry(tmp, path)
+    except OSError:
+        pass  # best-effort telemetry
 
 
 def append_metrics(config: Config, *, tick: int, level: int, mood: str,
@@ -138,5 +145,8 @@ def append_metrics(config: Config, *, tick: int, level: int, mood: str,
         "compacted": compacted,
     }
     path = config.workspace / "metrics.jsonl"
-    with open(path, "a") as f:
-        f.write(json.dumps(line) + "\n")
+    try:
+        with open(path, "a") as f:
+            f.write(json.dumps(line) + "\n")
+    except OSError:
+        pass  # best-effort telemetry

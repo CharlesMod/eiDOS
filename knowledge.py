@@ -18,6 +18,7 @@ from typing import Optional
 import yaml
 
 from config import Config
+from atomicio import replace_with_retry
 
 logger = logging.getLogger("eidos.knowledge")
 
@@ -119,7 +120,7 @@ def store_entry(
     try:
         with os.fdopen(fd, "w") as f:
             f.write(entry_text)
-        os.rename(tmp_path, str(entry_path))
+        replace_with_retry(tmp_path, str(entry_path))
     except Exception:
         try:
             os.unlink(tmp_path)
@@ -218,7 +219,7 @@ def _write_index(config: Config, index: list[dict]) -> None:
     ensure_dirs(config)
     tmp = config.knowledge_index_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(index, indent=2))
-    tmp.rename(config.knowledge_index_path)
+    replace_with_retry(tmp, config.knowledge_index_path)
     _index_cache = index
     try:
         _index_mtime = config.knowledge_index_path.stat().st_mtime

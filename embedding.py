@@ -76,8 +76,8 @@ def _save_vectors(config: Config, vectors: "np.ndarray", ids: list[str]) -> None
     try:
         np.save(str(tmp_v), vectors)
         tmp_i.write_text(json.dumps(ids))
-        os.rename(str(tmp_v), str(vp))
-        os.rename(str(tmp_i), str(ip))
+        os.replace(str(tmp_v), str(vp))
+        os.replace(str(tmp_i), str(ip))
     except Exception:
         for f in (tmp_v, tmp_i):
             try:

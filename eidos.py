@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from config import Config, load_config
+from atomicio import replace_with_retry
 from context import assemble_context
 from compaction import should_compact, compact, compact_briefing, emit_flavor
 from llm import complete, LLMError, ReasoningExhausted
@@ -81,6 +82,15 @@ def main():
     config.interventions_dir.mkdir(parents=True, exist_ok=True)
     config.snapshots_dir.mkdir(parents=True, exist_ok=True)
     config.outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Hot-load any skills Nexus has previously authored
+    try:
+        from skills import load_active_skills
+        loaded = load_active_skills(config)
+        if loaded:
+            print(f"[skills] loaded {len(loaded)}: {', '.join(loaded)}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[skills] load failed: {e}")
 
     # Signal handling for clean shutdown
     signal.signal(signal.SIGTERM, _handle_signal)
@@ -162,7 +172,7 @@ def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
     }
     tmp = config.wal_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(wal))
-    tmp.rename(config.wal_path)
+    replace_with_retry(tmp, config.wal_path)
 
 
 def read_wal(config: Config) -> dict:

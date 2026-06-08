@@ -14,6 +14,7 @@ import re
 import time
 
 from config import Config
+from atomicio import replace_with_retry
 from memory import (
     read_goal,
     read_memory,
@@ -215,7 +216,7 @@ def emit_flavor(config: Config, persona: dict = None) -> None:
             }
             tmp = flavor_path.with_suffix(".tmp")
             tmp.write_text(json.dumps(flavor))
-            tmp.rename(flavor_path)
+            replace_with_retry(tmp, flavor_path)
             logger.info("flavor text emitted: %s", flavor["text"][:60])
     except (Exception,):
         pass  # flavor is best-effort, never block on failure

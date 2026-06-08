@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from config import Config
+from atomicio import replace_with_retry
 
 
 def read_goal(config: Config) -> str:
@@ -46,7 +47,7 @@ def write_plan(config: Config, content: str) -> None:
     try:
         with os.fdopen(fd, "w") as f:
             f.write(content)
-        os.rename(tmp_path, str(config.plan_path))
+        replace_with_retry(tmp_path, str(config.plan_path))
     except Exception:
         try:
             os.unlink(tmp_path)
@@ -74,7 +75,7 @@ def write_subgoals(config: Config, content: str) -> None:
     try:
         with os.fdopen(fd, "w") as f:
             f.write(content)
-        os.rename(tmp_path, str(config.subgoals_path))
+        replace_with_retry(tmp_path, str(config.subgoals_path))
     except Exception:
         try:
             os.unlink(tmp_path)
@@ -124,7 +125,7 @@ def write_memory(config: Config, content: str) -> None:
     try:
         with os.fdopen(fd, "w") as f:
             f.write(content)
-        os.rename(tmp_path, str(config.memory_path))
+        replace_with_retry(tmp_path, str(config.memory_path))
     except Exception:
         try:
             os.unlink(tmp_path)
@@ -274,7 +275,7 @@ def read_interventions(config: Config) -> list[dict]:
             content = path.read_text().strip()
             if content:
                 results.append({"filename": path.name, "content": content})
-            path.rename(path.with_suffix(path.suffix + ".done"))
+            replace_with_retry(path, path.with_suffix(path.suffix + ".done"))
         except OSError:
             continue
 

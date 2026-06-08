@@ -201,6 +201,11 @@ def tool_bg_run(args: dict, config: Config) -> ToolResult:
     out_path = config.outputs_dir / f"bg_{name}.out"
 
     try:
+        popen_kwargs = {}
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
         with open(out_path, "w") as out_file:
             proc = subprocess.Popen(
                 cmd,
@@ -208,7 +213,7 @@ def tool_bg_run(args: dict, config: Config) -> ToolResult:
                 stdout=out_file,
                 stderr=subprocess.STDOUT,
                 cwd=str(config.workspace),
-                start_new_session=True,
+                **popen_kwargs,
             )
 
         # Register in jobs ledger
@@ -249,26 +254,11 @@ def tool_bg_check(args: dict, config: Config) -> ToolResult:
     if not job:
         return ToolResult(output=f"No job named '{name}' found", full_output_path=None, success=False, duration_s=0)
 
-    # Check if still running
+    # Check if still running (cross-platform)
     pid = job.get("pid", 0)
-    if job["status"] == "running":
-        try:
-            # Try to reap zombie first (Popen children without wait)
-            wpid, status = os.waitpid(pid, os.WNOHANG)
-            if wpid != 0:
-                job["status"] = "completed"
-                _write_jobs(config, jobs)
-            else:
-                pass  # Still running
-        except ChildProcessError:
-            # Not our child — fall back to kill(0) probe
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                job["status"] = "completed"
-                _write_jobs(config, jobs)
-            except PermissionError:
-                pass
+    if job["status"] == "running" and not _pid_alive(pid):
+        job["status"] = "completed"
+        _write_jobs(config, jobs)
 
     # Read tail of output (and cap output file if oversized)
     output_path = job.get("output_path", "")
@@ -542,6 +532,28 @@ def tool_plan_goal(args: dict, config: Config) -> ToolResult:
 
 # --- Jobs ledger helpers ---
 
+def _pid_alive(pid: int) -> bool:
+    """Cross-platform check whether a process id is currently running."""
+    if not pid or pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return str(pid) in (out.stdout or "")
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def _read_jobs(config: Config) -> list[dict]:
     try:
         return json.loads(config.jobs_path.read_text())
@@ -561,26 +573,85 @@ def refresh_jobs(config: Config) -> list[dict]:
     for job in jobs:
         if job["status"] != "running":
             continue
-        pid = job["pid"]
-        try:
-            wpid, status = os.waitpid(pid, os.WNOHANG)
-            if wpid != 0:
-                job["status"] = "completed"
-                changed = True
-        except ChildProcessError:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                job["status"] = "completed"
-                changed = True
-            except PermissionError:
-                pass
+        if not _pid_alive(job.get("pid", 0)):
+            job["status"] = "completed"
             changed = True
-        except PermissionError:
-            pass
     if changed:
         _write_jobs(config, jobs)
     return jobs
+
+
+def tool_create_skill(args: dict, config: Config) -> ToolResult:
+    """Author a NEW reusable tool (skill) that becomes callable immediately."""
+    import skills
+    name = (args.get("skill_name") or args.get("name") or "").strip()
+    code = args.get("skill_code") or args.get("code") or ""
+    description = args.get("description", "")
+    schema = args.get("args_schema", {})
+    if not name or not code:
+        return ToolResult(
+            output=("Error: provide 'skill_name' and 'skill_code'. The code MUST define:\n"
+                    "def tool_<skill_name>(args: dict, config: Config) -> ToolResult"),
+            full_output_path=None, success=False, duration_s=0)
+    t = time.monotonic()
+    r = skills.create_skill(config, name, code, description, schema if isinstance(schema, dict) else {})
+    if r.get("success"):
+        return ToolResult(output=r.get("message", f"Skill '{name}' created and live."),
+                          full_output_path=None, success=True, duration_s=time.monotonic() - t)
+    return ToolResult(output="create_skill failed:\n- " + "\n- ".join(r.get("errors", ["unknown"])),
+                      full_output_path=None, success=False, duration_s=time.monotonic() - t)
+
+
+def tool_edit_skill(args: dict, config: Config) -> ToolResult:
+    """Replace an existing skill's code with an improved version (old kept for rollback)."""
+    import skills
+    name = (args.get("skill_name") or args.get("name") or "").strip()
+    code = args.get("skill_code") or args.get("code") or ""
+    description = args.get("description")
+    schema = args.get("args_schema")
+    if not name or not code:
+        return ToolResult(output="Error: provide 'skill_name' and 'skill_code'.",
+                          full_output_path=None, success=False, duration_s=0)
+    t = time.monotonic()
+    r = skills.edit_skill(config, name, code, description, schema)
+    if r.get("success"):
+        return ToolResult(output=r.get("message", f"Skill '{name}' updated."),
+                          full_output_path=None, success=True, duration_s=time.monotonic() - t)
+    return ToolResult(output="edit_skill failed:\n- " + "\n- ".join(r.get("errors", ["unknown"])),
+                      full_output_path=None, success=False, duration_s=time.monotonic() - t)
+
+
+def tool_rollback_skill(args: dict, config: Config) -> ToolResult:
+    """Revert a skill to a previously-saved version. Args: skill_name, version."""
+    import skills
+    name = (args.get("skill_name") or args.get("name") or "").strip()
+    version = (args.get("version") or "").strip()
+    if not name or not version:
+        return ToolResult(output="Error: provide 'skill_name' and 'version'.",
+                          full_output_path=None, success=False, duration_s=0)
+    r = skills.rollback_skill(config, name, version)
+    if r.get("success"):
+        return ToolResult(output=r.get("message", "rolled back"),
+                          full_output_path=None, success=True, duration_s=0)
+    return ToolResult(output="rollback_skill failed:\n- " + "\n- ".join(r.get("errors", ["unknown"])),
+                      full_output_path=None, success=False, duration_s=0)
+
+
+def tool_list_skills(args: dict, config: Config) -> ToolResult:
+    """List all authored skills (and built-in tools)."""
+    import skills
+    r = skills.list_skills(config)
+    lines = ["BUILT-IN TOOLS: " + ", ".join(r["builtin_tools"])]
+    if r["skills"]:
+        lines.append("\nYOUR SKILLS:")
+        for name, info in sorted(r["skills"].items()):
+            rate = info["success_rate"]
+            rate_s = f", {int(rate * 100)}% ok over {info['uses']}" if rate is not None else ""
+            lines.append(f"  - {name} v{info['version']} [{info['status']}]{rate_s} "
+                         f"— {info['description'][:80]}")
+    else:
+        lines.append("\nYOUR SKILLS: (none yet — author one with create_skill)")
+    return ToolResult(output="\n".join(lines), full_output_path=None, success=True, duration_s=0)
 
 
 # --- Tool registry ---
@@ -599,17 +670,30 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "goal_complete": tool_goal_complete,
     "ask_supervisor": tool_ask_supervisor,
     "plan_goal": tool_plan_goal,
+    "create_skill": tool_create_skill,
+    "edit_skill": tool_edit_skill,
+    "list_skills": tool_list_skills,
+    "rollback_skill": tool_rollback_skill,
 }
 
 
 def execute_tool(call: ToolCall, config: Config) -> ToolResult:
-    """Look up and execute a tool by name."""
+    """Look up and execute a tool by name. Never raises — a broken tool/skill
+    returns a failed ToolResult instead of crashing the tick loop."""
     handler = TOOLS.get(call.tool)
     if not handler:
         return ToolResult(
-            output=f"Unknown tool: '{call.tool}'. Available: {', '.join(TOOLS.keys())}",
+            output=f"Unknown tool: '{call.tool}'. Available: {', '.join(sorted(TOOLS.keys()))}",
             full_output_path=None,
             success=False,
             duration_s=0,
         )
-    return handler(call.args, config)
+    try:
+        return handler(call.args, config)
+    except Exception as e:  # noqa: BLE001 - last-resort guard around all tools/skills
+        return ToolResult(
+            output=f"Tool '{call.tool}' raised {type(e).__name__}: {e}",
+            full_output_path=None,
+            success=False,
+            duration_s=0,
+        )

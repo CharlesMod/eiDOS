@@ -1,1 +1,14 @@
 deploy/sdcard/eidos.env
+
+# --- eiDOS repo hygiene ---
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.tmp
+
+# Runtime workspace state (the mind's memory/logs; recreated at runtime)
+workspace/*
+!workspace/goal.md
+workspace.pi-backup/

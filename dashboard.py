@@ -14,7 +14,7 @@ import argparse
 import json
 import sys
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 # Add project root for imports
@@ -959,6 +959,56 @@ body::after {
 </head>
 <body>
 <div id="particles"></div>
+<style>
+#nexus-control{position:fixed;top:0;left:0;right:0;z-index:99999;background:#0b0e14;
+  border-bottom:1px solid #1d2530;padding:7px 14px;display:flex;align-items:center;gap:10px;
+  font-family:Consolas,'SFMono-Regular',monospace;font-size:13px;color:#cdd6e4;}
+#nexus-control b{color:#7da3c9;letter-spacing:1px}
+#nexus-control button{cursor:pointer;border:1px solid #2a3645;background:#161c26;color:#cdd6e4;
+  padding:4px 12px;border-radius:6px;font:inherit}
+#nexus-control button:disabled{opacity:.35;cursor:not-allowed}
+#nx-go{background:#13361f;border-color:#1c7a3a;color:#9cf0b6}
+#nx-stop{background:#3a1414;border-color:#7a1c1c;color:#ff9b9b}
+#nx-state{padding:2px 12px;border-radius:11px;background:#1a1f29;color:#8893a5;font-weight:bold}
+#nx-msg{color:#5d6b7e;margin-left:auto;font-size:12px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style>
+<div id="nexus-control">
+  <b>NEXUS</b>
+  <span id="nx-state">checking…</span>
+  <button id="nx-start" onclick="nxCtl('start')">&#9654; Start (paused)</button>
+  <button id="nx-go" onclick="nxCtl('resume')">GO &#9654;</button>
+  <button id="nx-pause" onclick="nxCtl('pause')">&#9208; Pause</button>
+  <button id="nx-stop" onclick="nxStop()">&#9632; STOP</button>
+  <span id="nx-msg"></span>
+</div>
+<div style="height:38px"></div>
+<script>
+async function nxCtl(action){
+  document.getElementById('nx-msg').textContent=action+'…';
+  try{const r=await fetch('/api/control/'+action,{method:'POST'});const d=await r.json();
+    document.getElementById('nx-msg').textContent=d.message||JSON.stringify(d);}
+  catch(e){document.getElementById('nx-msg').textContent='err: '+e;}
+  nxStatus();
+}
+async function nxStop(){
+  if(!confirm('Authoritative STOP: force-kill the consciousness loop and its children?'))return;
+  await nxCtl('stop');
+}
+async function nxStatus(){
+  try{const r=await fetch('/api/control/status');const s=await r.json();
+    const el=document.getElementById('nx-state');
+    let label='STOPPED',c='#8893a5',bg='#1a1f29';
+    if(s.running&&s.paused){label='PAUSED';c='#ffcf6b';bg='#3a2f12';}
+    else if(s.running){label='RUNNING';c='#7CFC9B';bg='#123a1e';}
+    el.textContent=label+(s.pid?' · pid '+s.pid:'');el.style.color=c;el.style.background=bg;
+    document.getElementById('nx-start').disabled=s.running;
+    document.getElementById('nx-go').disabled=!(s.running&&s.paused);
+    document.getElementById('nx-pause').disabled=!(s.running&&!s.paused);
+    document.getElementById('nx-stop').disabled=!s.running;
+  }catch(e){}
+}
+setInterval(nxStatus,2000);nxStatus();
+</script>
 <div class="container">
     <div class="header">
         <h1>⟨ eiDOS ⟩</h1>
@@ -997,7 +1047,9 @@ body::after {
         </div>
         <div style="margin:8px 0;">
             <canvas id="cpu-chart" width="300" height="80" style="width:100%;height:80px;border:1px solid #1a3a1a;border-radius:4px;background:#0a0a0a;"></canvas>
-            <div style="font-size:9px;color:#555;text-align:center;margin-top:2px;">CPU %</div>
+            <div style="font-size:9px;color:#555;text-align:center;margin-top:2px;">GPU util %</div>
+            <div id="gpu-readout" style="font-size:11px;color:#7CFC9B;margin-top:6px;display:flex;flex-wrap:wrap;gap:10px;justify-content:center;"></div>
+            <div id="llm-readout" style="font-size:11px;color:#6ea8fe;margin-top:4px;display:flex;flex-wrap:wrap;gap:10px;justify-content:center;"></div>
         </div>
         <hr style="border-color:#1a3a1a;margin:8px 0;">
         <div style="font-size:12px;">
@@ -1329,7 +1381,18 @@ async function pollActivity() {
             let data = await resp.json();
             _lastActivity = data;
             updateThoughtBubble(data);
-            if (typeof data.cpu_pct === 'number') pushCpu(data.cpu_pct);
+            if (data.gpu && typeof data.gpu.util === 'number') {
+                pushCpu(data.gpu.util);
+                var g = data.gpu;
+                var vg = g.mem_total ? (g.mem_used/1024).toFixed(1)+'/'+(g.mem_total/1024).toFixed(1)+' GB ('+Math.round(g.mem_used/g.mem_total*100)+'%)' : '—';
+                document.getElementById('gpu-readout').innerHTML =
+                    '<span>'+(g.name||'GPU')+'</span><span>VRAM '+vg+'</span><span>'+Math.round(g.temp)+'°C</span><span>'+Math.round(g.power)+' W</span>';
+            }
+            if (data.llm) {
+                var l = data.llm;
+                document.getElementById('llm-readout').innerHTML =
+                    '<span>'+(l.tok_s||0)+' tok/s</span><span>last tick: '+(l.prompt_tokens||0)+'→'+(l.completion_tokens||0)+' tok</span><span>'+(l.llm_elapsed_s||0)+'s</span>';
+            }
             // Active states get fast polling, sleeping gets slow
             let active = data.state === 'thinking' || data.state === 'executing' || data.state === 'dreaming';
             schedulePoll(active ? 500 : 3000);
@@ -1793,7 +1856,8 @@ def _make_handler(config: Config):
 
             elif self.path == "/api/activity":
                 activity = _read_json(config.workspace / "activity.json")
-                activity["cpu_pct"] = get_cpu_pct()
+                activity["gpu"] = get_gpu_stats()
+                activity["llm"] = get_llm_stats(config)
                 self._respond(200, "application/json", json.dumps(activity))
 
             elif self.path == "/api/chat":
@@ -1819,6 +1883,9 @@ def _make_handler(config: Config):
             elif self.path == "/api/pause":
                 paused = (config.workspace / "paused").exists()
                 self._respond(200, "application/json", json.dumps({"paused": paused}))
+
+            elif self.path == "/api/control/status":
+                self._respond(200, "application/json", json.dumps(_ctrl_status(config)))
 
             else:
                 self._respond(404, "text/plain", "not found")
@@ -1860,10 +1927,172 @@ def _make_handler(config: Config):
                 else:
                     pause_path.write_text("paused by operator")
                     self._respond(200, "application/json", json.dumps({"paused": True}))
+            elif self.path == "/api/control/start":
+                self._respond(200, "application/json", json.dumps(_ctrl_start(config)))
+            elif self.path == "/api/control/stop":
+                self._respond(200, "application/json", json.dumps(_ctrl_stop(config)))
+            elif self.path == "/api/control/resume":
+                self._respond(200, "application/json", json.dumps(_ctrl_resume(config)))
+            elif self.path == "/api/control/pause":
+                self._respond(200, "application/json", json.dumps(_ctrl_pause(config)))
             else:
                 self._respond(404, "text/plain", "not found")
 
     return Handler
+
+
+# --- Nexus consciousness process control (start paused / go / pause / stop) ---
+
+def _ctrl_paths(config):
+    from pathlib import Path
+    ws = config.workspace
+    return ws / "eidos.pid", ws / "paused", Path(__file__).resolve().parent
+
+
+_pid_cache = {}  # pid -> (checked_at, alive); tasklist is slow, cache briefly
+
+
+def _ctrl_pid_alive(pid):
+    import subprocess, time
+    if not pid or pid <= 0:
+        return False
+    now = time.time()
+    hit = _pid_cache.get(pid)
+    if hit and now - hit[0] < 2.5:
+        return hit[1]
+    try:
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                             capture_output=True, text=True, timeout=10)
+        alive = str(pid) in (out.stdout or "")
+    except Exception:
+        alive = False
+    _pid_cache[pid] = (now, alive)
+    return alive
+
+
+def _ctrl_status(config):
+    pidfile, pausefile, _ = _ctrl_paths(config)
+    pid = 0
+    try:
+        pid = int(pidfile.read_text().strip())
+    except Exception:
+        pid = 0
+    running = _ctrl_pid_alive(pid)
+    return {"running": running, "paused": pausefile.exists(), "pid": (pid if running else 0)}
+
+
+def _ctrl_start(config):
+    import subprocess, sys, os
+    pidfile, pausefile, kdir = _ctrl_paths(config)
+    st = _ctrl_status(config)
+    if st["running"]:
+        return {"ok": False, "message": f"already running (pid {st['pid']})", **st}
+    pausefile.write_text("paused on start - click GO to begin")  # boot PAUSED
+    logf = open(config.workspace / "eidos_console.log", "ab")
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    proc = subprocess.Popen(
+        [sys.executable, str(kdir / "eidos.py"), "--config", str(kdir / "config.toml")],
+        cwd=str(kdir), stdout=logf, stderr=subprocess.STDOUT, env=env, creationflags=flags,
+    )
+    pidfile.write_text(str(proc.pid))
+    return {"ok": True, "message": f"started PAUSED (pid {proc.pid}) - click GO to wake it",
+            **_ctrl_status(config)}
+
+
+def _ctrl_stop(config):
+    import subprocess, os
+    pidfile, pausefile, _ = _ctrl_paths(config)
+    st = _ctrl_status(config)
+    if not st["running"]:
+        try:
+            pidfile.unlink()
+        except OSError:
+            pass
+        return {"ok": True, "message": "not running", **_ctrl_status(config)}
+    pid = st["pid"]
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       capture_output=True, text=True, timeout=15)
+    else:
+        subprocess.run(["kill", "-9", str(pid)], capture_output=True, timeout=15)
+    try:
+        pidfile.unlink()
+    except OSError:
+        pass
+    return {"ok": True, "message": f"force-killed pid {pid} (and children)", **_ctrl_status(config)}
+
+
+def _ctrl_resume(config):
+    _, pausefile, _ = _ctrl_paths(config)
+    try:
+        pausefile.unlink()
+    except OSError:
+        pass
+    return {"ok": True, "message": "resumed - consciousness running", **_ctrl_status(config)}
+
+
+def _ctrl_pause(config):
+    _, pausefile, _ = _ctrl_paths(config)
+    pausefile.write_text("paused by operator")
+    return {"ok": True, "message": "paused", **_ctrl_status(config)}
+
+
+# --- GPU + LLM telemetry for the dashboard (nvidia-smi + metrics.jsonl tail) ---
+
+def get_gpu_stats(_cache={"t": 0.0, "v": {}}):
+    import subprocess, time
+    now = time.time()
+    if _cache["v"] and now - _cache["t"] < 1.0:
+        return _cache["v"]
+    v = {}
+    try:
+        out = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,name",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        line = (out.stdout or "").strip().splitlines()[0]
+        p = [x.strip() for x in line.split(",")]
+        v = {"util": float(p[0]), "mem_used": float(p[1]), "mem_total": float(p[2]),
+             "temp": float(p[3]), "power": float(p[4]),
+             "name": p[5] if len(p) > 5 else "GPU"}
+    except Exception:
+        v = {}
+    _cache["t"] = now
+    _cache["v"] = v
+    return v
+
+
+def get_llm_stats(config, _cache={"t": 0.0, "v": {}}):
+    import time
+    now = time.time()
+    if _cache["v"] and now - _cache["t"] < 1.0:
+        return _cache["v"]
+    v = {}
+    try:
+        p = config.workspace / "metrics.jsonl"
+        with open(p, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 4096))
+            tail = f.read().decode("utf-8", "replace")
+        lines = [ln for ln in tail.splitlines() if ln.strip()]
+        if lines:
+            m = json.loads(lines[-1])
+            ct = m.get("completion_tokens", 0) or 0
+            el = m.get("llm_elapsed_s", 0) or 0
+            v = {"tok_s": round(ct / el, 1) if el > 0 else 0,
+                 "completion_tokens": ct,
+                 "prompt_tokens": m.get("prompt_tokens", 0),
+                 "llm_elapsed_s": round(el, 2),
+                 "tick": m.get("tick", 0)}
+    except Exception:
+        v = {}
+    _cache["t"] = now
+    _cache["v"] = v
+    return v
 
 
 def main():
@@ -1876,7 +2105,8 @@ def main():
     port = args.port or config.dashboard_port
 
     handler = _make_handler(config)
-    server = HTTPServer(("0.0.0.0", port), handler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), handler)
+    server.daemon_threads = True
     print(f"[dashboard] Serving on http://0.0.0.0:{port}")
     print(f"[dashboard] Reading from {config.workspace}")
     try:

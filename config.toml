@@ -1,85 +1,89 @@
 [llm]
-url = "http://100.113.123.91:1234"
-model = "qwen3.5-4b-uncensored-hauhaucs-aggressive"
+# House nexus mind — Gemma-4-12B "house-ai" on gamingPC via llama.cpp (OpenAI-compatible).
+# Routed through the live-monitor tap (:8088 -> :8081) so Nexus's token stream + tok/s
+# appear on the :9100 dashboard. For a direct connection (no monitor), set url to :8081.
+url = "http://127.0.0.1:8088"
+model = "house-ai"
+# Alt (uncensored, LM Studio): url="http://127.0.0.1:1234" model="qwen3.5-4b-uncensored-hauhaucs-aggressive"
 temperature = 0.6
-max_tokens = 1024
+max_tokens = 2048
 request_timeout_s = 300
 top_p = 0.95
 top_k = 20
 min_p = 0.0
-presence_penalty = 1.5
+presence_penalty = 0.5
 
 [tick]
-interval_s = 5
+interval_s = 20            # idle "consciousness" cadence; wakes instantly on chat/intervention
 loop_detect_window = 3
 
 [compaction]
 token_threshold = 8000
 tick_threshold = 20
 max_tokens = 2048
-retry_max_tokens = 4096         # retry budget when thinking exhausts first attempt             # thinking models need headroom: ~1024 reasoning + ~1024 content
-# Generous budgets for distillation — compaction needs to see everything
-obs_max_chars = 16000       # observation chars fed to compaction LLM call
-memory_max_chars = 6000     # memory chars fed to compaction LLM call
-context_max_chars = 40000   # total compaction prompt budget (~11400 tokens)
+retry_max_tokens = 4096
+obs_max_chars = 16000
+memory_max_chars = 6000
+context_max_chars = 40000
 
 [output]
-truncation_chars = 2000
+truncation_chars = 3000
 
 [safety]
 cmd_timeout_s = 120
 disk_min_gb = 1.0
-ram_max_pct = 85.0
-bg_output_max_bytes = 10000000      # 10MB cap for background job output files
+ram_max_pct = 90.0
+bg_output_max_bytes = 10000000
 protected_patterns = [
     "rm\\s+-rf\\s+/",
     "rm\\s+.*-r",
     "find\\s+.*-exec\\s+rm",
     "find\\s+.*-delete",
     "systemctl\\s+(stop|disable|kill)\\s+.*eidos",
+    "nssm\\s+(stop|remove)\\s+.*(EiDOS|HouseAI)",
     "pkill.*eidos",
-    "kill.*eidos",
     "shutdown",
     "reboot",
     "halt",
     "mkfs",
     "dd\\s+.*of=/dev/",
+    "format\\s+[A-Za-z]:",
 ]
 
 [session]
 grace_period_s = 60
 
 [self_healing]
-restart_cmd = ""                # e.g. "systemctl restart llama-server"
-local_only = false              # production: true — restart always means local llama-server
-max_consecutive_failures = 5    # restart LLM after this many back-to-back errors
-max_tokens_ceiling = 4096       # hard upper limit for adaptive token scaling
-token_backoff_step = 512        # bump max_tokens by this much per reasoning exhaustion
-reasoning_exhaust_compaction_trigger = 3  # force compaction after N consecutive exhaustions
+restart_cmd = ""                # empty -> no systemd hot-swap / no llm restart (correct on Windows)
+local_only = false
+max_consecutive_failures = 5
+max_tokens_ceiling = 4096
+token_backoff_step = 512
+reasoning_exhaust_compaction_trigger = 3
 
 [rotation]
 obs_max_lines = 5000
 archive_days = 14
-llm_log_max_bytes = 5000000    # 5MB then rotate
-llm_log_archive_count = 3     # keep last N llm_log archives
-metrics_max_bytes = 2000000    # 2MB then rotate
-metrics_archive_count = 3     # keep last N metrics archives
-snapshot_max_count = 20        # keep last N memory snapshots
+llm_log_max_bytes = 5000000
+llm_log_archive_count = 3
+metrics_max_bytes = 2000000
+metrics_archive_count = 3
+snapshot_max_count = 20
 
 [context]
-obs_max_chars = 4000
-obs_max_count = 20
-# Per-section budgets for normal ticks — keep lean for fast inference
-goal_max_chars = 2000
-memory_max_chars = 4000
-plan_max_chars = 800            # briefing model: plan section budget
-intelligence_max_chars = 1200   # briefing model: auto-recalled knowledge
-env_max_chars = 800
-interventions_max_chars = 2000
-max_total_chars = 6500      # safe ceiling: ~1870 tokens + 1024 max_tokens fits n_ctx~3072
-chars_per_token = 3.5       # rough estimate for Qwen3
-briefing_model = true       # enable new context structure
-dream_combined = true       # combined plan+extract in one LLM call (faster on Pi)
+# Budgets opened up for the 128k-ctx house mind (Pi defaults were ~6500 total chars).
+obs_max_chars = 12000
+obs_max_count = 30
+goal_max_chars = 3000
+memory_max_chars = 8000
+plan_max_chars = 2000
+intelligence_max_chars = 3000
+env_max_chars = 1000
+interventions_max_chars = 6000     # chat history room
+max_total_chars = 40000            # ~10k tokens; dense, far below 128k ceiling
+chars_per_token = 4.0              # Gemma tokenizer
+briefing_model = true
+dream_combined = true
 
 [persona]
 enabled = true
@@ -89,11 +93,11 @@ port = 8099
 
 [knowledge]
 enabled = true
-recall_top_k = 3          # entries auto-surfaced per tick
-recall_max_chars = 1200   # budget for Intelligence section
-embedding_enabled = false # Phase 5: semantic search (requires onnxruntime)
-embedding_cohost = false  # keep embedding model resident in RAM
+recall_top_k = 4
+recall_max_chars = 3000
+embedding_enabled = false
+embedding_cohost = false
 embedding_model_dir = "models/all-MiniLM-L6-v2"
 
 [paths]
-workspace = "workspace"
+workspace = "C:/Users/cmod/llm/Kairos/workspace"
