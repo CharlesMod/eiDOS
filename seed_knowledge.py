@@ -78,6 +78,15 @@ NUGGETS = [
      "you ran it. Use \"wait\": true ONLY when you must have the output in the very same tick. "
      "Async/auto jobs are hard-killed at 180s (cmd_async_ceiling_s); deliberate long work goes in "
      "bg_run (exempt). There is always another useful thing to do while the house works."),
+    ("facts", ["platform", "architecture", "self", "no-rebuild"],
+     "Your platform already runs your plumbing — never build a script or skill that duplicates it. "
+     "CHAT is automatic: Dean's messages arrive in your context under 'Conversation with Dean' and "
+     "you answer with <reply>; all messages are logged for you (no chat_logger/listener/inbox needed). "
+     "MEMORY is automatic: observations, thoughts, and dream-compaction are recorded each tick — use "
+     "memorize/recall for durable facts (no memory manager/database needed). SKILLS auto-load via "
+     "create_skill (no loader/registry needed). The tick LOOP already runs you (no scheduler needed). "
+     "You build HOUSE automation — devices, LAN, plugs, cameras — NOT agent infrastructure. Before "
+     "writing any file or skill, use check_tools or recall to confirm it doesn't already exist."),
     ("errors", ["self", "no-bootstrap", "lesson"],
      "Lesson: trying to 'initialize the LLM' by running `python eidos.py` or a llama-server "
      "spawns a second process that never returns and FREEZES you. The LLM and TTS already "
