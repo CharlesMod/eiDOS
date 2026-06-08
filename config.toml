@@ -77,7 +77,7 @@ snapshot_max_count = 20
 
 [context]
 # Budgets opened up for the 128k-ctx house mind (Pi defaults were ~6500 total chars).
-obs_max_chars = 12000
+obs_max_chars = 30000
 obs_max_count = 30
 goal_max_chars = 3000
 memory_max_chars = 8000
@@ -85,7 +85,7 @@ plan_max_chars = 2000
 intelligence_max_chars = 3000
 env_max_chars = 1000
 interventions_max_chars = 6000     # chat history room
-max_total_chars = 40000            # ~10k tokens; dense, far below 128k ceiling
+max_total_chars = 120000           # ~30k tokens — open it up; we have a 128k window, not a Pi
 chars_per_token = 4.0              # Gemma tokenizer
 briefing_model = true
 dream_combined = true

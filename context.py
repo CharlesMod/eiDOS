@@ -423,6 +423,85 @@ def _assemble_legacy(
 
 
 # ---------------------------------------------------------------------------
+# Presence + conversation-thread assembly (the model gets its own history as turns)
+# ---------------------------------------------------------------------------
+
+def _build_presence(config: Config, tick_number: int, goal_start_time: float) -> str:
+    """A 'you are here' header — time, your state, what you're on — for presence."""
+    import time, json
+    lines = ["## Right now",
+             f"It is {time.strftime('%A %H:%M', time.localtime())} "
+             f"({time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}); you are on tick {tick_number}."]
+    try:
+        p = json.loads((config.workspace / "persona.json").read_text(encoding="utf-8"))
+        traits = ", ".join(p.get("traits", []) or []) or "still forming"
+        lines.append(f"You are Level {p.get('level', '?')} — {p.get('mood', 'curious')}, "
+                     f"{p.get('xp', '?')} XP. Traits: {traits}.")
+    except Exception:  # noqa: BLE001
+        pass
+    sub = current_subtask(config)
+    if sub:
+        lines.append(f"Right now you are working on: {sub}")
+    alerts = generate_env_alerts(config)
+    if alerts:
+        lines.append(alerts)
+    return "\n".join(lines)
+
+
+def _build_history_thread(config: Config, n_ticks: int = 14) -> list[dict]:
+    """Recreate the recent past as a real assistant/user conversation so the model
+    experiences its own thought -> action -> result flow, not a flattened blob.
+    Consecutive identical actions collapse into one turn with a count."""
+    import json
+    obs = read_recent_observations(config, max_chars=config.context_obs_max_chars,
+                                   max_count=n_ticks * 2)
+    if not obs:
+        return []
+    obs = list(reversed(obs))  # oldest -> newest
+    thoughts = {t.get("tick"): (t.get("text") or "")
+                for t in read_recent_thoughts(config, n=n_ticks * 3)}
+
+    collapsed = []
+    for o in obs:
+        s = _obs_sig(o)
+        if (collapsed and collapsed[-1][0] == s
+                and o.get("tool") not in ("system", "watchdog", "dream")):
+            collapsed[-1][1] += 1
+        else:
+            collapsed.append([s, 1, o])
+
+    out = []
+    for _s, count, o in collapsed:
+        tool = o.get("tool")
+        output = o.get("output") or ""
+        if tool in ("system", "watchdog"):
+            out.append({"role": "user", "content": f"[{tool}] {output[:600]}"})
+            continue
+        if tool == "dream":
+            out.append({"role": "user",
+                        "content": f"[you rested and consolidated memory — {output[:200]}]"})
+            continue
+        thought = thoughts.get(o.get("tick"), "")
+        if tool == "thought":
+            if thought:
+                out.append({"role": "assistant", "content": thought})
+            continue
+        try:
+            argstr = json.dumps(o.get("args", {}), ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            argstr = str(o.get("args", {}))
+        rep = f"  (you did this {count}x in a row)" if count > 1 else ""
+        out.append({"role": "assistant",
+                    "content": (thought + "\n" if thought else "")
+                    + f"<tool>{tool}</tool>\n<args>{argstr}</args>{rep}"})
+        ok = "OK" if o.get("success") else "FAILED"
+        tail = ("  — same result each time; you already have this, stop repeating and move on"
+                if count > 1 else "")
+        out.append({"role": "user", "content": f"[result · {tool} · {ok}{tail}]\n{output[:3000]}"})
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Briefing model context assembly
 # ---------------------------------------------------------------------------
 
@@ -444,103 +523,40 @@ def _assemble_briefing(
     system = SYSTEM_PROMPT_BRIEFING.format(workspace=str(config.workspace))
     messages.append({"role": "system", "content": system})
 
-    sections = []
+    # --- Durable context: presence + mission + plan + knowledge + Dean's messages ---
+    durable = [_build_presence(config, tick_number, goal_start_time)]
 
-    # 2. MISSION — goal + plan.md
     goal = read_goal(config)
     if goal:
-        if len(goal) > config.context_goal_max_chars:
-            _log_overrun(config, tick_number, "goal", len(goal), config.context_goal_max_chars)
-            goal = _truncate(goal, config.context_goal_max_chars, "goal")
-        sections.append(f"## Mission\n{goal}")
+        durable.append(f"## Mission\n{_truncate(goal, config.context_goal_max_chars, 'goal')}")
     else:
-        sections.append("## Mission\n(No goal set. Waiting for goal.md to be created.)")
+        durable.append("## Mission\n(No goal set.)")
 
     plan = read_plan(config)
     if plan:
-        if len(plan) > config.context_plan_max_chars:
-            _log_overrun(config, tick_number, "plan", len(plan), config.context_plan_max_chars)
-            plan = _truncate(plan, config.context_plan_max_chars, "plan")
-        sections.append(f"## Plan\n{plan}")
+        durable.append(f"## Plan\n{_truncate(plan, config.context_plan_max_chars, 'plan')}")
 
-    # Subgoals (immune to dream cycle rewrites)
     subgoals = read_subgoals(config)
     if subgoals:
-        if len(subgoals) > config.context_subgoals_max_chars:
-            _log_overrun(config, tick_number, "subgoals", len(subgoals), config.context_subgoals_max_chars)
-            subgoals = _truncate(subgoals, config.context_subgoals_max_chars, "subgoals")
-        sections.append(f"## Subgoals\n{subgoals}")
+        durable.append(f"## Subgoals\n{_truncate(subgoals, config.context_subgoals_max_chars, 'subgoals')}")
 
-    # 3. INTELLIGENCE — auto-recalled knowledge from the knowledge store
     intel = _build_intelligence_section(config, goal, plan or "")
     if intel:
-        sections.append(f"## Intelligence\n{intel}")
+        durable.append(f"## What you already know (recalled from memory)\n{intel}")
 
-    # 4. SITUATION — inverted-pyramid observations + alert-only env + interventions
-
-    # Interventions first (urgent)
+    # Dean's messages + your replies — highest priority
     interventions = read_interventions(config)
     recent_replies = _read_recent_replies(config, n=3)
-    chat_parts = []
-    if recent_replies:
-        for r in recent_replies:
-            chat_parts.append(f"[your reply @ {r.get('ts', '?')}]\n{r.get('text', '')}")
-    if interventions:
-        for i in interventions:
-            chat_parts.append(f"[operator @ {i['filename']}]\n{i['content']}")
+    chat_parts = [f"[you said @ {r.get('ts', '?')}] {r.get('text', '')}" for r in recent_replies]
+    for i in (interventions or []):
+        chat_parts.append(f"[Dean @ {i['filename']}] {i['content']}")
     if chat_parts:
-        intervention_text = "\n\n".join(chat_parts)
-        if len(intervention_text) > config.context_interventions_max_chars:
-            _log_overrun(config, tick_number, "interventions",
-                         len(intervention_text), config.context_interventions_max_chars)
-            intervention_text = _truncate(intervention_text,
-                                          config.context_interventions_max_chars, "interventions")
-        sections.append(f"## Chat with supervisor\n{intervention_text}")
+        durable.append("## Conversation with Dean\n" + "\n".join(chat_parts))
 
-    # Environment — alerts only (zero chars when normal)
-    env_alerts = generate_env_alerts(config)
-    if env_alerts:
-        sections.append(f"## Environment\n{env_alerts}")
+    messages.append({"role": "user", "content": "\n\n".join(durable)})
 
-    # Observations — wider window (so it can see its own recent history), collapsed
-    observations = read_recent_observations(
-        config, max_chars=config.context_obs_max_chars, max_count=12)
-    if observations:
-        obs_text = _render_observations_pyramid(observations, full_budget=2000)
-        if len(obs_text) > config.context_obs_max_chars:
-            _log_overrun(config, tick_number, "observations",
-                         len(obs_text), config.context_obs_max_chars)
-            obs_text = _truncate(obs_text, config.context_obs_max_chars, "observations")
-        sections.append(f"## Recent Observations\n{obs_text}")
-
-    # Your own train of thought — the salient point to continue FROM (kept last).
-    # Consecutive near-identical thoughts collapse so a stuck loop reads as one line.
-    thoughts = read_recent_thoughts(config, n=10)
-    if thoughts:
-        def _tnorm(t):
-            return "".join(c for c in (t.get("text", "") or "").lower()
-                           if c.isalnum() or c == " ")[:45]
-        groups = []
-        for t in thoughts:
-            txt = (t.get("text", "") or "").strip()
-            if not txt:
-                continue
-            k = _tnorm(t)
-            if groups and groups[-1][0] == k:
-                groups[-1][1] += 1
-            else:
-                groups.append([k, 1, txt])
-        tlines = []
-        for _k, count, txt in groups:
-            rep = f"  ×{count} (you keep thinking this — act on it or move on)" if count > 1 else ""
-            tlines.append(f"- {txt}{rep}")
-        thought_text = "\n".join(tlines)
-        if len(thought_text) > 2200:
-            thought_text = "…\n" + thought_text[-2200:]
-        sections.append(f"## Your recent train of thought (continue from the last one)\n{thought_text}")
-
-    user_content = "\n\n".join(sections)
-    messages.append({"role": "user", "content": user_content})
+    # --- Recent past AS A REAL THREAD: your thoughts/actions and the results they got ---
+    messages.extend(_build_history_thread(config, n_ticks=14))
 
     # 5. Tick prompt
     tick_msg = _build_tick_prompt(config, tick_number, goal_start_time,
@@ -551,12 +567,8 @@ def _assemble_briefing(
     total_chars = _enforce_ceiling(config, messages, tick_number)
 
     est_tokens = estimate_tokens(str(total_chars), config.chars_per_token)
-    logger.info("tick=%d ctx_chars=%d est_tokens=%d (briefing mode) sections=[sys=%d goal=%d plan=%d intel=%d obs=%d tick=%d]",
-                tick_number, total_chars, est_tokens,
-                len(system), len(goal) if goal else 0,
-                len(plan) if plan else 0, len(intel) if intel else 0,
-                len(observations) if observations else 0,
-                len(tick_msg))
+    logger.info("tick=%d ctx_chars=%d est_tokens=%d (conversation mode) messages=%d",
+                tick_number, total_chars, est_tokens, len(messages))
 
     return messages
 
