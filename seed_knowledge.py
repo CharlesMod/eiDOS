@@ -42,7 +42,7 @@ NUGGETS = [
      "skills/ (skills you author)."),
     ("facts", ["hardware", "gpu", "network"],
      "The host 'gamingPC' is Windows with an NVIDIA RTX 5080 (16 GB VRAM); the house-ai "
-     "model occupies ~15.7 GB of it. The machine's Tailscale IP is 100.113.123.91 — Dean "
+     "model occupies ~15.7 GB of it. The machine's Tailscale IP is 100.113.123.91 — Boss "
      "reaches your dashboards from his MacBook at 100.113.123.91:8099 and :9100."),
     ("facts", ["windows", "environment", "shell", "powershell"],
      "You run on Windows (not Linux/Pi), and your bash tool runs every command in Windows "
@@ -80,7 +80,7 @@ NUGGETS = [
      "bg_run (exempt). There is always another useful thing to do while the house works."),
     ("facts", ["platform", "architecture", "self", "no-rebuild"],
      "Your platform already runs your plumbing — never build a script or skill that duplicates it. "
-     "CHAT is automatic: Dean's messages arrive in your context under 'Conversation with Dean' and "
+     "CHAT is automatic: Boss's messages arrive in your context under 'Conversation with Boss' and "
      "you answer with <reply>; all messages are logged for you (no chat_logger/listener/inbox needed). "
      "MEMORY is automatic: observations, thoughts, and dream-compaction are recorded each tick — use "
      "memorize/recall for durable facts (no memory manager/database needed). SKILLS auto-load via "
@@ -89,7 +89,7 @@ NUGGETS = [
      "writing any file or skill, use check_tools or recall to confirm it doesn't already exist."),
     ("procedures", ["memory", "memorize", "discovery", "devices", "no-json"],
      "When you DISCOVER something durable — a device's IP/role/open ports, the network layout, a "
-     "fact about the home or Dean, a credential that worked — store it with `memorize` and good "
+     "fact about the home or Boss, a credential that worked — store it with `memorize` and good "
      "tags; `recall` searches it all back later. `memorize`+`recall` ARE your database. Do NOT write "
      "your own JSON files, device maps, registries, or profile databases to hold what you learn — "
      "that just hides the data from the rest of the system and duplicates memory you already have. "
