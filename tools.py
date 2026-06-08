@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -119,6 +120,32 @@ def proc_seq() -> int:
     return _PROC_SEQ
 
 
+# Match `powershell [flags] -Command/-c <script>` so we can unwrap and run <script> via the
+# LIST form (one argv straight to powershell.exe), never through cmd.exe (which mangles the
+# nested quotes / $ / colons in the model's PowerShell — the cause of its parse errors).
+_PS_UNWRAP_RE = re.compile(r"^\s*(?:powershell|pwsh)(?:\.exe)?\b.*?\s-(?:c|command)\b\s+(.*)$",
+                           re.IGNORECASE | re.DOTALL)
+_PS_LIST = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
+
+
+def _route_windows_command(cmd: str):
+    """(popen_arg, use_shell) for a Windows command. Always prefer list-form PowerShell so
+    cmd.exe never re-parses (and corrupts) the model's PowerShell."""
+    cl = cmd.lstrip()
+    low = cl.lower()
+    if low.startswith(("cmd ", "cmd.exe", "cmd/")):
+        return cmd, True  # operator explicitly wants cmd.exe — honor it
+    if low.startswith(("powershell", "pwsh")):
+        m = _PS_UNWRAP_RE.match(cl)
+        if m:
+            script = m.group(1).strip()
+            if len(script) >= 2 and script[0] == script[-1] and script[0] in ("\"", "'"):
+                script = script[1:-1]   # drop the one layer of quotes wrapping the -Command arg
+            return _PS_LIST + [script], False
+        return cmd, True  # e.g. `powershell -File x.ps1` — run as given
+    return _PS_LIST + [cmd], False      # bare command -> run as PowerShell directly
+
+
 def tool_bash(args: dict, config: Config) -> ToolResult:
     """Run a shell command; fast commands return inline, slow ones auto-background."""
     cmd = args.get("cmd", "") or args.get("command", "")
@@ -155,18 +182,13 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["start_new_session"] = True
-        # Windows: PowerShell IS the shell. No heuristics, no translation — the model
-        # knows it's on Windows (told so in its prompt) and writes PowerShell. We run the
-        # command in PowerShell 5.1 verbatim. If it explicitly invokes another shell
-        # (cmd/pwsh/powershell), we honor that as-is via shell=True. (list form sidesteps
-        # cmd.exe quote-escaping for the PS case.)
-        cl = cmd.lstrip().lower()
-        if os.name == "nt" and not cl.startswith(("powershell", "pwsh", "cmd", "cmd.exe")):
-            popen_arg = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd]
-            use_shell = False
+        # Windows: PowerShell IS the shell. The model writes PowerShell; we run it via the list
+        # form so cmd.exe never re-parses it. Even when the model wraps it in `powershell -Command
+        # "..."`, we unwrap the inner script and run THAT via list form — no cmd.exe quote-hell.
+        if os.name == "nt":
+            popen_arg, use_shell = _route_windows_command(cmd)
         else:
-            popen_arg = cmd
-            use_shell = True
+            popen_arg, use_shell = cmd, True
         # Stream output to a file (not an in-memory PIPE) so a slow command can be
         # handed to the background ledger mid-run WITHOUT losing its output or killing it.
         config.outputs_dir.mkdir(parents=True, exist_ok=True)

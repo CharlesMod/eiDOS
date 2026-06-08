@@ -45,12 +45,14 @@ NUGGETS = [
      "model occupies ~15.7 GB of it. The machine's Tailscale IP is 100.113.123.91 — Boss "
      "reaches your dashboards from his MacBook at 100.113.123.91:8099 and :9100."),
     ("facts", ["windows", "environment", "shell", "powershell"],
-     "You run on Windows (not Linux/Pi), and your bash tool runs every command in Windows "
-     "PowerShell 5.1 — so write PowerShell: Get-* cmdlets, Test-Connection, $vars, and native "
-     "exes (git, curl.exe, nvidia-smi, arp, ipconfig) all work. 'wmic' is gone — use "
-     "'Get-CimInstance Win32_Process' or 'tasklist'. 'ForEach-Object -Parallel' needs PowerShell "
-     "7 (NOT installed here) and errors in 5.1 — use 'Start-Job' or a narrow sequential probe "
-     "instead. To run a cmd.exe command, prefix it with 'cmd /c'."),
+     "You run on Windows, and your bash tool ALREADY runs every command in Windows PowerShell 5.1. "
+     "So write the PowerShell DIRECTLY — do NOT wrap it as `powershell -Command \"...\"`; that nests "
+     "quotes and causes parse errors. Just write e.g. `Test-Connection -Count 1 192.168.86.48` or "
+     "`arp -a`. Get-* cmdlets, $vars, pipelines, and native exes (git, curl.exe, nvidia-smi, arp, "
+     "ipconfig) all work. Gotchas: (1) a colon right after a variable in a double-quoted string needs "
+     "braces — write \"${ip}:${port}\", not \"$ip:$port\". (2) -ErrorAction only works on cmdlets, not "
+     ".NET method calls. (3) 'ForEach-Object -Parallel' and 'wmic' are unavailable — use a plain "
+     "pipeline / 'Get-CimInstance' / 'tasklist'. To run a cmd.exe command, prefix it with 'cmd /c'."),
     ("procedures", ["lan", "discovery", "devices"],
      "To discover devices on the LAN, run `arp -a` to list IP/MAC neighbors; smart plugs "
      "and IP cameras appear there. Probe a candidate IP with http_get to identify it. Map "
