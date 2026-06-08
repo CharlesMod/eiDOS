@@ -564,7 +564,11 @@ def run_loop(config: Config, persona=None, wal=None):
             print(f"{pfx} RAM pressure: {ram_pct:.0f}%, killed children")
 
         # --- Auto-plan on fresh/changed goal (call plan_goal directly) ---
-        if goal_changed or fresh_goal:
+        # OFF by default: auto-decomposition drifted into platform-contradicting subgoals (e.g.
+        # "build a chat listener", "build a memory database") that became the most-salient — and
+        # wrong — "current task" every tick. The single source of objective is now goal.md's
+        # Immediate focus + the agent's own update_plan, surfaced as one "## Current focus" block.
+        if (goal_changed or fresh_goal) and getattr(config, "auto_subgoals", False):
             label = "NEW GOAL DETECTED" if goal_changed else "FRESH GOAL — no subgoals exist"
             print(f"{pfx} {label} — auto-generating subgoals")
             write_activity(config, "planning", detail="breaking goal into subgoals")

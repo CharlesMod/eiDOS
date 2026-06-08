@@ -323,8 +323,8 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
         elif remaining <= 2:
             urgency_note = f" — {remaining} tick{'s' if remaining != 1 else ''} remaining: wrap up and call goal_complete if ready"
 
-    subtask = current_subtask(config)
-    subtask_line = f"Current task: {subtask}" if subtask else "No subtasks defined — focus on the goal directly."
+    focus = _current_focus(config)
+    subtask_line = f"Current focus: {focus}" if focus else "Focus on your mission directly."
 
     if loop_detected:
         return TICK_PROMPT_LOOP_DETECTED.format(
@@ -480,6 +480,33 @@ def _assemble_legacy(
 # Presence + conversation-thread assembly (the model gets its own history as turns)
 # ---------------------------------------------------------------------------
 
+def _current_focus(config: Config) -> str:
+    """The ONE trustworthy objective line — replaces the four conflicting 'current task' sources
+    (drifted auto-subgoals, plan, mission, history). It is the goal's Immediate-focus + the agent's
+    own next plan step. Stable and coherent: what am I doing, and what's the next concrete step."""
+    focus = ""
+    glines = (read_goal(config) or "").splitlines()
+    for i, line in enumerate(glines):
+        s = line.strip().strip("*").strip()
+        if s.lower().startswith("immediate focus"):
+            focus = s.split(":", 1)[-1].strip().strip("*_").strip()
+            # gather continuation lines (the focus may wrap) until a blank line / new heading
+            for cont in glines[i + 1:]:
+                c = cont.strip()
+                if not c or c.startswith(("#", "_", "**", "Done when")):
+                    break
+                focus = (focus + " " + c.strip("*_").strip()).strip()
+            break
+    step = ""
+    for line in (read_plan(config) or "").splitlines():
+        s = line.strip()
+        if s and not s.startswith("#"):
+            step = s.lstrip("0123456789.-)[] x").strip()
+            break
+    parts = [p for p in (focus, (f"next step: {step}" if step else "")) if p]
+    return " — ".join(parts)
+
+
 def _build_presence(config: Config, tick_number: int, goal_start_time: float) -> str:
     """A 'you are here' header — time, your state, what you're on — for presence."""
     import time, json
@@ -493,9 +520,8 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
                      f"{p.get('xp', '?')} XP. Traits: {traits}.")
     except Exception:  # noqa: BLE001
         pass
-    sub = current_subtask(config)
-    if sub:
-        lines.append(f"Right now you are working on: {sub}")
+    # (The single objective is rendered as its own high-salience "## Current focus" block, not here —
+    # avoids the old drifted "working on: build a chat listener" line competing with the real goal.)
     # In-flight async dispatches — so the model remembers what it's waiting on and
     # doesn't re-run them (results arrive later tagged [↩ job N]).
     try:
@@ -599,8 +625,13 @@ def _assemble_briefing(
     system = SYSTEM_PROMPT_BRIEFING.format(workspace=str(config.workspace))
     messages.append({"role": "system", "content": system})
 
-    # --- Durable context: presence + self-guide + mission + plan + knowledge + Boss's messages ---
+    # --- Durable context: presence + focus + self-guide + mission + plan + knowledge + Boss ---
     durable = [_build_presence(config, tick_number, goal_start_time)]
+
+    # The ONE objective, high salience, right under presence (replaces the 4 conflicting sources).
+    focus = _current_focus(config)
+    if focus:
+        durable.append("## Current focus (your single objective — advance THIS)\n" + focus)
 
     # Self-guide — Boss's standing behavioral directives, high salience (just under presence).
     if getattr(config, "self_guide_enabled", True):
@@ -633,9 +664,8 @@ def _assemble_briefing(
     if plan:
         durable.append(f"## Plan\n{_truncate(plan, config.context_plan_max_chars, 'plan')}")
 
-    subgoals = read_subgoals(config)
-    if subgoals:
-        durable.append(f"## Subgoals\n{_truncate(subgoals, config.context_subgoals_max_chars, 'subgoals')}")
+    # (## Subgoals removed — auto-decomposition drifted into platform-contradicting goals. The single
+    #  objective is the "## Current focus" block above; the agent keeps its next step via update_plan.)
 
     # World model (deterministic): the facts eidos has LEARNED — always visible so memory is
     # readable, not write-only. Then a small step-keyed relevance recall, deduped against it.
