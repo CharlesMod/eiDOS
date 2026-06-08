@@ -1229,6 +1229,20 @@ setInterval(nxStatus,2000);nxStatus();
         </div>
     </div>
 
+    <!-- Git Safety: checkpoint / restore eiDOS's source (emergency reversibility) -->
+    <div class="panel" style="grid-column: 1 / -1;">
+        <div class="panel-title">Git Safety — checkpoint &amp; restore
+            <span style="float:right;font-size:9px;color:#555;" id="git-status"></span>
+        </div>
+        <div style="margin-bottom:6px;">
+            <input id="git-label" placeholder="checkpoint label (optional)" style="background:#0a0f0a;color:#cfeccf;border:1px solid #1a3a1a;border-radius:5px;padding:4px 8px;font-size:11px;width:260px;">
+            <button onclick="doCheckpoint()" style="background:#123a1e;color:#7CFC9B;border:1px solid #2a5a2a;border-radius:5px;padding:4px 12px;cursor:pointer;">⛳ Checkpoint now</button>
+            <button onclick="doRestore('')" style="background:#3a2f12;color:#ffcf6b;border:1px solid #5a4a1a;border-radius:5px;padding:4px 12px;cursor:pointer;margin-left:6px;">↩ Restore last good</button>
+            <span id="git-msg" style="font-size:10px;color:#7CFC9B;margin-left:8px;"></span>
+        </div>
+        <div id="git-checkpoints" style="font-size:11px;color:#9fc4a0;max-height:150px;overflow:auto;font-family:monospace;"></div>
+    </div>
+
     <!-- Knowledge Nuggets + Working Memory: side by side -->
     <div class="panel">
         <div class="panel-title">Knowledge Nuggets</div>
@@ -2050,6 +2064,45 @@ async function rejectSelfGuideProposal() {
 }
 document.getElementById('self-guide-text').addEventListener('input', function(){ _selfGuideDirty = true; });
 setInterval(loadSelfGuide, 10000); loadSelfGuide();
+
+// --- Git safety (checkpoint / restore eiDOS's source) ---
+async function loadGitLog() {
+    try {
+        let r = await fetch('/api/git/log'); if (!r.ok) return;
+        let d = await r.json();
+        document.getElementById('git-status').textContent =
+            d.branch + ' @ ' + (d.head||'?') + (d.last_good ? ' · last good: ' + d.last_good : '');
+        let cps = (d.checkpoints||[]).map(function(c){
+            return '<div style="padding:2px 0;">⛳ <span style="color:#7CFC9B;">'+c.tag+'</span> <span style="color:#666;">('+c.when+')</span> '+
+                   '<button onclick="doRestore(\''+c.tag+'\')" style="background:#2a2410;color:#ffcf6b;border:1px solid #4a3a1a;border-radius:4px;padding:1px 7px;cursor:pointer;font-size:10px;margin-left:6px;">restore</button></div>';
+        }).join('');
+        document.getElementById('git-checkpoints').innerHTML = cps || '<span style="color:#555;">no checkpoints yet</span>';
+    } catch(e) {}
+}
+async function doCheckpoint() {
+    let label = document.getElementById('git-label').value || '';
+    document.getElementById('git-msg').textContent = 'checkpointing...';
+    try {
+        let r = await fetch('/api/git/checkpoint', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({label: label})});
+        let d = await r.json();
+        document.getElementById('git-msg').textContent = d.ok ? ('✓ ' + d.tag) : ('failed: ' + (d.error||''));
+    } catch(e) { document.getElementById('git-msg').textContent='error'; }
+    document.getElementById('git-label').value='';
+    setTimeout(function(){ document.getElementById('git-msg').textContent=''; }, 5000);
+    loadGitLog();
+}
+async function doRestore(tag) {
+    let what = tag ? ('checkpoint ' + tag) : 'the last good checkpoint';
+    if (!confirm('Restore eiDOS source to ' + what + '? Reverts code (not workspace memory) and restarts eiDOS paused.')) return;
+    document.getElementById('git-msg').textContent = 'restoring...';
+    try {
+        let r = await fetch('/api/git/restore', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({tag: tag})});
+        let d = await r.json();
+        document.getElementById('git-msg').textContent = d.ok ? ('✓ ' + (d.message||'restored')) : ('failed: ' + (d.error||''));
+    } catch(e) { document.getElementById('git-msg').textContent='error'; }
+    loadGitLog();
+}
+setInterval(loadGitLog, 15000); loadGitLog();
 </script>
 </body>
 </html>"""
@@ -2121,6 +2174,10 @@ def _make_handler(config: Config):
 
             elif self.path == "/api/self_guide":
                 self._respond(200, "application/json", json.dumps(build_self_guide(config)))
+
+            elif self.path == "/api/git/log":
+                import git_safety
+                self._respond(200, "application/json", json.dumps(git_safety.git_log_summary(config)))
 
             else:
                 self._respond(404, "text/plain", "not found")
@@ -2212,6 +2269,28 @@ def _make_handler(config: Config):
                 except FileNotFoundError:
                     pass
                 self._respond(200, "application/json", json.dumps({"ok": True}))
+            elif self.path == "/api/git/checkpoint":
+                if not _token_ok(self.headers, self.path, config):
+                    self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                label = ""
+                if 0 < length <= 2000:
+                    try:
+                        label = str(json.loads(self.rfile.read(length)).get("label", ""))[:80]
+                    except (json.JSONDecodeError, ValueError):
+                        label = ""
+                self._respond(200, "application/json", json.dumps(_git_checkpoint_endpoint(config, label)))
+            elif self.path == "/api/git/restore":
+                if not _token_ok(self.headers, self.path, config):
+                    self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                tag = ""
+                if 0 < length <= 2000:
+                    try:
+                        tag = str(json.loads(self.rfile.read(length)).get("tag", ""))[:120]
+                    except (json.JSONDecodeError, ValueError):
+                        tag = ""
+                self._respond(200, "application/json", json.dumps(_git_restore_endpoint(config, tag)))
             else:
                 self._respond(404, "text/plain", "not found")
 
@@ -2219,6 +2298,10 @@ def _make_handler(config: Config):
 
 
 # --- Self-improvement: token gate, self-guide, listening hold ---
+
+import threading as _threading
+_LIFECYCLE_LOCK = _threading.RLock()  # serialize privileged ops (checkpoint/restore/apply/restart)
+
 
 def _token_ok(headers, path, config) -> bool:
     """Pragmatic auth: if a dashboard token is configured, require it (header or ?token=)
@@ -2397,6 +2480,48 @@ def _ctrl_pause(config):
     _, pausefile, _ = _ctrl_paths(config)
     pausefile.write_text("paused by operator")
     return {"ok": True, "message": "paused", **_ctrl_status(config)}
+
+
+def _restart_eidos_keep_armed(config, reason="restart"):
+    """Kill eidos but LEAVE the watchdog armed so it respawns with fresh code, booted PAUSED.
+    Used after a git restore / self-edit apply. (Distinct from _ctrl_stop, which disarms.)"""
+    import subprocess, os
+    pidfile, pausefile, _ = _ctrl_paths(config)
+    try:
+        pausefile.write_text(f"paused: {reason}")   # boot paused for operator review
+    except OSError:
+        pass
+    st = _ctrl_status(config)
+    pid = st.get("pid")
+    if st.get("running") and pid:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15)
+        else:
+            subprocess.run(["kill", "-9", str(pid)], capture_output=True, timeout=15)
+    try:
+        pidfile.unlink()
+    except OSError:
+        pass
+    _pid_cache.clear()
+    return pid
+
+
+def _git_checkpoint_endpoint(config, label=""):
+    import git_safety
+    with _LIFECYCLE_LOCK:
+        return git_safety.make_checkpoint(config, label or "manual checkpoint")
+
+
+def _git_restore_endpoint(config, tag=""):
+    import git_safety
+    with _LIFECYCLE_LOCK:
+        res = git_safety.restore_to(config, tag)
+        if res.get("ok"):
+            pid = _restart_eidos_keep_armed(config, reason=f"git restore {res.get('tag','')}")
+            res["restarted_pid"] = pid
+            res["message"] = (f"Restored {res.get('restored',0)} files to {res.get('tag')}. "
+                              f"eiDOS restarting (paused) on the restored code.")
+        return res
 
 
 # --- Watchdog: auto-restart eiDOS on unexpected death + record the crash so it learns ---
