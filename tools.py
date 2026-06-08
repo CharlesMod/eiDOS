@@ -792,8 +792,12 @@ def _pid_alive(pid: int) -> bool:
 
 def _read_jobs(config: Config) -> list[dict]:
     try:
-        return json.loads(config.jobs_path.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
+        p = config.jobs_path
+        if p.stat().st_size > 5_000_000:   # corrupt/runaway — never OOM the tick loop
+            return []
+        data = json.loads(p.read_text())
+        return data if isinstance(data, list) else []
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError, MemoryError):
         return []
 
 

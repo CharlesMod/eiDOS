@@ -151,7 +151,15 @@ def write_self_guide_proposal(config: Config, content: str, rationale: str = "",
             pass
         raise
     try:
-        with open(config.self_guide_proposals_path, "a", encoding="utf-8") as f:
+        pp = config.self_guide_proposals_path
+        # Bound growth: keep the audit log to the last ~500 entries.
+        try:
+            if pp.exists() and pp.stat().st_size > 1_000_000:
+                kept = pp.read_text(encoding="utf-8", errors="replace").splitlines()[-500:]
+                pp.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+        with open(pp, "a", encoding="utf-8") as f:
             f.write(json.dumps({
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "tick": tick,

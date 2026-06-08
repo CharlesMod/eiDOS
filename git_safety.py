@@ -101,8 +101,14 @@ def make_checkpoint(config: Config, label: str = "") -> dict:
         c = _run_git(config, "commit", "-m", msg, "--no-verify")
         if not c["ok"] and "nothing to commit" not in (c["err"] + c["out"]).lower():
             return {"ok": False, "error": f"commit failed: {c['err'] or c['out']}"}
+    # Unique tag — never force-overwrite an existing good checkpoint (a same-second
+    # collision must not clobber an earlier rollback floor).
     tag = f"{_TAG_PREFIX}{ts}"
-    t = _run_git(config, "tag", "-f", tag)
+    n = 1
+    while _run_git(config, "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}")["ok"]:
+        n += 1
+        tag = f"{_TAG_PREFIX}{ts}_{n}"
+    t = _run_git(config, "tag", tag)
     if not t["ok"]:
         return {"ok": False, "error": f"tag failed: {t['err']}"}
     _write_last_good(config, tag)

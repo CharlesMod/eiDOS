@@ -2505,12 +2505,20 @@ def _spawn_eidos(config):
     import subprocess, sys, os
     _, _, kdir = _ctrl_paths(config)
     logf = open(config.workspace / "eidos_console.log", "ab")
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
-    flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    proc = subprocess.Popen(
-        [sys.executable, str(kdir / "eidos.py"), "--config", str(kdir / "config.toml")],
-        cwd=str(kdir), stdout=logf, stderr=subprocess.STDOUT, env=env, creationflags=flags,
-    )
+    try:
+        env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        proc = subprocess.Popen(
+            [sys.executable, str(kdir / "eidos.py"), "--config", str(kdir / "config.toml")],
+            cwd=str(kdir), stdout=logf, stderr=subprocess.STDOUT, env=env, creationflags=flags,
+        )
+    finally:
+        # The child inherits its own handle at CreateProcess; closing the parent's copy
+        # avoids leaking a handle (and a Windows file lock) on every respawn.
+        try:
+            logf.close()
+        except OSError:
+            pass
     (config.workspace / "eidos.pid").write_text(str(proc.pid))
     return proc.pid
 
@@ -2702,37 +2710,53 @@ def _watchdog_loop(config):
             restarts = [t for t in restarts if now - t < 180]
             if len(restarts) >= 5:
                 # Crash-loop. Likeliest cause is a bad code change (ours or a self-edit).
-                # Before standing down, auto-restore the last good checkpoint ONCE and retry
-                # on known-good code — the core of unattended overnight resilience.
+                # Before standing down, auto-restore last_good and retry on known-good code —
+                # the core of unattended overnight resilience. Bounded to 2 attempts so a
+                # persistent failure (or a failed respawn) can never loop forever OR die after
+                # a single try: the attempt is counted UP FRONT so even a thrown restore counts.
                 rb_marker = config.state_dir / "rollback_attempted"
-                if not rb_marker.exists():
+                attempts = 0
+                try:
+                    attempts = int((rb_marker.read_text() or "0").split(",")[0])
+                except (OSError, ValueError):
+                    attempts = 0
+                if attempts < 2:
+                    try:
+                        config.state_dir.mkdir(parents=True, exist_ok=True)
+                        rb_marker.write_text(f"{attempts + 1},{now}")  # count the attempt up front
+                    except OSError:
+                        pass
                     try:
                         import git_safety
                         lg = git_safety.read_last_good(config)
                         if lg:
                             with _LIFECYCLE_LOCK:
                                 res = git_safety.restore_to(config, lg)
-                            config.state_dir.mkdir(parents=True, exist_ok=True)
-                            rb_marker.write_text(str(now))
                             _watchdog_note(config,
                                 f"eiDOS crash-looped (5x/3min). Auto-restored last good checkpoint {lg} "
-                                f"({res.get('restored', 0)} source files) and retrying on known-good code. "
-                                f"If this recurs, the watchdog will stand down for the operator.")
-                            _watchdog_event(config, f"AUTO-ROLLBACK to {lg} after crash-loop")
+                                f"({res.get('restored', 0)} source files) — attempt {attempts + 1}/2 on "
+                                f"known-good code. If this recurs the watchdog stands down for the operator.")
+                            _watchdog_event(config, f"AUTO-ROLLBACK ({attempts + 1}/2) to {lg}")
                             restarts = []  # fresh chance on good code
                             new_pid = _spawn_eidos(config)
-                            print(f"[watchdog] rolled back to {lg}, respawned eiDOS as pid {new_pid}")
-                            continue
+                            time.sleep(3)
+                            alive = _ctrl_pid_alive(new_pid)
+                            _watchdog_event(config, f"respawned pid {new_pid} alive={alive}")
+                            print(f"[watchdog] rolled back to {lg}, respawned pid {new_pid} alive={alive}")
+                        else:
+                            _watchdog_event(config, "auto-rollback: no last_good checkpoint available")
                     except Exception as e:  # noqa: BLE001
-                        print(f"[watchdog] auto-rollback failed: {e}")
-                # Already rolled back (or no checkpoint) and still crash-looping → stand down.
+                        print(f"[watchdog] auto-rollback error: {e}")
+                        _watchdog_event(config, f"auto-rollback error: {e}")
+                    continue  # retries are bounded by the attempt counter
+                # Attempts exhausted (or no checkpoint) and still crash-looping → stand down.
                 try:
                     _eidos_should_run_path(config).unlink()
                 except OSError:
                     pass
                 _watchdog_note(config, "eiDOS crash-looped even after rollback. Watchdog standing "
                                        "down — needs operator attention.")
-                _watchdog_event(config, "STAND DOWN — crash-loop persisted after rollback")
+                _watchdog_event(config, "STAND DOWN — crash-loop persisted after 2 rollbacks")
                 continue
             tail = _read_console_tail(config, 30)
             _watchdog_note(config,

@@ -147,7 +147,12 @@ def propose(config: Config, target_file: str, new_content: str, rationale: str =
     if not diff.strip():
         return {"ok": False, "error": "no change versus the current file"}
     config.proposals_dir.mkdir(parents=True, exist_ok=True)
-    pid = "se_" + time.strftime("%Y%m%d_%H%M%S", time.gmtime()) + f"_{len(pending)}"
+    base = "se_" + time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+    n = len(pending)
+    pid = f"{base}_{n}"
+    while _manifest_path(config, pid).exists() or (config.proposals_dir / f"{pid}.staged.py").exists():
+        n += 1
+        pid = f"{base}_{n}"
     (config.proposals_dir / f"{pid}.staged.py").write_text(new_content, encoding="utf-8")
     (config.proposals_dir / f"{pid}.diff").write_text(diff, encoding="utf-8")
     _save_manifest(config, {
