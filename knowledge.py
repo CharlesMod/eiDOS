@@ -27,6 +27,53 @@ CATEGORIES = ("facts", "procedures", "errors", "reflections")
 
 
 # ---------------------------------------------------------------------------
+# Semantic novelty / near-duplicate detection (token Jaccard — cheap, no embedding model)
+# ---------------------------------------------------------------------------
+
+_IP_RE = re.compile(r"\d+\.\d+\.\d+\.\d+")
+_STOP = set("the a an is are was were be been being at on in of to for and or with via from this that "
+            "it its you your i we are has have had will would can could should it's about as by an".split())
+
+
+def _content_toks(s: str) -> set:
+    """Meaningful content tokens — punctuation-stripped, stopwords + very short tokens dropped — so
+    rewordings of the same fact share most of them (Jaccard over raw tokens missed this badly)."""
+    return {t for t in re.findall(r"[a-z0-9]+", (s or "").lower()) if len(t) >= 3 and t not in _STOP}
+
+
+def _ips(s: str) -> set:
+    return set(_IP_RE.findall(s or ""))
+
+
+def most_similar(config, content: str):
+    """(best_score, best_id) of the most similar existing entry, using an OVERLAP coefficient over
+    content tokens gated by SUBJECT (IP): two facts about different IPs are never the same fact (so
+    '.45 web UI' and '.46 web UI' stay distinct), but rewordings about the same subject score high.
+    Powers near-dup dedup AND the novelty signal for goal-tension (low score = genuinely new info)."""
+    ct, ips = _content_toks(content), _ips(content)
+    if not ct:
+        return (0.0, None)
+    best = (0.0, None)
+    for e in load_index(config):
+        cp = e.get("content_preview") or ""
+        eips = _ips(cp)
+        if ips and eips and not (ips & eips):
+            continue  # different named subjects → different facts
+        ect = _content_toks(cp)
+        if not ect:
+            continue
+        s = len(ct & ect) / min(len(ct), len(ect))  # overlap coefficient
+        if s > best[0]:
+            best = (s, e.get("id"))
+    return best
+
+
+def is_novel(config, content: str, threshold: float = 0.65) -> bool:
+    """True if `content` is not a near-duplicate of anything already known (new information)."""
+    return most_similar(config, content)[0] < threshold
+
+
+# ---------------------------------------------------------------------------
 # Entry data helpers
 # ---------------------------------------------------------------------------
 
@@ -93,15 +140,13 @@ def store_entry(
         category = "facts"
     tags = [t.strip().lower() for t in tags if t.strip()]
 
-    # Reject near-duplicates at the source (the store bloated to 265 entries for one small LAN
-    # because dream-extraction kept re-writing the same facts). If an entry with the same normalized
-    # content already exists, return it instead of adding a duplicate.
-    _norm = " ".join((content or "").lower().split())[:140]
-    if _norm:
-        for e in load_index(config):
-            ep = " ".join((e.get("content_preview") or "").lower().split())[:140]
-            if ep and ep == _norm:
-                return e.get("id")
+    # Reject near-duplicates at the source (token-similarity, not just exact). The store bloated to
+    # 265 entries for one small LAN because the agent kept re-writing the same fact in different words
+    # (7+ "MQTT broker at .25" restatements). If a near-identical entry exists, return it unchanged so
+    # the knowledge count only rises on GENUINELY new facts — which is also the goal-tension signal.
+    sim, sid = most_similar(config, content)
+    if sid and sim >= float(getattr(config, "knowledge_dedup_threshold", 0.65)):
+        return sid
 
     entry_id = _make_id(content, category)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

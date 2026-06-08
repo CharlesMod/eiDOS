@@ -219,6 +219,14 @@ def _adaptive_tick_interval(config: Config, tick_tool_name: str) -> float:
     return float(getattr(config, "tick_interval_active_s", 0.4)) if active else float(config.tick_interval_s)
 
 
+def _count_skills(config: Config) -> int:
+    """Count authored skill files (for the goal-tension progress signal — a new skill = progress)."""
+    try:
+        return len([p for p in (config.workspace / "skills").glob("*.py")])
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
               goal_start_time: float, consecutive_failures: int = 0,
               reasoning_exhaustions: int = 0, current_max_tokens: int = 0):
@@ -419,6 +427,15 @@ def run_loop(config: Config, persona=None, wal=None):
     listening_since = None  # set while the chat-focus "listening" hold is engaged
     loop_start = time.monotonic()
     last_goal_hash = None  # track goal changes
+    # Goal-tension: ticks since REAL progress (a novel fact learned, a new skill, a Boss exchange).
+    # Near-dup dedup means the knowledge count only rises on genuinely new facts → a clean signal.
+    last_progress_tick = wal.get("last_progress_tick", tick_number)
+    try:
+        import knowledge as _kn
+        prev_knowledge_count = _kn.count_entries(config)
+    except Exception:  # noqa: BLE001
+        prev_knowledge_count = 0
+    prev_skill_count = _count_skills(config)
 
     pfx = _pfx(persona, config)
     print(f"{pfx} Starting tick loop (interval={config.tick_interval_s}s, mock={config.mock_mode})")
@@ -646,12 +663,14 @@ def run_loop(config: Config, persona=None, wal=None):
             logger.warning("async result delivery failed: %s", e)
 
         # --- Assemble context ---
+        tension = max(0, tick_number - last_progress_tick)
         messages = assemble_context(
             config,
             tick_number=tick_number,
             goal_start_time=goal_start_time,
             loop_detected=loop_detected,
             repeat_count=repeat_count,
+            tension=tension,
         )
 
         # Log context size for monitoring
@@ -991,6 +1010,19 @@ def run_loop(config: Config, persona=None, wal=None):
         append_metrics(config, ctx_chars=ctx_chars, memory_chars=_mem_chars,
                        obs_count=_obs_count, tool_duration_s=tick_tool_duration,
                        compacted=tick_compacted, **_telem_kw)
+
+        # --- Goal-tension: did THIS tick make real progress? A new fact learned (knowledge count
+        #     rises only on novel facts, thanks to near-dup dedup), a new skill, or a Boss exchange.
+        #     Re-probing and re-confirming known facts do NOT count → tension climbs. ---
+        try:
+            import knowledge as _kn
+            _kc = _kn.count_entries(config)
+        except Exception:  # noqa: BLE001
+            _kc = prev_knowledge_count
+        _sc = _count_skills(config)
+        if _kc > prev_knowledge_count or _sc > prev_skill_count or tick_tool_name == "chat_reply":
+            last_progress_tick = tick_number
+        prev_knowledge_count, prev_skill_count = _kc, _sc
 
         # --- Sleep ---
         tick_number += 1

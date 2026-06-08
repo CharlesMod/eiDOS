@@ -1124,10 +1124,18 @@ def tool_create_skill(args: dict, config: Config) -> ToolResult:
     r = skills.create_skill(config, name, code, description, schema if isinstance(schema, dict) else {})
     if r.get("success"):
         msg = r.get("message", f"Skill '{name}' created and live.")
+        nudge = ""
+        # Encourage MODULAR, parameterized, composable skills — not hardcoded one-offs.
+        if re.search(r"\d+\.\d+\.\d+\.\d+", code) and "args.get(" not in code.replace(" ", ""):
+            nudge += ("\n⚠ This skill hardcodes an IP/port. Make it REUSABLE: take them as args — "
+                      "`ip = args.get('ip')`, `port = args.get('port')` — so one skill works for any host.")
+        if re.search(r"socket\.|TcpClient|create_connection|urllib|http", code) and "import" in code:
+            nudge += ("\n➤ Prefer COMPOSING the built-in primitives (net_scan, tcp_probe, http_probe, "
+                      "udp_listen) over re-writing raw socket/HTTP code — they're parameterized and tested.")
         return ToolResult(
-            output=(f"{msg}\n➤ You now HAVE a reusable tool '{name}'. NEXT time you need this, CALL it "
-                    f"as a tool: {{\"tool\": \"{name}\", \"args\": {{...}}}} — do NOT hand-write the same "
-                    f"steps in bash again. Re-deriving what you already captured is wasted work."),
+            output=(f"{msg}\n➤ You now HAVE a reusable tool '{name}'. CALL it as a TOOL — "
+                    f"<tool>{name}</tool> with <args>{{...}}</args> — NOT via bash, and don't re-derive "
+                    f"the steps. Skills are invoked exactly like built-in tools." + nudge),
             full_output_path=None, success=True, duration_s=time.monotonic() - t)
     return ToolResult(output="create_skill failed:\n- " + "\n- ".join(r.get("errors", ["unknown"])),
                       full_output_path=None, success=False, duration_s=time.monotonic() - t)
@@ -1185,6 +1193,192 @@ def tool_list_skills(args: dict, config: Config) -> ToolResult:
     return ToolResult(output="\n".join(lines), full_output_path=None, success=True, duration_s=0)
 
 
+# --- Notebooks (third memory tier: working notes for the current task) ---
+
+def tool_note_append(args: dict, config: Config) -> ToolResult:
+    """Append to a named working notebook (creates it, makes it active). Use this for LOTS of notes
+    about the current task/environment — NOT memorize (durable facts) and NOT your own JSON files."""
+    import notes
+    name = (args.get("name") or args.get("notebook") or "scratch").strip()
+    text = args.get("text") or args.get("note") or args.get("content") or ""
+    if not text:
+        return ToolResult(output="Error: provide 'text' to append.", full_output_path=None, success=False, duration_s=0)
+    nm = notes.append_note(config, name, text)
+    return ToolResult(output=f"Noted to '{nm}' (now your open notebook; it's shown in your context each tick).",
+                      full_output_path=None, success=True, duration_s=0)
+
+
+def tool_note_read(args: dict, config: Config) -> ToolResult:
+    """Read a notebook's contents (and make it active)."""
+    import notes
+    name = (args.get("name") or args.get("notebook") or notes.get_active(config) or "scratch").strip()
+    body = notes.read_note(config, name)
+    if body:
+        notes.set_active(config, name)
+        return ToolResult(output=f"# notebook: {name}\n{body}", full_output_path=None, success=True, duration_s=0)
+    return ToolResult(output=f"Notebook '{name}' is empty or doesn't exist.", full_output_path=None, success=True, duration_s=0)
+
+
+def tool_note_list(args: dict, config: Config) -> ToolResult:
+    """List your notebooks."""
+    import notes
+    items = notes.list_notes(config)
+    active = notes.get_active(config)
+    if not items:
+        return ToolResult(output="No notebooks yet. Start one with note_append(name, text).", full_output_path=None, success=True, duration_s=0)
+    lines = [f"  {'*' if n == active else '-'} {n} ({sz}B)" for n, sz in items]
+    return ToolResult(output="Your notebooks (* = open):\n" + "\n".join(lines), full_output_path=None, success=True, duration_s=0)
+
+
+def tool_note_close(args: dict, config: Config) -> ToolResult:
+    """Close the active notebook (stop showing it in context)."""
+    import notes
+    notes.close_active(config)
+    return ToolResult(output="Closed the active notebook.", full_output_path=None, success=True, duration_s=0)
+
+
+# --- Network primitives (parameterized building blocks — COMPOSE/CALL these instead of writing raw
+#     socket code in one-off skills. Call as tools: <tool>net_scan</tool>, etc.) ---
+
+def _parse_ports(p, default):
+    if p is None:
+        return default
+    if isinstance(p, (list, tuple)):
+        return [int(x) for x in p]
+    return [int(x) for x in re.findall(r"\d+", str(p))] or default
+
+
+def tool_tcp_probe(args: dict, config: Config) -> ToolResult:
+    """Check one TCP ip:port (open/closed) and grab any banner. Args: ip, port, timeout(=2)."""
+    import socket
+    ip = (args.get("ip") or args.get("host") or "").strip()
+    port = int(args.get("port") or 80)
+    timeout = float(args.get("timeout") or 2.0)
+    if not ip:
+        return ToolResult(output="Error: provide 'ip'.", full_output_path=None, success=False, duration_s=0)
+    t = time.monotonic()
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as s:
+            s.settimeout(0.6)
+            banner = b""
+            try:
+                banner = s.recv(128)
+            except Exception:  # noqa: BLE001
+                pass
+        b = banner.decode("latin-1", "replace").strip()
+        return ToolResult(output=f"{ip}:{port} OPEN" + (f" — banner: {b[:80]}" if b else ""),
+                          full_output_path=None, success=True, duration_s=time.monotonic() - t)
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(output=f"{ip}:{port} closed/unreachable ({type(e).__name__})",
+                          full_output_path=None, success=True, duration_s=time.monotonic() - t)
+
+
+def tool_net_scan(args: dict, config: Config) -> ToolResult:
+    """Fast parallel scan of a subnet for open ports — use this instead of re-writing a slow
+    sequential Test-NetConnection loop. Args: subnet(e.g. '192.168.86'), ports(list/csv, default
+    80,443,8080,1883,8883,6668), timeout(=0.4)."""
+    import socket
+    from concurrent.futures import ThreadPoolExecutor
+    subnet = (args.get("subnet") or args.get("base") or "").strip().rstrip(".")
+    m = re.match(r"(\d+\.\d+\.\d+)", subnet)
+    if not m:
+        return ToolResult(output="Error: provide 'subnet' like '192.168.86'.", full_output_path=None, success=False, duration_s=0)
+    base = m.group(1)
+    ports = _parse_ports(args.get("ports"), [80, 443, 8080, 1883, 8883, 6668])
+    timeout = float(args.get("timeout") or 0.4)
+    lo = int(args.get("start") or 1)
+    hi = int(args.get("end") or 254)
+    t = time.monotonic()
+
+    def check(ipp):
+        ip, port = ipp
+        try:
+            with socket.create_connection((ip, port), timeout=timeout):
+                return f"{ip}:{port}"
+        except Exception:  # noqa: BLE001
+            return None
+
+    targets = [(f"{base}.{i}", p) for i in range(lo, hi + 1) for p in ports]
+    open_ports = []
+    with ThreadPoolExecutor(max_workers=min(200, len(targets) or 1)) as ex:
+        for r in ex.map(check, targets):
+            if r:
+                open_ports.append(r)
+    dur = time.monotonic() - t
+    if not open_ports:
+        return ToolResult(output=f"No open ports found on {base}.0/24 (ports {ports}) in {dur:.1f}s.",
+                          full_output_path=None, success=True, duration_s=dur)
+    return ToolResult(output=f"Open ports on {base}.0/24 ({dur:.1f}s):\n" + "\n".join(sorted(open_ports)),
+                      full_output_path=None, success=True, duration_s=dur)
+
+
+def tool_http_probe(args: dict, config: Config) -> ToolResult:
+    """HTTP GET an endpoint; return status, Server header, and <title>. Args: ip, port(=80),
+    path(=/), scheme(http/https), timeout(=4). Or pass a full 'url'."""
+    import urllib.request
+    import ssl
+    url = (args.get("url") or "").strip()
+    if not url:
+        ip = (args.get("ip") or args.get("host") or "").strip()
+        if not ip:
+            return ToolResult(output="Error: provide 'ip' or 'url'.", full_output_path=None, success=False, duration_s=0)
+        scheme = args.get("scheme") or ("https" if int(args.get("port") or 80) in (443, 8443) else "http")
+        url = f"{scheme}://{ip}:{int(args.get('port') or 80)}{args.get('path') or '/'}"
+    timeout = float(args.get("timeout") or 4.0)
+    ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+    t = time.monotonic()
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "eiDOS-probe"})
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+            body = r.read(4096).decode("utf-8", "replace")
+            server = r.headers.get("Server", "")
+            tm = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
+            title = (tm.group(1).strip()[:80] if tm else "")
+            return ToolResult(output=f"{url} -> HTTP {r.status}" + (f" | Server: {server}" if server else "")
+                              + (f" | title: {title}" if title else ""),
+                              full_output_path=None, success=True, duration_s=time.monotonic() - t)
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(output=f"{url} -> no HTTP ({type(e).__name__}: {str(e)[:80]})",
+                          full_output_path=None, success=True, duration_s=time.monotonic() - t)
+
+
+def tool_udp_listen(args: dict, config: Config) -> ToolResult:
+    """Listen for UDP broadcasts on a port for a few seconds and report senders. THIS is how you find
+    Tuya devices — they broadcast on UDP 6666/6667. Args: port(=6667), timeout(=6)."""
+    import socket
+    port = int(args.get("port") or 6667)
+    timeout = float(args.get("timeout") or 6.0)
+    t = time.monotonic()
+    senders = {}
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        except Exception:  # noqa: BLE001
+            pass
+        s.bind(("", port))
+        s.settimeout(1.0)
+        while time.monotonic() - t < timeout:
+            try:
+                data, addr = s.recvfrom(2048)
+                senders[addr[0]] = senders.get(addr[0], 0) + len(data)
+            except socket.timeout:
+                continue
+            except Exception:  # noqa: BLE001
+                break
+        s.close()
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(output=f"Could not listen on UDP {port}: {type(e).__name__}: {e}",
+                          full_output_path=None, success=False, duration_s=time.monotonic() - t)
+    if not senders:
+        return ToolResult(output=f"No UDP broadcasts on port {port} in {timeout:.0f}s.",
+                          full_output_path=None, success=True, duration_s=time.monotonic() - t)
+    lines = [f"  {ip} ({n} bytes)" for ip, n in sorted(senders.items())]
+    return ToolResult(output=f"UDP broadcasters on port {port}:\n" + "\n".join(lines),
+                      full_output_path=None, success=True, duration_s=time.monotonic() - t)
+
+
 # --- Tool registry ---
 
 TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
@@ -1211,6 +1405,16 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "check_messages": tool_check_messages,  # inspect your conversation with Boss
     "check_system": tool_check_system,      # the architecture map: what already exists, don't rebuild it
     "rollback_skill": tool_rollback_skill,
+    # Notebooks — third memory tier (working notes for the current task)
+    "note_append": tool_note_append,
+    "note_read": tool_note_read,
+    "note_list": tool_note_list,
+    "note_close": tool_note_close,
+    # Network primitives — parameterized building blocks; compose/call instead of raw socket code
+    "tcp_probe": tool_tcp_probe,
+    "net_scan": tool_net_scan,
+    "http_probe": tool_http_probe,
+    "udp_listen": tool_udp_listen,
 }
 
 

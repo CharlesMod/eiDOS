@@ -85,7 +85,15 @@ Core tools:
 - http_get  {{"url": "..."}}
 - remember  {{"note": "text to save to working memory"}}
 - update_plan  {{"note": "update your plan/checklist"}}
-- memorize  {{"fact": "knowledge to store", "tags": ["tag1","tag2"], "category": "facts|errors|procedures|reflections"}}
+- THREE memory tiers — use the right one:
+  - note_append  {{"name": "tuya_hunt", "text": "..."}}  — a NOTEBOOK for LOTS of working notes about the
+    current task/environment. note_read/note_list/note_close too. The open notebook shows in your context
+    each tick. Keep messy investigation notes here (NOT in memorize, NOT in your own JSON files).
+  - memorize  {{"fact": "...", "tags": [...], "category": "facts|errors|procedures|reflections"}}  — ONE
+    clean DURABLE fact (searchable via recall). Don't re-memorize what you already know.
+- network primitives (parameterized — compose/call these, don't write raw sockets):
+  net_scan {{"subnet":"192.168.86","ports":[80,443,6668]}} · tcp_probe {{"ip":"...","port":80}} ·
+  http_probe {{"ip":"...","port":80}} · udp_listen {{"port":6667}} (finds Tuya broadcasts)
 - update_self_guide  {{"note": "a standing rule to add", "rationale": "why"}}   — PROPOSE a change to
     your self-guide (the "## Your self-guide" directives Boss gives you). It only stages a proposal;
     Boss reviews and applies it. Use this when Boss coaches you to always/never do something.

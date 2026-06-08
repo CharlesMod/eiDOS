@@ -282,6 +282,24 @@ def _build_relevant_recall(config: Config, exclude_ids: set) -> str:
 # Context assembly
 # ---------------------------------------------------------------------------
 
+def _tension_note(tension: int) -> str:
+    """Goal-tension banner (the doc's Ventral Striatum + ACC + Insula): escalating pressure when the
+    agent burns ticks WITHOUT learning anything new or building anything — surfaced as a glue signal,
+    not a prompt plea. `tension` = ticks since real progress (a novel fact / new skill / Boss exchange)."""
+    if tension < 12:
+        return ""
+    if tension < 25:
+        return (f"⚠ Progress check: {tension} ticks since you last learned anything NEW or built "
+                f"anything. Is your current method actually working? If not, change approach now.")
+    if tension < 45:
+        return (f"⛔ STUCK — {tension} ticks with NO new progress. STOP repeating this approach. Either "
+                f"switch METHOD entirely (a different tool/angle), or if you're blocked on something only "
+                f"Boss can provide (a credential, a key, a decision), ASK him THIS tick (<reply> / "
+                f"ask_supervisor). Do not keep re-confirming what you already know.")
+    return (f"⛔⛔ DEAD END — {tension} ticks, zero progress. This approach has failed. Pick a DIFFERENT "
+            f"objective, or ask Boss for help right now. Repeating this is wasting time.")
+
+
 def assemble_context(
     config: Config,
     tick_number: int,
@@ -289,6 +307,7 @@ def assemble_context(
     loop_detected: bool = False,
     repeat_count: int = 0,
     max_ticks: int = 0,
+    tension: int = 0,
 ) -> list[dict]:
     """Assemble the full messages list in fixed order for one tick.
 
@@ -300,7 +319,7 @@ def assemble_context(
     """
     if config.briefing_model:
         return _assemble_briefing(config, tick_number, goal_start_time,
-                                  loop_detected, repeat_count, max_ticks)
+                                  loop_detected, repeat_count, max_ticks, tension)
     return _assemble_legacy(config, tick_number, goal_start_time,
                             loop_detected, repeat_count, max_ticks)
 
@@ -310,7 +329,7 @@ def assemble_context(
 # ---------------------------------------------------------------------------
 
 def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
-                       repeat_count, max_ticks, boss_waiting=False):
+                       repeat_count, max_ticks, boss_waiting=False, tension=0):
     """Build the tick prompt message (shared by both modes)."""
     now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     elapsed = _format_elapsed(time.time() - goal_start_time)
@@ -320,6 +339,9 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
     # (its "do not reply with only a thought" tail contradicts "reply to Boss").
     if boss_waiting:
         loop_detected = False
+    # High tension at the decision point (only when Boss isn't already pulling priority).
+    elif tension >= 25:
+        boss_prefix = _tension_note(tension) + "\n\n"
 
     urgency_note = ""
     if max_ticks > 0:
@@ -642,6 +664,7 @@ def _assemble_briefing(
     loop_detected: bool = False,
     repeat_count: int = 0,
     max_ticks: int = 0,
+    tension: int = 0,
 ) -> list[dict]:
     """Briefing model: Standing Orders → Mission → Intelligence → Situation → Tick.
 
@@ -663,6 +686,11 @@ def _assemble_briefing(
     focus = _current_focus(config)
     if focus:
         durable.append("## Current focus (your single objective — advance THIS)\n" + focus)
+
+    # Goal-tension: rising pressure when ticks pass without real progress (glue signal, not a plea).
+    tnote = _tension_note(tension)
+    if tnote:
+        durable.append("## Progress check\n" + tnote)
 
     # Self-guide — Boss's standing behavioral directives, high salience (just under presence).
     if getattr(config, "self_guide_enabled", True):
@@ -714,6 +742,17 @@ def _assemble_briefing(
     if relevant:
         durable.append("## Possibly relevant from memory\n" + relevant)
 
+    # Open notebook — your working notes for the current task (third memory tier). Always shown so
+    # you build on them instead of re-memorizing the same fact or writing hidden JSON.
+    try:
+        from notes import read_active
+        nb_name, nb_text = read_active(config, max_chars=getattr(config, "context_notebook_max_chars", 1200))
+        if nb_text.strip():
+            durable.append(f"## Open notebook: {nb_name} (your working notes — append with note_append)\n"
+                           + nb_text.strip())
+    except Exception:  # noqa: BLE001
+        pass
+
     # Presence (time / tick / still-running jobs / alerts) — VOLATILE, placed late so the per-tick
     # timestamp doesn't invalidate the cached stable prefix above.
     durable.append(_build_presence(config, tick_number, goal_start_time))
@@ -749,7 +788,7 @@ def _assemble_briefing(
     # 5. Tick prompt (branches to 'reply to Boss first' when a message just arrived)
     tick_msg = _build_tick_prompt(config, tick_number, goal_start_time,
                                   loop_detected, repeat_count, max_ticks,
-                                  boss_waiting=bool(interventions))
+                                  boss_waiting=bool(interventions), tension=tension)
     messages.append({"role": "user", "content": tick_msg})
 
     # Hard-enforce total context ceiling

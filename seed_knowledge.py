@@ -114,6 +114,26 @@ NUGGETS = [
      "Lesson: do not send model completions to :8080 — that is OpenWebUI's web page "
      "(returns HTML or 405). The real model API is :8081 (via the :8088 tap). :8080 is only "
      "the human browser chat UI."),
+    ("procedures", ["tuya", "smart-plug", "discovery", "iot"],
+     "Tuya Wi-Fi smart devices do NOT use standard MQTT/8883. They use a proprietary AES-encrypted "
+     "protocol on TCP port 6668 and BROADCAST their presence on UDP 6666/6667 — use the `udp_listen` "
+     "tool (port 6667) to find them. An MQTT broker on 8883 is NOT a Tuya device (it's likely Home "
+     "Assistant / Mosquitto). To actually CONTROL a Tuya device you need its per-device `local_key`, "
+     "which only comes from the Tuya cloud via Boss's developer account — so the right move is: "
+     "discover them, then ASK Boss for the credentials/keys. Do NOT brute-force SSL against 8883."),
+    ("procedures", ["notebooks", "notes", "memory", "scratchpad"],
+     "You have THREE memory tiers — use the right one. (1) `remember` = a one-line scratch thought. "
+     "(2) NOTEBOOKS via `note_append(name, text)` / `note_read(name)` = lots of working notes about the "
+     "CURRENT task or environment (e.g. a 'tuya_hunt' or 'device_map' notebook); the open notebook is "
+     "shown in your context every tick. (3) `memorize` = durable, searchable FACTS. So: keep messy "
+     "investigation notes in a NOTEBOOK, and only `memorize` a clean durable fact once. NEVER write your "
+     "own JSON files — notebooks are the sanctioned scratchpad and the rest of the system can see them."),
+    ("procedures", ["primitives", "tools", "skills", "network"],
+     "Use the built-in network PRIMITIVES instead of writing raw socket code: `net_scan(subnet, ports)` "
+     "for a fast parallel port scan (NOT a slow sequential Test-NetConnection loop), `tcp_probe(ip, port)`, "
+     "`http_probe(ip, port, path)`, `udp_listen(port)`. When you author your own skill with create_skill, "
+     "make it MODULAR: take ip/port/etc as args (not hardcoded), and COMPOSE these primitives rather than "
+     "re-deriving sockets. Call any skill as a TOOL — <tool>name</tool> — never via bash."),
 ]
 
 
