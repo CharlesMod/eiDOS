@@ -316,6 +316,10 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
     elapsed = _format_elapsed(time.time() - goal_start_time)
     boss_prefix = ("Boss just messaged you (see 'New since last tick' above). Reply with "
                    "<reply>…</reply> THIS tick before any other work.\n\n") if boss_waiting else ""
+    # Replying to Boss is itself the circuit-breaker, so don't also stack the loop-detected variant
+    # (its "do not reply with only a thought" tail contradicts "reply to Boss").
+    if boss_waiting:
+        loop_detected = False
 
     urgency_note = ""
     if max_ticks > 0:

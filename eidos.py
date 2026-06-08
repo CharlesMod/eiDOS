@@ -19,7 +19,7 @@ from pathlib import Path
 
 from config import Config, load_config
 from atomicio import replace_with_retry
-from context import assemble_context
+from context import assemble_context, _norm_cmd
 from compaction import should_compact, compact, compact_briefing, emit_flavor
 from llm import complete, LLMError, ReasoningExhausted
 from memory import (
@@ -872,10 +872,16 @@ def run_loop(config: Config, persona=None, wal=None):
                 last_tick_failed = not result.success
                 pfx = _pfx(persona, config)
 
-            # --- Loop detection hash ---
-            call_hash = hashlib.md5(
-                json.dumps({"tool": call.tool, "args": call.args}, sort_keys=True).encode()
-            ).hexdigest()
+            # --- Loop detection hash (NORMALIZED) ---
+            # Hash bash on the normalized command so v3/v4/v5 variations of the SAME command collapse
+            # to one signature — exact-match on full args missed the real rumination at tick 969.
+            if call.tool == "bash" and isinstance(call.args, dict):
+                _cmd = call.args.get("cmd") or call.args.get("command") or ""
+                call_hash = hashlib.md5(("bash:" + _norm_cmd(_cmd)).encode()).hexdigest()
+            else:
+                call_hash = hashlib.md5(
+                    json.dumps({"tool": call.tool, "args": call.args}, sort_keys=True).encode()
+                ).hexdigest()
             recent_hashes.append(call_hash)
 
             # --- Goal complete check ---
