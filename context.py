@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from config import Config
-from memory import read_goal, read_memory, read_plan, read_subgoals, read_recent_observations, read_interventions, current_subtask
+from memory import read_goal, read_memory, read_plan, read_subgoals, read_recent_observations, read_interventions, current_subtask, read_recent_thoughts
 from env_snapshot import generate as generate_env_snapshot
 from env_snapshot import generate_alerts as generate_env_alerts
 from prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_BRIEFING, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED
@@ -488,6 +488,15 @@ def _assemble_briefing(
                          len(obs_text), config.context_obs_max_chars)
             obs_text = _truncate(obs_text, config.context_obs_max_chars, "observations")
         sections.append(f"## Recent Observations\n{obs_text}")
+
+    # Your own train of thought — the salient point to continue FROM (kept last)
+    thoughts = read_recent_thoughts(config, n=6)
+    if thoughts:
+        tlines = [f"- {t.get('text', '').strip()}" for t in thoughts if t.get('text')]
+        thought_text = "\n".join(tlines)
+        if len(thought_text) > 1800:
+            thought_text = "…\n" + thought_text[-1800:]
+        sections.append(f"## Your recent train of thought (continue from the last one)\n{thought_text}")
 
     user_content = "\n\n".join(sections)
     messages.append({"role": "user", "content": user_content})

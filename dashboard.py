@@ -288,7 +288,27 @@ def _tool_preview(name: str, args) -> str:
 
 
 def build_thoughts(config: Config, limit: int = 30) -> dict:
-    """Parse llm_log.jsonl into per-tick thought threads for the Buddy Thoughts panel."""
+    """The agent's train of thought (thoughts.jsonl) for the Buddy Thoughts panel.
+
+    Falls back to parsing llm_log.jsonl when no thought stream exists yet.
+    """
+    thought_entries = _tail_jsonl(config.workspace / "thoughts.jsonl", limit)
+    if thought_entries:
+        out = []
+        for e in reversed(thought_entries):  # newest first
+            text = (e.get("text") or "").strip()
+            if not text:
+                continue
+            out.append({
+                "tick": e.get("tick", 0),
+                "ts": e.get("ts", ""),
+                "elapsed_s": 0,
+                "preview": text[:160],
+                "raw_tail": text[-60:].replace("\n", " ").strip(),
+                "segments": [{"type": "thinking", "text": text}],
+            })
+        return {"thoughts": out}
+
     import re
 
     entries = _tail_jsonl(config.workspace / "llm_log.jsonl", limit)
@@ -973,7 +993,7 @@ body::after {
 #nx-msg{color:#5d6b7e;margin-left:auto;font-size:12px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 <div id="nexus-control">
-  <b>NEXUS</b>
+  <b>eiDOS</b>
   <span id="nx-state">checking…</span>
   <button id="nx-start" onclick="nxCtl('start')">&#9654; Start (paused)</button>
   <button id="nx-go" onclick="nxCtl('resume')">GO &#9654;</button>

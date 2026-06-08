@@ -98,6 +98,41 @@ def current_subtask(config: Config) -> Optional[str]:
     return None
 
 
+# --- Train of thought (continuous stream of consciousness) ---
+
+def append_thought(config: Config, tick, text: str) -> None:
+    """Append one entry to the agent's train of thought (thoughts.jsonl)."""
+    text = (text or "").strip()
+    if not text:
+        return
+    rec = {"tick": tick,
+           "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "text": text[:600]}
+    try:
+        with open(config.workspace / "thoughts.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
+
+
+def read_recent_thoughts(config: Config, n: int = 6) -> list:
+    """Return the last n thoughts (oldest first), each a dict with tick/ts/text."""
+    try:
+        lines = (config.workspace / "thoughts.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for ln in lines[-n:]:
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            out.append(json.loads(ln))
+        except (ValueError, json.JSONDecodeError):
+            pass
+    return out
+
+
 # --- Aliases for backward compatibility (used by eidos.py, compaction.py, tools.py) ---
 
 def read_memory(config: Config) -> str:

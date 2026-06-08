@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -23,6 +24,7 @@ from compaction import should_compact, compact, compact_briefing, emit_flavor
 from llm import complete, LLMError, ReasoningExhausted
 from memory import (
     append_observation,
+    append_thought,
     read_goal,
     read_subgoals,
     validate_observations,
@@ -321,6 +323,17 @@ def recover(config: Config) -> dict:
         print(f"[eidos] Cleaned {deleted} old archive(s)")
 
     return wal
+
+
+_THOUGHT_TAG_RE = re.compile(r"<tool>.*?</tool>|<args>.*?</args>|<reply>.*?</reply>",
+                             re.DOTALL | re.IGNORECASE)
+
+
+def _extract_thought(response: str) -> str:
+    """This tick's reasoning — the model's raw output minus the action/reply tags."""
+    if not response:
+        return ""
+    return _THOUGHT_TAG_RE.sub("", response).strip()
 
 
 def run_loop(config: Config, persona=None, wal=None):
@@ -675,6 +688,11 @@ def run_loop(config: Config, persona=None, wal=None):
             _write_chat_reply(config, tick_number, reply_text)
             print(f"{pfx} Tick {tick_number}: chat reply sent ({len(reply_text)} chars)")
 
+        # --- Capture this tick's reasoning as a thought (the continuity chain) ---
+        thought = _extract_thought(response)
+        if thought:
+            append_thought(config, tick_number, thought)
+
         # --- Parse tool call ---
         call = parse_tool_call(response)
         if not call:
@@ -691,6 +709,21 @@ def run_loop(config: Config, persona=None, wal=None):
                     record_tick(persona, "chat_reply", True)
                     tick_tool_name = "chat_reply"
                     tick_tool_success = True
+            elif thought and len(thought) > 8:
+                # Pure thought — a valid moment of reflection with no action. This is
+                # normal stream-of-consciousness; do NOT nag for a tool call.
+                append_observation(config, {
+                    "tick": tick_number,
+                    "tool": "thought",
+                    "success": True,
+                    "output": thought[:300],
+                })
+                recent_hashes.append("th_" + hashlib.md5(thought[:120].encode("utf-8", "ignore")).hexdigest()[:8])
+                if persona and config.persona_enabled:
+                    record_tick(persona, "thought", True)
+                    tick_tool_name = "thought"
+                    tick_tool_success = True
+                print(f"{pfx} Tick {tick_number}: thought (no action)")
             else:
                 # Give the model actionable feedback so it can self-correct.
                 raw_snippet = response[:300].replace('\n', ' ').strip()

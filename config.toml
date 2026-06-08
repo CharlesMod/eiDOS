@@ -14,7 +14,7 @@ min_p = 0.0
 presence_penalty = 0.5
 
 [tick]
-interval_s = 20            # idle "consciousness" cadence; wakes instantly on chat/intervention
+interval_s = 2.5           # tick cadence (fast supervised mode); wakes instantly on chat/intervention
 loop_detect_window = 3
 
 [compaction]
@@ -48,6 +48,10 @@ protected_patterns = [
     "mkfs",
     "dd\\s+.*of=/dev/",
     "format\\s+[A-Za-z]:",
+    "python[0-9.]*\\s+\\S*eidos\\.py",
+    "\\./eidos\\.py",
+    "llama[-_]?server",
+    "llama[-_]?cli",
 ]
 
 [session]

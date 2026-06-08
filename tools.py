@@ -59,6 +59,34 @@ def _normalize_workspace_path(path: str, config: Config) -> Path:
     return p
 
 
+def _kill_proc_tree(proc):
+    """Kill a process and its entire descendant tree (Windows-safe).
+
+    On Windows, killing only the immediate child leaves grandchildren holding the
+    output pipe open, so communicate() hangs forever. taskkill /T kills the tree.
+    """
+    if proc is None or proc.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           capture_output=True, timeout=15)
+        except Exception:  # noqa: BLE001
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+    else:
+        import signal as _signal
+        try:
+            os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+        except Exception:  # noqa: BLE001
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def tool_bash(args: dict, config: Config) -> ToolResult:
     """Run a shell command with safety checks and output truncation."""
     cmd = args.get("cmd", "") or args.get("command", "")
@@ -88,22 +116,43 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
             )
 
     start = time.monotonic()
+    proc = None
     try:
-        result = subprocess.run(
+        popen_kwargs = {}
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
+        proc = subprocess.Popen(
             cmd,
             shell=True,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=config.cmd_timeout_s,
             cwd=str(config.workspace),
+            **popen_kwargs,
         )
-        duration = time.monotonic() - start
+        try:
+            combined, _ = proc.communicate(timeout=config.cmd_timeout_s)
+        except subprocess.TimeoutExpired:
+            # Kill the WHOLE tree so grandchildren release the pipe — otherwise
+            # communicate() hangs forever (the bug that froze the tick loop on a
+            # never-returning command like `python eidos.py`).
+            _kill_proc_tree(proc)
+            try:
+                combined, _ = proc.communicate(timeout=10)
+            except Exception:  # noqa: BLE001
+                combined = ""
+            duration = time.monotonic() - start
+            return ToolResult(
+                output=f"TIMEOUT: command exceeded {config.cmd_timeout_s}s limit (process tree killed)",
+                full_output_path=None,
+                success=False,
+                duration_s=duration,
+            )
 
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-        combined = stdout
-        if stderr:
-            combined += f"\n[stderr]\n{stderr}"
+        duration = time.monotonic() - start
+        combined = combined or ""
 
         tick_id = time.strftime("%Y%m%d_%H%M%S")
         full_path = None
@@ -115,17 +164,21 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
         return ToolResult(
             output=output,
             full_output_path=full_path,
-            success=(result.returncode == 0),
+            success=(proc.returncode == 0),
             duration_s=duration,
         )
 
-    except subprocess.TimeoutExpired:
-        duration = time.monotonic() - start
+    except Exception as e:  # noqa: BLE001
+        if proc is not None:
+            try:
+                _kill_proc_tree(proc)
+            except Exception:  # noqa: BLE001
+                pass
         return ToolResult(
-            output=f"TIMEOUT: command exceeded {config.cmd_timeout_s}s limit",
+            output=f"bash error: {type(e).__name__}: {e}",
             full_output_path=None,
             success=False,
-            duration_s=duration,
+            duration_s=time.monotonic() - start,
         )
 
 
