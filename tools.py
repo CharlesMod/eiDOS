@@ -583,6 +583,37 @@ def tool_update_self_guide(args: dict, config: Config) -> ToolResult:
                       full_output_path=None, success=True, duration_s=0)
 
 
+def tool_propose_self_edit(args: dict, config: Config) -> ToolResult:
+    """PROPOSE an edit to your OWN source code. Stages a proposal; Dean reviews the diff and
+    the dashboard applies + restarts you. You can never edit source, commit, or restart yourself.
+
+    Args: target_file (repo-relative .py, e.g. "prompts.py"), new_content (the FULL new file),
+    rationale (why). Off-limits files (dashboard, config, safety, skills) are rejected.
+    """
+    import selfedit
+    target = args.get("target_file", "") or args.get("path", "") or args.get("file", "")
+    new_content = args.get("new_content", "") or args.get("content", "")
+    rationale = args.get("rationale", "") or args.get("reason", "")
+    r = selfedit.propose(config, target, new_content, rationale=rationale, tick=args.get("source_tick"))
+    if r.get("ok"):
+        return ToolResult(output=r.get("summary", f"Proposed self-edit {r.get('id')}."),
+                          full_output_path=None, success=True, duration_s=0)
+    return ToolResult(output=f"Self-edit proposal rejected: {r.get('error')}",
+                      full_output_path=None, success=False, duration_s=0)
+
+
+def tool_list_self_edits(args: dict, config: Config) -> ToolResult:
+    """List your pending/recent self-edit proposals and their status."""
+    import selfedit
+    props = selfedit.list_proposals(config, kind="self_edit")
+    if not props:
+        return ToolResult(output="No self-edit proposals yet.", full_output_path=None, success=True, duration_s=0)
+    lines = [f"- {m['id']} [{m['status']}] {m['target']} (+{m.get('added',0)}/-{m.get('removed',0)}) "
+             f"{m.get('rationale','')[:60]}" for m in props[:12]]
+    return ToolResult(output="Your self-edit proposals:\n" + "\n".join(lines),
+                      full_output_path=None, success=True, duration_s=0)
+
+
 def tool_memorize(args: dict, config: Config) -> ToolResult:
     """Store a durable knowledge entry in the long-term knowledge store."""
     from knowledge import store_entry
@@ -938,6 +969,8 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "update_plan": tool_update_plan,
     "memorize": tool_memorize,
     "update_self_guide": tool_update_self_guide,
+    "propose_self_edit": tool_propose_self_edit,
+    "list_self_edits": tool_list_self_edits,
     "recall": tool_recall,
     "goal_complete": tool_goal_complete,
     "ask_supervisor": tool_ask_supervisor,

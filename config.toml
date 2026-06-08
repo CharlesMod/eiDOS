@@ -121,8 +121,9 @@ git_safety_enabled = true
 git_self_branch = "eidos-self"
 git_checkpoint_keep = 30
 # Gated self-code-editing (eiDOS proposes -> you approve -> dashboard applies + restarts).
-# Stays OFF until you flip it; the propose tool + UI exist regardless.
-self_edit_enabled = false
+# Enabled: eiDOS may PROPOSE source edits (harmless staging); applying still requires Dean's
+# approval in the dashboard, and a bad apply auto-rolls-back via the watchdog.
+self_edit_enabled = true
 self_edit_max_proposal_bytes = 200000
 self_edit_health_probe_s = 90
 

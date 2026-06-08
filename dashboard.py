@@ -1243,6 +1243,15 @@ setInterval(nxStatus,2000);nxStatus();
         <div id="git-checkpoints" style="font-size:11px;color:#9fc4a0;max-height:150px;overflow:auto;font-family:monospace;"></div>
     </div>
 
+    <!-- Self-Edit Proposals: eiDOS-proposed source changes, you approve -->
+    <div class="panel" style="grid-column: 1 / -1;">
+        <div class="panel-title">Self-Edit Proposals — eiDOS-proposed code changes (you approve)
+            <span style="float:right;font-size:9px;color:#555;" id="selfedit-status"></span>
+        </div>
+        <div id="selfedit-list" style="font-size:11px;"></div>
+        <pre id="selfedit-diff" style="display:none;white-space:pre-wrap;background:#0a0f0a;border:1px solid #1a3a1a;border-radius:6px;padding:8px;max-height:320px;overflow:auto;font-size:11px;color:#cfeccf;margin-top:8px;"></pre>
+    </div>
+
     <!-- Knowledge Nuggets + Working Memory: side by side -->
     <div class="panel">
         <div class="panel-title">Knowledge Nuggets</div>
@@ -2103,6 +2112,49 @@ async function doRestore(tag) {
     loadGitLog();
 }
 setInterval(loadGitLog, 15000); loadGitLog();
+
+// --- Self-edit proposals (eiDOS proposes source changes; you approve) ---
+var _seBtn = 'border-radius:4px;padding:2px 9px;cursor:pointer;font-size:10px;margin-right:5px;';
+async function loadSelfEdits() {
+    try {
+        let r = await fetch('/api/selfedit/list'); if (!r.ok) return;
+        let d = await r.json();
+        document.getElementById('selfedit-status').textContent = d.enabled ? 'enabled' : 'disabled (eiDOS cannot propose)';
+        let props = (d.proposals||[]).filter(function(p){return p.status==='pending';});
+        if (!props.length) { document.getElementById('selfedit-list').innerHTML = '<span style="color:#555;">no pending proposals</span>'; return; }
+        document.getElementById('selfedit-list').innerHTML = props.map(function(p){
+            return '<div style="border:1px solid #1a3a1a;border-radius:6px;padding:6px;margin-bottom:6px;">'+
+              '<b style="color:#9fd4ff;">'+p.target+'</b> <span style="color:#7CFC9B;">+'+(p.added||0)+'</span>/<span style="color:#ff9b9b;">-'+(p.removed||0)+'</span> '+
+              '<span style="color:#888;font-size:10px;">'+p.id+'</span><br>'+
+              '<span style="color:#aaa;">'+(p.rationale||'')+'</span><br><div style="margin-top:4px;">'+
+              '<button onclick="viewSelfEditDiff(\''+p.id+'\')" style="background:#13384f;color:#9fd4ff;border:1px solid #2e5f7f;'+_seBtn+'">View diff</button>'+
+              '<button onclick="approveSelfEdit(\''+p.id+'\')" style="background:#123a1e;color:#7CFC9B;border:1px solid #2a5a2a;'+_seBtn+'">Approve &amp; apply ▸</button>'+
+              '<button onclick="rejectSelfEdit(\''+p.id+'\')" style="background:#3a1212;color:#ff9b9b;border:1px solid #5a2a2a;'+_seBtn+'">Reject</button>'+
+              '</div></div>';
+        }).join('');
+    } catch(e) {}
+}
+async function viewSelfEditDiff(id) {
+    try {
+        let r = await fetch('/api/selfedit/diff?id='+encodeURIComponent(id)); let d = await r.json();
+        let el = document.getElementById('selfedit-diff');
+        el.textContent = (d.stale?'[STALE — the file changed since this was proposed]\n\n':'')+(d.diff||d.error||'(no diff)');
+        el.style.display='block';
+    } catch(e){}
+}
+async function approveSelfEdit(id) {
+    if (!confirm('Approve & apply self-edit '+id+'?\\n\\nThis rewrites eiDOS source, commits a pre-apply checkpoint, and restarts eiDOS PAUSED. If the new code crash-loops, the watchdog auto-restores the checkpoint.')) return;
+    try {
+        let r = await fetch('/api/selfedit/apply', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
+        let d = await r.json(); alert(d.ok ? (d.message||'applied') : ('failed: '+(d.error||'')));
+        loadSelfEdits(); loadGitLog();
+    } catch(e){}
+}
+async function rejectSelfEdit(id) {
+    try { await fetch('/api/selfedit/reject', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})}); } catch(e){}
+    loadSelfEdits();
+}
+setInterval(loadSelfEdits, 12000); loadSelfEdits();
 </script>
 </body>
 </html>"""
@@ -2178,6 +2230,18 @@ def _make_handler(config: Config):
             elif self.path == "/api/git/log":
                 import git_safety
                 self._respond(200, "application/json", json.dumps(git_safety.git_log_summary(config)))
+
+            elif self.path == "/api/selfedit/list":
+                import selfedit
+                self._respond(200, "application/json",
+                              json.dumps({"proposals": selfedit.list_proposals(config, kind="self_edit"),
+                                          "enabled": bool(getattr(config, "self_edit_enabled", False))}))
+
+            elif self.path.startswith("/api/selfedit/diff"):
+                import selfedit
+                from urllib.parse import urlparse, parse_qs
+                pid = parse_qs(urlparse(self.path).query).get("id", [""])[0]
+                self._respond(200, "application/json", json.dumps(selfedit.get_diff(config, pid)))
 
             else:
                 self._respond(404, "text/plain", "not found")
@@ -2291,6 +2355,29 @@ def _make_handler(config: Config):
                     except (json.JSONDecodeError, ValueError):
                         tag = ""
                 self._respond(200, "application/json", json.dumps(_git_restore_endpoint(config, tag)))
+            elif self.path == "/api/selfedit/apply":
+                if not _token_ok(self.headers, self.path, config):
+                    self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                pid = ""
+                if 0 < length <= 2000:
+                    try:
+                        pid = str(json.loads(self.rfile.read(length)).get("id", ""))[:80]
+                    except (json.JSONDecodeError, ValueError):
+                        pid = ""
+                self._respond(200, "application/json", json.dumps(_selfedit_apply_endpoint(config, pid)))
+            elif self.path == "/api/selfedit/reject":
+                if not _token_ok(self.headers, self.path, config):
+                    self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
+                import selfedit
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                pid, reason = "", ""
+                if 0 < length <= 2000:
+                    try:
+                        d = json.loads(self.rfile.read(length)); pid = str(d.get("id",""))[:80]; reason = str(d.get("reason",""))[:200]
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                self._respond(200, "application/json", json.dumps(selfedit.reject(config, pid, reason)))
             else:
                 self._respond(404, "text/plain", "not found")
 
@@ -2435,6 +2522,10 @@ def _ctrl_start(config):
         return {"ok": False, "message": f"already running (pid {st['pid']})", **st}
     pausefile.write_text("paused on start - click GO to begin")  # boot PAUSED
     _eidos_should_run_path(config).write_text("1")   # arm the watchdog
+    try:
+        (config.state_dir / "rollback_attempted").unlink()  # fresh operator start re-arms auto-recovery
+    except OSError:
+        pass
     pid = _spawn_eidos(config)
     return {"ok": True, "message": f"started PAUSED (pid {pid}) - click GO to wake it",
             **_ctrl_status(config)}
@@ -2524,6 +2615,20 @@ def _git_restore_endpoint(config, tag=""):
         return res
 
 
+def _selfedit_apply_endpoint(config, pid):
+    """Operator-approved self-edit apply: checkpoint+write+commit, then restart eidos paused.
+    If the applied code crash-loops, the watchdog auto-restores the pre-apply checkpoint."""
+    import selfedit
+    with _LIFECYCLE_LOCK:
+        res = selfedit.apply(config, pid)
+        if res.get("ok"):
+            newpid = _restart_eidos_keep_armed(config, reason=f"self-edit {pid}")
+            res["restarted_pid"] = newpid
+            res["message"] = (res.get("message", "") +
+                              f" eiDOS restarting (paused) on the new code as pid {newpid}.")
+        return res
+
+
 # --- Watchdog: auto-restart eiDOS on unexpected death + record the crash so it learns ---
 
 def _read_console_tail(config, n=30):
@@ -2554,6 +2659,17 @@ def _watchdog_note(config, msg):
     print(f"[watchdog] {msg[:140]}")
 
 
+def _watchdog_event(config, msg):
+    """Append a one-line watchdog event (rollback/standdown) for the operator / babysit check."""
+    import time
+    try:
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        with open(config.state_dir / "watchdog_events.log", "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "  " + str(msg)[:300] + "\n")
+    except OSError:
+        pass
+
+
 def _watchdog_loop(config):
     """Supervise eiDOS: when it should be running but has died, record why and respawn it.
 
@@ -2572,16 +2688,51 @@ def _watchdog_loop(config):
             except Exception:  # noqa: BLE001
                 pid = 0
             if pid and _ctrl_pid_alive(pid):
+                # Healthy. If we auto-rolled-back earlier and eidos has since been stable
+                # for >10 min, clear the guard so a *future* unrelated break can recover too.
+                try:
+                    rb = config.state_dir / "rollback_attempted"
+                    if rb.exists() and (time.time() - rb.stat().st_mtime) > 600:
+                        rb.unlink()
+                        _watchdog_note(config, "eiDOS stable for 10 min after rollback — re-arming auto-recovery.")
+                except OSError:
+                    pass
                 continue  # healthy
             now = time.time()
             restarts = [t for t in restarts if now - t < 180]
             if len(restarts) >= 5:
+                # Crash-loop. Likeliest cause is a bad code change (ours or a self-edit).
+                # Before standing down, auto-restore the last good checkpoint ONCE and retry
+                # on known-good code — the core of unattended overnight resilience.
+                rb_marker = config.state_dir / "rollback_attempted"
+                if not rb_marker.exists():
+                    try:
+                        import git_safety
+                        lg = git_safety.read_last_good(config)
+                        if lg:
+                            with _LIFECYCLE_LOCK:
+                                res = git_safety.restore_to(config, lg)
+                            config.state_dir.mkdir(parents=True, exist_ok=True)
+                            rb_marker.write_text(str(now))
+                            _watchdog_note(config,
+                                f"eiDOS crash-looped (5x/3min). Auto-restored last good checkpoint {lg} "
+                                f"({res.get('restored', 0)} source files) and retrying on known-good code. "
+                                f"If this recurs, the watchdog will stand down for the operator.")
+                            _watchdog_event(config, f"AUTO-ROLLBACK to {lg} after crash-loop")
+                            restarts = []  # fresh chance on good code
+                            new_pid = _spawn_eidos(config)
+                            print(f"[watchdog] rolled back to {lg}, respawned eiDOS as pid {new_pid}")
+                            continue
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[watchdog] auto-rollback failed: {e}")
+                # Already rolled back (or no checkpoint) and still crash-looping → stand down.
                 try:
                     _eidos_should_run_path(config).unlink()
                 except OSError:
                     pass
-                _watchdog_note(config, "eiDOS crash-looped (5 restarts in 3 min). Watchdog "
-                                       "standing down — needs operator attention.")
+                _watchdog_note(config, "eiDOS crash-looped even after rollback. Watchdog standing "
+                                       "down — needs operator attention.")
+                _watchdog_event(config, "STAND DOWN — crash-loop persisted after rollback")
                 continue
             tail = _read_console_tail(config, 30)
             _watchdog_note(config,
