@@ -186,12 +186,13 @@ def _chat_hold_active(config: Config) -> bool:
         return False
 
 
-def _interruptible_sleep(config: Config):
-    """Sleep for tick_interval_s, but wake early if a chat message arrives (or hold engages)."""
+def _interruptible_sleep(config: Config, interval: float = None):
+    """Sleep for `interval` (default tick_interval_s), waking early on shutdown."""
+    target = config.tick_interval_s if interval is None else float(interval)
     elapsed = 0.0
-    poll = 2.0
-    while elapsed < config.tick_interval_s:
-        remaining = config.tick_interval_s - elapsed
+    poll = min(2.0, max(0.1, target))
+    while elapsed < target:
+        remaining = target - elapsed
         nap = min(poll, remaining)
         time.sleep(nap)
         elapsed += nap
@@ -202,6 +203,20 @@ def _interruptible_sleep(config: Config):
             break
         if _chat_hold_active(config):
             break  # reach the listening gate promptly
+
+
+def _adaptive_tick_interval(config: Config, tick_tool_name: str) -> float:
+    """Fast cadence when there's MOMENTUM (a real action was just taken, or background jobs are
+    still running → results are coming), idle cadence otherwise. A flat sleep throttles an actively
+    working agent and wastes cycles when idle; this reacts to work, not a metronome."""
+    active = bool(tick_tool_name) and tick_tool_name not in ("thought", "__no_tool__")
+    if not active:
+        try:
+            from tools import _read_jobs
+            active = any(j.get("status") == "running" for j in _read_jobs(config))
+        except Exception:  # noqa: BLE001
+            pass
+    return float(getattr(config, "tick_interval_active_s", 0.4)) if active else float(config.tick_interval_s)
 
 
 def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
@@ -987,8 +1002,9 @@ def run_loop(config: Config, persona=None, wal=None):
                   reasoning_exhaustions, current_max_tokens)
 
         if not goal_complete and not _shutdown_requested:
-            write_activity(config, "sleeping", detail=f"next tick in {config.tick_interval_s}s")
-            _interruptible_sleep(config)
+            interval = _adaptive_tick_interval(config, tick_tool_name)
+            write_activity(config, "sleeping", detail=f"next tick in {interval:.1f}s")
+            _interruptible_sleep(config, interval)
 
     # --- Shutdown ---
     clear_wal(config)  # clean exit — no stale WAL

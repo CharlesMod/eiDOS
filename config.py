@@ -29,7 +29,10 @@ class Config:
     llm_presence_penalty: float = 1.5
 
     # Tick
-    tick_interval_s: int = 5
+    tick_interval_s: int = 5              # idle cadence — sleep this long when there's no momentum
+    tick_interval_active_s: float = 0.4   # active cadence — near-zero sleep when working (action taken
+                                          # last tick, or background jobs still running). Adaptive: fast
+                                          # when there's work, calm when idle (doc: multi-rate loop).
     loop_detect_window: int = 3
 
     # Compaction
@@ -250,6 +253,7 @@ def load_config(path: str = "config.toml") -> Config:
 
         tick = data.get("tick", {})
         config.tick_interval_s = tick.get("interval_s", config.tick_interval_s)
+        config.tick_interval_active_s = tick.get("interval_active_s", config.tick_interval_active_s)
         config.loop_detect_window = tick.get("loop_detect_window", config.loop_detect_window)
 
         comp = data.get("compaction", {})

@@ -154,6 +154,10 @@ def complete(
         "min_p": config.llm_min_p,
         "presence_penalty": config.llm_presence_penalty,
         "stream": use_stream,
+        # Reuse the KV of the unchanging prompt prefix (system + stable durable head) across ticks
+        # instead of re-prefilling it every tick — llama.cpp's biggest latency/FLOP win. Pairs with
+        # the STABLE→VOLATILE context ordering in context.py so the cached prefix is long.
+        "cache_prompt": True,
     }
 
     body = json.dumps(payload).encode("utf-8")

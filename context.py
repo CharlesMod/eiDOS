@@ -653,10 +653,13 @@ def _assemble_briefing(
     system = SYSTEM_PROMPT_BRIEFING.format(workspace=str(config.workspace))
     messages.append({"role": "system", "content": system})
 
-    # --- Durable context: presence + focus + self-guide + mission + plan + knowledge + Boss ---
-    durable = [_build_presence(config, tick_number, goal_start_time)]
+    # --- Durable context, ordered STABLE → VOLATILE so the llama.cpp prefix cache (cache_prompt)
+    #     reuses the KV of the unchanging top across ticks. Presence (the per-tick timestamp/jobs)
+    #     now goes to the VOLATILE TAIL below — having it at position 0 changed every tick and
+    #     invalidated the whole message's KV. (doc: stable cached prefix + delta prompting.) ---
+    durable = []
 
-    # The ONE objective, high salience, right under presence (replaces the 4 conflicting sources).
+    # The ONE objective, high salience (replaces the 4 conflicting sources); also named in the tick prompt.
     focus = _current_focus(config)
     if focus:
         durable.append("## Current focus (your single objective — advance THIS)\n" + focus)
@@ -710,6 +713,10 @@ def _assemble_briefing(
     relevant = _build_relevant_recall(config, {e.get("id") for e in learned})
     if relevant:
         durable.append("## Possibly relevant from memory\n" + relevant)
+
+    # Presence (time / tick / still-running jobs / alerts) — VOLATILE, placed late so the per-tick
+    # timestamp doesn't invalidate the cached stable prefix above.
+    durable.append(_build_presence(config, tick_number, goal_start_time))
 
     # Boss's messages + the messages YOU already sent him — highest priority. Surfacing your
     # own standing messages stops the "ask Boss for the MQTT creds again" re-ping loop: if you
