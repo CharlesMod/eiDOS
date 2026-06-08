@@ -154,9 +154,147 @@ Boss said "address the current issues, wipe, and retry." Implemented + AST/unit-
 Still OPEN (logged for end-of-day, NOT yet built): grammar-constrained tool-call decoding (GBNF),
 skill scoring/auto-retire, semantic recall, self-telemetry, fast parallel-scan skill.
 
-### 🔵 NEW anomaly observed — TWO `eidos.py` processes running at once
-PIDs 7260 (control-reported) + 15956 (unaccounted) both alive. Startup `reap_jobs` clears bg *jobs*
-but not a stray eidos *process*. Possible double-spawn (watchdog respawn without reaping the prior
-eidos) → two tick loops racing on the same workspace = doubled LLM load + interleaved writes. *Candidate:*
-on spawn, watchdog should kill any pre-existing eidos.py before starting a new one (single-instance lock).
-*Priority:* 🟡 (correctness — two loops corrupting shared state is worse than wasted ticks).
+### ✓ RESOLVED (was flagged as anomaly) — "two `eidos.py` processes" is benign
+Saw two `eidos.py` PIDs per run and initially suspected a watchdog double-spawn. Investigated:
+`_spawn_eidos` issues exactly ONE `Popen([sys.executable, eidos.py, ...])`, yet two processes appear
+with a **parent(stub)→child(real) relationship and identical argv**, created the same instant. That's
+the venv `python.exe` **launcher-trampoline**: `.venv\Scripts\python.exe` is a stub that re-execs the
+real interpreter as its child. Only ONE tick loop runs (observations are cleanly sequential, single
+stream); the recorded pid is the stub and a tree-kill takes both down. **Not a bug — no action.**
+(The `28848` seen during reset was the same stub being tree-killed; the watchdog respawn path is fine.)
+
+---
+
+## Check-in 2026-06-08 ~14:15 (:07 cadence, run-on) — post-fix live observation, tick ~98 / Lv.2
+
+Observed the fresh run after the fixes. **The targeted fixes are confirmed working in the wild:**
+- ✅ **No PowerShell spiral.** Commands are clean (`Test-NetConnection -ComputerName … -Port …`), no
+  `powershell -Command` wrapping, no `$ip:$p` flailing. arp-first ran at tick 3. The linter has not
+  needed to fire — the model is writing correct PS the first time (nuggets + linter deterrent working).
+- ✅ **jobs.json holding at 15** (was 25+ and unbounded) — `_prune_jobs` working.
+- ✅ Methodical real work: discovered ~25 LAN hosts, probing 80/443/8883(MQTT) on candidates,
+  reasoning about IoT vs PCs. This is the right *kind* of work.
+
+### 🔴 NEW OBSERVED — "thought (no action)" rumination (analysis-paralysis)
+Console shows ticks 93,94,96,97,98 all `thought (no action)` — ~5 of the last 6 ticks were pure
+narration ("these are probably IoT devices", "high concentration of dedicated IoT hardware", "I should
+prioritize identifying the manufacturer") with **no concrete action taken**. It discovered ~25 devices
+but is now musing *about* them instead of probing/identifying/memorizing/skill-building. **Critical
+gap:** the loop-breaker I just added explicitly SKIPS `thought` in `_skip`, so a run of consecutive
+no-action thoughts is INVISIBLE to it. *Candidate (🔴, cheap):* detect K consecutive `thought
+(no-action)` ticks and inject "you've thought enough — take a CONCRETE action now (probe, memorize a
+fact, build a skill) or you're burning cycles"; or enforce an action at least every K ticks. This is
+now the #1 time-sink (different failure mode than the port-scan spiral, but same net effect: stalled).
+
+### 🟡 OBSERVED — memorizing intentions, not facts; discoveries not captured
+At tick 91 it memorized `planning_to_categorize_discovered_devices…` — that's an *intention*, not a
+durable fact. Meanwhile the actual valuable data (the ~25 IP/MAC device inventory from arp) was NOT
+memorized, and 0 skills authored by tick 98. *Candidate:* nudge "memorize the FACTS you discovered
+(the device list), not your plans" + "you found N devices — capture them / act, don't narrate."
+
+### 🟢 OBSERVED — minor: context logs `est_tokens=1`
+`eidos.context INFO tick=N … est_tokens=1` is clearly a broken estimate (real ~5k tokens logged
+elsewhere on the same tick). Cosmetic logging bug; fix when convenient.
+
+**Takeaway:** the syntax/spiral class of problems is fixed; the live bottleneck has shifted UP a level
+to *decision* quality — thinking instead of acting, and capturing intentions instead of facts. The
+consecutive-no-action-thought detector is the natural next 🔴 (and complements the loop-breaker, which
+deliberately ignores thoughts). NOT acting on it now — logging only per Boss's instruction.
+
+---
+
+## Check-in 2026-06-08 — ROOT-CAUSE: stuck ~hours on a 1-2h LAN task (tick 969, Lv.6, paused by Boss)
+Boss flagged the AI has been stuck for HOURS on the trivial task of characterizing the LAN. Forensics:
+
+- 🔴 **No definition-of-done → never converges.** "Characterize the LAN" has no completion test, so at
+  Lv.6 "curious" it re-probes/re-categorizes forever. *Fix:* give the immediate task a crisp DONE
+  criterion + `goal_complete`/report-to-Boss trigger ("memorize one inventory row per active host, then
+  tell Boss and stop").
+- 🔴 **Over-engineering: builds infra instead of doing the task.** Authored 8 skills (scan/probe/process/
+  register pipeline) with cross-imports → ImportError → spent HUNDREDS of ticks debugging its own Python
+  plumbing (plan.md item 2 = "Address the ImportError for skill imports"). For a ONE-TIME mapping it
+  should just run `arp -a` + a few `Test-NetConnection` inline and memorize results. *Fix:* anti-over-
+  engineering directive — "don't build scan/probe skills for one-off discovery; only build a skill for a
+  REPEATED control action (toggle a plug)." Plus the dedup guard isn't catching `scan_*`/`probe_*` dupes.
+- 🔴 **Linter-block rumination (NEW failure surfaced by the linter).** t969-972 are the SAME single-quoted
+  command blocked 4× in a row — linter correctly stops the doomed job, but the model just resubmits it
+  identically. The fuzzy loop-breaker fired but is ADVISORY ONLY and this model ignores it. *Fix:* give
+  the loop-breaker TEETH — after K identical blocks/failures, either (a) auto-correct the mechanical case
+  (single→double quotes) and run it, (b) hand back the exact corrected command, or (c) auto-pause + ping
+  Boss ("I'm stuck on X"). For an autonomous buddy, escalating to Boss after N stuck ticks is right.
+- 🔴 **Knowledge bloat: 265 entries to map one small LAN.** Dream compaction re-extracts ~2 entries every
+  cycle and never dedups → recall returns noise, and it never consolidated a clean device inventory
+  (0 entries marked source_tick>0; it captured intentions, not the arp facts). *Fix:* dedup on dream
+  extraction (skip near-identical/seed-restating entries) + cap; consolidate device facts into one row
+  per device.
+- The earlier syntax/spiral fixes DID work (clean commands mid-run, jobs.json capped at 15). The failure
+  moved UP to judgment/convergence — which is the harder, higher-value layer.
+
+---
+
+## GHOST-IN-THE-MACHINE session — Claude operating as the agent's POV (Boss-directed)
+Boss: "build a logically sound product, don't patch leaks and hope the model follows… I have a feeling
+the system is not intuitive to the llm." Reproduced the EXACT tick-973 prompt the model sees and read it
+as the agent. Findings, in order of impact:
+
+- 🔴🔴 **SMOKING GUN — my own linter false-positive caused the multi-hour stall.** `_RE_SQUOTE_INTERP`
+  (`'[^']*(?:\$_|\$\{)[^']*'`) matches ACROSS quote boundaries. The model wrote a VALID arp-parse command
+  (`… Select-String 'dynamic' | ForEach-Object { $_.ToString().Split(' ') } …`); the regex spanned from the
+  closing `'` of `'dynamic'` across `$_` to the opening `'` of `' '` and falsely blocked it as "single
+  quotes don't expand." Verified live. The model's reasoning was SOUND ([t]: "the regex was over-engineered,
+  I should just use a simple split") — it diagnosed correctly every time, but the environment LIED to it and
+  rejected every valid variant. It wasn't grasping at straws; it was gaslit by a buggy guardrail. **This is
+  exactly the "patch that became a worse leak" Boss warned about.** Fix: make the linter quote-aware (tokenize
+  single-quoted spans and only flag `$_`/`${` that are genuinely INSIDE one), or drop the regex for a real
+  check. Better yet: a blocked command should AUTO-CORRECT or hand back a runnable fix, never just "NO."
+- 🔴 **Subgoals/plan drifted into platform-CONTRADICTING nonsense — and they're the MOST salient line.** The
+  top-of-context "Right now you are working on:" = *"Establish a persistent voice and chat listener"* and a
+  subgoal = *"Create a persistent memory database"* — the EXACT things the system prompt says NEVER to build
+  (chat handled; `memorize` IS the DB). `plan_goal` auto-generated subgoals that fight the platform. The real
+  immediate focus (map LAN) is buried far below. The single most prominent instruction misdirects every tick.
+- 🔴 **The self-guide actively instructs over-engineering.** "## How to work: when waiting on a job, don't
+  ruminate — proactively build the infrastructure the NEXT phase needs (memory profiles, skill schemas,
+  device registry)." That self-authored rule directly produced the 8-skill scan/registry pipeline. It
+  CONTRADICTS check_system's "never build agent infrastructure." Two of its own directives point opposite ways.
+- 🟡 **Recall noise in-context.** "What you already know" shows two near-identical powershell_syntax
+  procedures; the same PS gotchas appear 3× (system rules + recalled FACT + recalled PROCEDURE) — drowning in
+  redundant advice while its actual command is wrongly blocked.
+- ✅ **The tick prompt + loop-detector are actually GOOD.** Loop detection fired ("gone 5 ticks without real
+  progress… try a DIFFERENT approach"); the prompt says "take ONE concrete step." But they're powerless when
+  the blocker is a buggy guardrail, not the model's choice — it CANNOT comply because every valid command is
+  rejected. Don't "fix" these; fix what they're pointing at.
+
+**Reframe:** the model isn't dumb and the prompt isn't badly written. The system gives it (a) FALSE feedback
+(linter FP) and (b) a contradictory, drifted set of top-priority directives (auto-subgoals vs platform rules;
+self-guide vs check_system). It "follows the next logical step regardless" because the environment keeps
+lying about what just happened and what matters now. The fix is COHERENCE (one source of truth for the
+current objective; guardrails that never lie; self-guide consistent with the platform), not more rules.
+
+### Ghost replays — 4 states (fresh boot / Boss-message / async-landed / idle). "Do I feel blind?" YES.
+Rendered the real tick context for four states and operated as the agent. The context is RICH but it's the
+WRONG richness — over-supplies static identity/rules, under-supplies live state. Specific blindness:
+- 🔴 **Blind to my own accumulated knowledge (memory is write-only in practice).** In ALL four states, the
+  "What you already know (recalled)" panel showed generic BOOTSTRAP nuggets (identity, PowerShell syntax) —
+  NEVER the device inventory I supposedly built over 6h. To see what I learned I must `recall(query)` and hope
+  lossy BM25 surfaces it from 265 noisy entries. So I re-scan because I can't SEE that I already scanned. This
+  is likely THE root cause of going in circles: I can store facts but they don't reliably come back into view →
+  the loop has amnesia. **Need: a persistent, structured world-state/knowledge panel always in context** (e.g.
+  a compact device/registry view + "key facts" pinned), not pull-only recall.
+- 🔴 **Blind to the ONE thing to do now — 4 sources fight.** "Right now you are working on:" (drifted subgoal:
+  chat listener) vs "## Plan" (arp steps) vs mission "Immediate focus" (map LAN) vs actual history (port
+  probing). The MOST prominent status line tells it to build the chat listener the platform forbids. Need ONE
+  coherent current-objective line (+ next step + done-criterion) it can trust; kill the contradictors.
+- 🔴 **Blind to salience/novelty.** Boss's message lands at the BOTTOM of a 6 KB blob and the action-directing
+  tick prompt never mentions a message arrived → easy to talk past Boss. Async results arrive at the same flat
+  priority as everything else. Nothing says "THIS changed since last tick — handle THIS." Need a "what's new"
+  marker and the incoming Boss message surfaced AT the decision point (in/above the tick prompt).
+- 🟡 **Presence can contradict history** (presence "⟳ Still running" while the result already appears in the
+  thread) — partly a sandbox artifact, but a real desync risk between jobs.json and delivered async_results.
+- 🟡 **Stale goal claim:** goal.md tells even a fresh Lv.0 newborn "you have found the 192.168.86.x network"
+  (baked-in prior progress). The immediate-focus line should be state-derived, not hardcoded.
+- ✅ NOT blind to: identity, tools, rules, encouragement — those are OVER-supplied (system prompt 8.6 KB +
+  redundant recalled nuggets repeat "memorize is your DB / use PowerShell" 2-3×). Fix is REBALANCING, not more.
+
+**Design implication:** the context layer needs (1) a persistent world-state panel (what I know + what's done/
+left), (2) one trustworthy current-objective, (3) a salience/"what's new" channel, and (4) less static
+boilerplate. That's a coherent context model, not another rule.

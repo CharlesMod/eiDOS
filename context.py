@@ -249,6 +249,35 @@ def _read_recall_cache(config: Config) -> str:
         return ""
 
 
+def _build_relevant_recall(config: Config, exclude_ids: set) -> str:
+    """A SMALL BM25 slice keyed on the CURRENT STEP (subtask / next plan line), not the static goal.
+
+    The old intelligence section queried BM25 with the generic goal text, so it returned bootstrap
+    seeds every tick and never step-relevant facts — a root cause of the amnesia. Keyed on the current
+    step and de-duplicated against the world-model panel, this surfaces only genuinely relevant priors.
+    """
+    if not config.knowledge_enabled:
+        return ""
+    try:
+        from knowledge import search_bm25, format_recalled
+    except ImportError:
+        return ""
+    step = (current_subtask(config) or "").strip()
+    if not step:
+        for line in (read_plan(config) or "").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                step = line
+                break
+    if not step:
+        return ""
+    results = [r for r in search_bm25(config, step, top_k=config.knowledge_recall_top_k)
+               if r.get("id") not in exclude_ids]
+    if not results:
+        return ""
+    return format_recalled(results, max_chars=max(300, config.context_intelligence_max_chars // 2))
+
+
 # ---------------------------------------------------------------------------
 # Context assembly
 # ---------------------------------------------------------------------------
@@ -608,9 +637,21 @@ def _assemble_briefing(
     if subgoals:
         durable.append(f"## Subgoals\n{_truncate(subgoals, config.context_subgoals_max_chars, 'subgoals')}")
 
-    intel = _build_intelligence_section(config, goal, plan or "")
-    if intel:
-        durable.append(f"## What you already know (recalled from memory)\n{intel}")
+    # World model (deterministic): the facts eidos has LEARNED — always visible so memory is
+    # readable, not write-only. Then a small step-keyed relevance recall, deduped against it.
+    try:
+        from knowledge import recent_learned, format_recalled
+        learned = recent_learned(config, limit=getattr(config, "world_state_max_items", 12))
+    except Exception:  # noqa: BLE001
+        learned = []
+    if learned:
+        durable.append(
+            "## What you've learned — your world model (devices, network, facts you discovered; "
+            "this is your memory made visible — build on it, don't re-discover it)\n"
+            + format_recalled(learned, max_chars=config.context_intelligence_max_chars))
+    relevant = _build_relevant_recall(config, {e.get("id") for e in learned})
+    if relevant:
+        durable.append("## Possibly relevant from memory\n" + relevant)
 
     # Boss's messages + the messages YOU already sent him — highest priority. Surfacing your
     # own standing messages stops the "ask Boss for the MQTT creds again" re-ping loop: if you

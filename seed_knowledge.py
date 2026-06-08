@@ -122,7 +122,9 @@ def main():
     n = 0
     for cat, tags, content in NUGGETS:
         try:
-            knowledge.store_entry(cfg, content, tags, cat)
+            # Mark as a bootstrap seed so the context layer can tell seeds (rarely need surfacing)
+            # apart from LEARNED facts (the agent's own discoveries, always surfaced in the world model).
+            knowledge.store_entry(cfg, content, tags, cat, source_goal="seed")
             n += 1
         except Exception as e:  # noqa: BLE001
             print(f"  ! failed ({cat} {tags}): {e}")

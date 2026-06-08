@@ -384,6 +384,29 @@ def search_tags(config: Config, tags: list[str], top_k: int = 5) -> list[dict]:
     return results
 
 
+def recent_learned(config: Config, limit: int = 12) -> list[dict]:
+    """The agent's most-recent LEARNED knowledge, newest-first, de-duplicated.
+
+    'Learned' = anything it discovered/distilled at runtime (memorize, dream extraction); it
+    EXCLUDES bootstrap seeds (source_goal == 'seed'). This is the deterministic 'world model'
+    surface — what eiDOS actually knows is always shown, instead of being hidden behind a BM25
+    query that (keyed on the static goal) only ever returned generic seeds. Cures write-only memory.
+    """
+    idx = load_index(config)
+    learned = [e for e in idx if (e.get("source_goal") or "") != "seed"]
+    learned.sort(key=lambda e: e.get("created", ""), reverse=True)  # newest first
+    out, seen = [], set()
+    for e in learned:
+        key = " ".join((e.get("content_preview") or "").lower().split())[:90]
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def format_recalled(entries: list[dict], max_chars: int = 1200) -> str:
     """Format recalled knowledge entries for injection into the context window."""
     if not entries:

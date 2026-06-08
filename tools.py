@@ -128,44 +128,73 @@ _PS_UNWRAP_RE = re.compile(r"^\s*(?:powershell|pwsh)(?:\.exe)?\b.*?\s-(?:c|comma
 _PS_LIST = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
 
 
-# --- Pre-flight linter ----------------------------------------------------
-# The local model repeatedly makes a few Windows/PowerShell syntax mistakes that DEFINITELY fail
-# (observed live: a 10-attempt, 3-minute port-scan rumination spiral). We catch the near-certain
-# ones BEFORE dispatch and hand back a one-line correction, turning a doomed background job +
-# re-derivation into a single corrected tick. Conservative — only the highest-confidence patterns.
+# --- Pre-flight linter (quote-aware; NEVER lies, never walls) -------------
+# Catches a few Windows/PowerShell mistakes the local model makes. Contract, learned the hard way
+# (a buggy version false-blocked VALID commands for hours): it must be QUOTE-AWARE so it cannot
+# misfire on a `$_` that sits between two separate single-quoted literals, and it must AUTO-CORRECT
+# the genuine case and RUN — never hand back a dead "NOT RUN" wall the model just bounces off.
+#   Return: None (clean) | ("block", msg) for the truly unfixable | ("rewrite", new_cmd, note).
 _RE_BASH_FOR = re.compile(r"\bfor\s+\w+\s+in\b.*?;\s*do\b", re.IGNORECASE | re.DOTALL)
-_RE_BASH_DONE = re.compile(r";\s*done\b|\bdone\s*$|;\s*fi\b|\bfi\s*$", re.IGNORECASE)
-_RE_SQUOTE_INTERP = re.compile(r"'[^']*(?:\$_|\$\{)[^']*'")  # single-quoted string w/ $_ or ${...}
+_RE_BASH_DONE = re.compile(r";\s*done\b|;\s*fi\b", re.IGNORECASE)  # require ';' so we never hit the WORD "done"
+_RE_INTERP_IN_SPAN = re.compile(r"\$_|\$\{|\$[A-Za-z][A-Za-z0-9_]*")  # $_ / ${name} / $name
+
+
+def _single_quoted_spans(cmd: str):
+    """Yield (start, end) index pairs of single-quoted spans, respecting double-quoted regions
+    (a `'` inside a double-quoted string is literal, and vice-versa). A simple 3-state scanner —
+    this is what makes the linter quote-aware and immune to the cross-boundary false positive."""
+    spans = []
+    state = "none"  # none | single | double
+    start = -1
+    for i, ch in enumerate(cmd):
+        if state == "none":
+            if ch == "'":
+                state, start = "single", i
+            elif ch == '"':
+                state = "double"
+        elif state == "single":
+            if ch == "'":
+                spans.append((start, i)); state = "none"
+        elif state == "double":
+            if ch == '"':
+                state = "none"
+    return spans
 
 
 def _lint_windows_command(cmd: str):
-    """Return a short correction string if cmd has a near-certain Windows/PowerShell syntax error,
-    else None. Blocking on these saves the model from the doomed-retry spiral."""
+    """Quote-aware pre-flight. See contract above."""
     c = cmd.strip()
     low = c.lower()
     if low.startswith(("cmd ", "cmd.exe", "cmd/")):
         return None  # operator explicitly chose cmd.exe — don't second-guess
-    # 1) Unix bash loop syntax on Windows (observed: `for i in {40..50}; do ...; done`).
+    # 1) Unix bash loop syntax on Windows (observed: `for i in {40..50}; do ...; done`). Unfixable
+    #    automatically (whole structure differs) — block WITH the PowerShell equivalent.
     if _RE_BASH_FOR.search(c) or _RE_BASH_DONE.search(c):
-        return ("That's Unix bash syntax (`for … do … done` / `fi`) — you're in PowerShell, not bash. "
+        return ("block",
+                "That's Unix bash syntax (`for … do … done` / `fi`) — you're in PowerShell, not bash. "
                 "Use a range pipeline instead, e.g.  40..50 | ForEach-Object { $ip = \"192.168.86.$_\"; "
                 "... }")
-    # 2) `powershell -Command \"...\"` wrapping whose inner payload has nested double-quotes — that
-    #    nesting is the actual parse-breaker. You're ALREADY in PowerShell; run the script directly.
+    # 2) `powershell -Command "...nested double-quotes..."` — the nesting is the parse-breaker. We
+    #    can fix it deterministically: run the inner script directly (you're already in PowerShell).
     m = _PS_UNWRAP_RE.match(c)
     if m:
         inner = m.group(1).strip()
         if len(inner) >= 2 and inner[0] == inner[-1] and inner[0] in "\"'":
             inner = inner[1:-1]
         if '"' in inner:
-            return ("Don't wrap in `powershell -Command \"...\"` — the nested double-quotes inside break "
-                    "the parse. You're already in PowerShell; run the inner script directly:\n" + inner)
-    # 3) Single-quoted string containing $_ or ${...} — single quotes DON'T expand in PowerShell, so
-    #    the variable stays literal (observed: `$ip='192.168.86.$_'` scanned the literal host).
-    if _RE_SQUOTE_INTERP.search(c):
-        return ("Single quotes don't expand variables in PowerShell — `'…$_…'` stays literal text. Use "
-                "DOUBLE quotes, and brace a name before punctuation: \"192.168.86.$_\" or "
-                "\"${ip}:${port}\".")
+            return ("rewrite", inner,
+                    "unwrapped your `powershell -Command \"...\"` and ran the inner script directly "
+                    "(you're already in PowerShell; the nested quotes would have broken the parse)")
+    # 3) A $var/$_ GENUINELY inside a single-quoted span won't expand. Quote-aware: only spans that
+    #    are truly single-quoted count (not a $_ between two separate literals). Auto-correct that one
+    #    span to double quotes and run — don't wall the model.
+    for (s, e) in _single_quoted_spans(c):
+        inner = c[s + 1:e]
+        if ('"' not in inner) and (("$_" in inner) or ("${" in inner)) and _RE_INTERP_IN_SPAN.search(inner):
+            fixed = c[:s] + '"' + inner + '"' + c[e + 1:]
+            return ("rewrite", fixed,
+                    "changed a single-quoted '…' to \"…\" so the $variable expands (single quotes are "
+                    "literal in PowerShell)")
     return None
 
 
@@ -215,15 +244,21 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                 duration_s=0,
             )
 
-    # Pre-flight: reject near-certain Windows/PowerShell syntax mistakes with a one-line fix
-    # BEFORE dispatch, so a bad command costs one corrected tick instead of a doomed background job.
+    # Pre-flight (quote-aware, never lies). Auto-correct the fixable cases and RUN; only hard-block
+    # the truly unfixable ones (with the PowerShell equivalent). A prepended note tells the model
+    # what was changed so it learns — never a dead-end "NOT RUN" wall it just bounces off.
+    _lint_note = ""
     if os.name == "nt":
-        fix = _lint_windows_command(cmd)
-        if fix:
-            return ToolResult(
-                output=f"NOT RUN — fix the command first:\n{fix}",
-                full_output_path=None, success=False, duration_s=0,
-            )
+        verdict = _lint_windows_command(cmd)
+        if verdict:
+            if verdict[0] == "block":
+                return ToolResult(
+                    output=f"NOT RUN — this can't run as written:\n{verdict[1]}",
+                    full_output_path=None, success=False, duration_s=0,
+                )
+            if verdict[0] == "rewrite":
+                cmd = verdict[1]
+                _lint_note = f"[auto-fixed: {verdict[2]}]\n"
 
     start = time.monotonic()
     proc = None
@@ -281,7 +316,7 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                     pass
                 intent_note = f" (intent: {intent})" if intent else ""
                 return ToolResult(
-                    output=(f"⟳ dispatched [job {jobname}]: {cmd[:80]}{intent_note} — running in the "
+                    output=(_lint_note + f"⟳ dispatched [job {jobname}]: {cmd[:80]}{intent_note} — running in the "
                             f"background. You are NOT blocked; keep thinking and doing other work. "
                             f"The result comes back later tagged [↩ job {jobname}] — watch for it, "
                             f"don't re-run this, and don't sit waiting. If you genuinely must have "
