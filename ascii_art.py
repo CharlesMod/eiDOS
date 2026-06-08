@@ -565,3 +565,5 @@ def get_creature(level: int, mood: str, traits: list = None,
         "stage": stage,
         "particles": particles,
     }
+
+# self-edit pipeline test marker (auto-removed)
