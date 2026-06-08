@@ -87,6 +87,15 @@ NUGGETS = [
      "create_skill (no loader/registry needed). The tick LOOP already runs you (no scheduler needed). "
      "You build HOUSE automation — devices, LAN, plugs, cameras — NOT agent infrastructure. Before "
      "writing any file or skill, use check_tools or recall to confirm it doesn't already exist."),
+    ("procedures", ["memory", "memorize", "discovery", "devices", "no-json"],
+     "When you DISCOVER something durable — a device's IP/role/open ports, the network layout, a "
+     "fact about the home or Dean, a credential that worked — store it with `memorize` and good "
+     "tags; `recall` searches it all back later. `memorize`+`recall` ARE your database. Do NOT write "
+     "your own JSON files, device maps, registries, or profile databases to hold what you learn — "
+     "that just hides the data from the rest of the system and duplicates memory you already have. "
+     "One memorize per fact, e.g. memorize(fact='192.168.86.48 is the OctoPrint 3D printer; web UI "
+     "on port 80', tags=['device','octoprint','192.168.86.48'], category='facts'). To review what "
+     "you know about a topic, recall it (e.g. recall('devices on the LAN'))."),
     ("errors", ["self", "no-bootstrap", "lesson"],
      "Lesson: trying to 'initialize the LLM' by running `python eidos.py` or a llama-server "
      "spawns a second process that never returns and FREEZES you. The LLM and TTS already "
