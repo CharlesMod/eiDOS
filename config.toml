@@ -30,7 +30,15 @@ context_max_chars = 40000
 truncation_chars = 3000
 
 [safety]
-cmd_timeout_s = 180
+# Soft auto-background threshold. A foreground bash command blocks the consciousness
+# loop for at most this long; if it's still running, tool_bash hands it to the bg
+# ledger (it keeps running, output preserved) and returns instantly so the loop stays
+# free for LLM work. Keep this SMALL — latency is the enemy; we never want dead air.
+cmd_timeout_s = 10
+# Hard ceiling for async / auto-backgrounded jobs: if one runs longer than this it's
+# killed and reported as [↩ job N · TIMED OUT]. Manual bg_run jobs are EXEMPT (you
+# deliberately backgrounded those for long work).
+cmd_async_ceiling_s = 180
 disk_min_gb = 1.0
 ram_max_pct = 90.0
 bg_output_max_bytes = 10000000
@@ -95,6 +103,28 @@ enabled = true
 
 [dashboard]
 port = 8099
+# Shared token gating state-changing POSTs (self-edit approve/apply, git restore, etc.).
+# Empty = off (accident-safety mode; fine for a trusted LAN/Tailscale buddy). Set a value
+# to require ?token=... or an X-EiDOS-Token header on privileged actions.
+token = ""
+
+[self_improvement]
+# Living self-guide (Dean-owned standing directives, injected every tick; eiDOS may PROPOSE).
+self_guide_enabled = true
+self_guide_max_chars_ctx = 1200
+self_guide_max_bytes = 6000
+# Listening hold: focusing the chat box quiets the loop so you can type without it racing.
+chat_hold_ttl_s = 60
+chat_hold_max_continuous_s = 300
+# Git safety net: checkpoints + restore + watchdog crash-loop auto-rollback.
+git_safety_enabled = true
+git_self_branch = "eidos-self"
+git_checkpoint_keep = 30
+# Gated self-code-editing (eiDOS proposes -> you approve -> dashboard applies + restarts).
+# Stays OFF until you flip it; the propose tool + UI exist regardless.
+self_edit_enabled = false
+self_edit_max_proposal_bytes = 200000
+self_edit_health_probe_s = 90
 
 [knowledge]
 enabled = true

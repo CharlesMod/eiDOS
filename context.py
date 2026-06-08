@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from config import Config
-from memory import read_goal, read_memory, read_plan, read_subgoals, read_recent_observations, read_interventions, current_subtask, read_recent_thoughts
+from memory import read_goal, read_memory, read_plan, read_subgoals, read_recent_observations, read_interventions, current_subtask, read_recent_thoughts, read_self_guide
 from env_snapshot import generate as generate_env_snapshot
 from env_snapshot import generate_alerts as generate_env_alerts
 from prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_BRIEFING, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED
@@ -442,6 +442,23 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
     sub = current_subtask(config)
     if sub:
         lines.append(f"Right now you are working on: {sub}")
+    # In-flight async dispatches — so the model remembers what it's waiting on and
+    # doesn't re-run them (results arrive later tagged [↩ job N]).
+    try:
+        jobs = json.loads((config.workspace / "jobs.json").read_text(encoding="utf-8"))
+        now = time.time()
+        running = []
+        for j in jobs:
+            if j.get("status") != "running" or j.get("kind") not in ("async", "auto", "manual"):
+                continue
+            age = int(now - j["started_ts"]) if j.get("started_ts") else None
+            age_s = f" {age}s" if age is not None else ""
+            running.append(f"job {j.get('name')} ({(j.get('cmd') or '')[:40]}){age_s}")
+        if running:
+            lines.append("⟳ Still running (you'll be told when each finishes — don't re-run): "
+                         + "; ".join(running[:6]))
+    except Exception:  # noqa: BLE001
+        pass
     alerts = generate_env_alerts(config)
     if alerts:
         lines.append(alerts)
@@ -480,6 +497,11 @@ def _build_history_thread(config: Config, n_ticks: int = 14) -> list[dict]:
         if tool == "dream":
             out.append({"role": "user",
                         "content": f"[you rested and consolidated memory — {output[:200]}]"})
+            continue
+        if tool == "async_result":
+            # An earlier fire-and-forget dispatch finished; deliver it as a notification
+            # turn. The output already carries the [↩ job N · cmd · OK] pairing tag.
+            out.append({"role": "user", "content": output[:3000]})
             continue
         thought = thoughts.get(o.get("tick"), "")
         if tool == "thought":
@@ -523,8 +545,17 @@ def _assemble_briefing(
     system = SYSTEM_PROMPT_BRIEFING.format(workspace=str(config.workspace))
     messages.append({"role": "system", "content": system})
 
-    # --- Durable context: presence + mission + plan + knowledge + Dean's messages ---
+    # --- Durable context: presence + self-guide + mission + plan + knowledge + Dean's messages ---
     durable = [_build_presence(config, tick_number, goal_start_time)]
+
+    # Self-guide — Dean's standing behavioral directives, high salience (just under presence).
+    if getattr(config, "self_guide_enabled", True):
+        guide = read_self_guide(config)
+        if guide:
+            durable.append(
+                "## Your self-guide — standing directives from Dean (follow these). "
+                "Dean owns this file; you may PROPOSE changes with update_self_guide.\n"
+                + _truncate(guide, config.context_self_guide_max_chars, "self_guide"))
 
     goal = read_goal(config)
     if goal:

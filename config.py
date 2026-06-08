@@ -43,6 +43,7 @@ class Config:
 
     # Safety
     cmd_timeout_s: int = 120
+    cmd_async_ceiling_s: float = 180.0  # hard kill for async/auto bg jobs (manual bg_run exempt)
     disk_min_gb: float = 1.0
     ram_max_pct: float = 85.0
     bg_output_max_bytes: int = 10_000_000  # 10MB cap for bg_run output files
@@ -131,6 +132,20 @@ class Config:
     # Mock mode
     mock_mode: bool = False
 
+    # --- Self-improvement subsystem (self-guide, listening hold, git safety, self-edit) ---
+    self_guide_enabled: bool = True
+    context_self_guide_max_chars: int = 1200   # budget injected into context each tick
+    self_guide_max_bytes: int = 6000           # cap on the self_guide.md file itself
+    chat_hold_ttl_s: float = 60.0              # listening hold freshness (cooperative client)
+    chat_hold_max_continuous_s: float = 300.0  # hard ceiling so a stuck hold can't pin the loop
+    git_safety_enabled: bool = True
+    git_self_branch: str = "eidos-self"        # self-edit commits land here, never pushed
+    git_checkpoint_keep: int = 30              # prune to last N eidos-good-* tags
+    self_edit_enabled: bool = False            # gated self-code-editing (opt-in)
+    self_edit_max_proposal_bytes: int = 200000
+    self_edit_health_probe_s: int = 90         # post-restart health window before auto-rollback
+    dashboard_token: str = ""                  # shared token gating state-changing POSTs ('' = off)
+
     @property
     def workspace(self) -> Path:
         return Path(self.workspace_dir)
@@ -183,6 +198,33 @@ class Config:
     def knowledge_index_path(self) -> Path:
         return self.knowledge_dir / "index.json"
 
+    # --- Self-improvement subsystem paths ---
+    @property
+    def state_dir(self) -> Path:
+        """Lifecycle/marker state the dashboard owns (pause, holds, self-edit markers)."""
+        return self.workspace / "state"
+
+    @property
+    def chat_hold_path(self) -> Path:
+        return self.state_dir / "chat_hold.json"
+
+    @property
+    def self_guide_path(self) -> Path:
+        return self.workspace / "self_guide.md"
+
+    @property
+    def self_guide_proposed_path(self) -> Path:
+        return self.workspace / "self_guide_proposed.md"
+
+    @property
+    def self_guide_proposals_path(self) -> Path:
+        return self.workspace / "self_guide_proposals.jsonl"
+
+    @property
+    def proposals_dir(self) -> Path:
+        """Where eiDOS stages self-edit / skill proposals for operator approval."""
+        return self.workspace / "proposals"
+
 
 def load_config(path: str = "config.toml") -> Config:
     """Load config from TOML file, then apply env var overrides."""
@@ -220,6 +262,7 @@ def load_config(path: str = "config.toml") -> Config:
 
         safety = data.get("safety", {})
         config.cmd_timeout_s = safety.get("cmd_timeout_s", config.cmd_timeout_s)
+        config.cmd_async_ceiling_s = safety.get("cmd_async_ceiling_s", config.cmd_async_ceiling_s)
         config.disk_min_gb = safety.get("disk_min_gb", config.disk_min_gb)
         config.ram_max_pct = safety.get("ram_max_pct", config.ram_max_pct)
         config.bg_output_max_bytes = safety.get("bg_output_max_bytes", config.bg_output_max_bytes)
@@ -276,6 +319,20 @@ def load_config(path: str = "config.toml") -> Config:
 
         dashboard = data.get("dashboard", {})
         config.dashboard_port = dashboard.get("port", config.dashboard_port)
+        config.dashboard_token = dashboard.get("token", config.dashboard_token)
+
+        si = data.get("self_improvement", {})
+        config.self_guide_enabled = si.get("self_guide_enabled", config.self_guide_enabled)
+        config.context_self_guide_max_chars = si.get("self_guide_max_chars_ctx", config.context_self_guide_max_chars)
+        config.self_guide_max_bytes = si.get("self_guide_max_bytes", config.self_guide_max_bytes)
+        config.chat_hold_ttl_s = si.get("chat_hold_ttl_s", config.chat_hold_ttl_s)
+        config.chat_hold_max_continuous_s = si.get("chat_hold_max_continuous_s", config.chat_hold_max_continuous_s)
+        config.git_safety_enabled = si.get("git_safety_enabled", config.git_safety_enabled)
+        config.git_self_branch = si.get("git_self_branch", config.git_self_branch)
+        config.git_checkpoint_keep = si.get("git_checkpoint_keep", config.git_checkpoint_keep)
+        config.self_edit_enabled = si.get("self_edit_enabled", config.self_edit_enabled)
+        config.self_edit_max_proposal_bytes = si.get("self_edit_max_proposal_bytes", config.self_edit_max_proposal_bytes)
+        config.self_edit_health_probe_s = si.get("self_edit_health_probe_s", config.self_edit_health_probe_s)
 
         planning = data.get("planning", {})
         config.planning_model_path = planning.get("model_path", config.planning_model_path)

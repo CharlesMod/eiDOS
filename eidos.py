@@ -48,7 +48,7 @@ from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rot
 from safety import check_ram, get_cpu_temp, kill_child_processes, check_disk_space
 from session import human_present, take_workspace_snapshot, workspace_diff
 from telemetry import write_heartbeat, append_metrics, write_activity, get_cpu_pct
-from tools import execute_tool, refresh_jobs
+from tools import execute_tool, refresh_jobs, collect_finished_jobs
 
 logger = logging.getLogger("eidos")
 
@@ -143,8 +143,42 @@ def _has_pending_interventions(config: Config) -> bool:
     return False
 
 
+def _chat_hold_active(config: Config) -> bool:
+    """Listening hold: True when Dean has the chat box focused (a soft pause distinct from
+    the operator pause). The dashboard owns the flag file; eiDOS only reads it. Fails OPEN
+    to autonomy on any anomaly (missing, corrupt, stale, backward clock, ceiling exceeded).
+    A pending intervention overrides the hold so a sent message is answered immediately.
+    """
+    try:
+        path = config.chat_hold_path
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        import json as _json
+        d = _json.loads(raw)
+        if not d.get("held"):
+            return False
+        now = time.time()
+        ts = float(d.get("ts", 0) or 0)
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = ts
+        age = now - max(ts, mtime)            # freshest of payload ts / file mtime
+        if age < 0:                            # backward clock → treat as stale
+            return False
+        if age > float(config.chat_hold_ttl_s):
+            return False
+        first = float(d.get("first_held_ts", ts) or ts)
+        if now - first > float(config.chat_hold_max_continuous_s):
+            return False                       # hard ceiling — never pin the loop forever
+        if _has_pending_interventions(config):
+            return False                       # a message is waiting — go answer it
+        return True
+    except (FileNotFoundError, ValueError, OSError):
+        return False
+
+
 def _interruptible_sleep(config: Config):
-    """Sleep for tick_interval_s, but wake early if a chat message arrives."""
+    """Sleep for tick_interval_s, but wake early if a chat message arrives (or hold engages)."""
     elapsed = 0.0
     poll = 2.0
     while elapsed < config.tick_interval_s:
@@ -157,6 +191,8 @@ def _interruptible_sleep(config: Config):
         if _has_pending_interventions(config):
             logger.info("Early wake: pending intervention detected")
             break
+        if _chat_hold_active(config):
+            break  # reach the listening gate promptly
 
 
 def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
@@ -356,6 +392,7 @@ def run_loop(config: Config, persona=None, wal=None):
     ticks_since_goal_complete = None  # None = never
     idle_since = None  # timestamp when goal went missing
     operator_paused = False
+    listening_since = None  # set while the chat-focus "listening" hold is engaged
     loop_start = time.monotonic()
     last_goal_hash = None  # track goal changes
 
@@ -429,6 +466,7 @@ def run_loop(config: Config, persona=None, wal=None):
                     "output": "Paused by operator via dashboard. Tick loop suspended.",
                 })
                 operator_paused = True
+            listening_since = None  # operator pause supersedes a soft listening hold
             time.sleep(5)
             continue
         elif operator_paused:
@@ -440,6 +478,21 @@ def run_loop(config: Config, persona=None, wal=None):
                 "output": "Resumed by operator. Resuming tick loop.",
             })
             operator_paused = False
+
+        # --- Listening hold (soft pause: Dean has the chat box focused) ---
+        # Distinct from operator pause. The in-flight tick already finished; we simply do
+        # NOT start a new generation while Dean is composing. Fails open to autonomy.
+        if _chat_hold_active(config):
+            if listening_since is None:
+                listening_since = time.time()
+                logger.info("Listening hold engaged (Dean focused chat) — quieting the loop")
+            held_s = int(time.time() - listening_since)
+            write_activity(config, "listening", detail=f"listening to Dean ({held_s}s)")
+            time.sleep(2.0)
+            continue
+        elif listening_since is not None:
+            logger.info("Listening hold released — resuming autonomous loop")
+            listening_since = None
 
         # --- Check for goal ---
         goal = read_goal(config)
@@ -542,6 +595,27 @@ def run_loop(config: Config, persona=None, wal=None):
             elif all(str(h).startswith("th_") or h == "__no_tool__" for h in recent_hashes):
                 loop_detected = True   # ruminating: thinking without acting
                 repeat_count = len(recent_hashes)
+
+        # --- Deliver async tool results that finished since last tick ---
+        # Fire-and-forget bash dispatches land here when done, tagged [↩ job N], and flow
+        # into context as normal result-turns so the model pairs them with its dispatch.
+        try:
+            for fin in collect_finished_jobs(config):
+                status = fin.get("status")
+                ok = "OK" if status == "completed" else ("TIMED OUT" if status == "timed_out" else "FAILED")
+                cmd_s = (fin.get("cmd") or "")[:70]
+                body = (fin.get("tail") or "").strip() or "(no output)"
+                intent = fin.get("intent")
+                intent_s = f" (you wanted: {intent})" if intent else ""
+                append_observation(config, {
+                    "tick": tick_number,
+                    "tool": "async_result",
+                    "args": {"job": fin.get("name")},
+                    "success": status == "completed",
+                    "output": f"[↩ job {fin.get('name')} · {cmd_s} · {ok}]{intent_s}\n{body}",
+                })
+        except Exception as e:  # noqa: BLE001
+            logger.warning("async result delivery failed: %s", e)
 
         # --- Assemble context ---
         messages = assemble_context(

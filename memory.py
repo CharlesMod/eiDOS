@@ -98,6 +98,70 @@ def current_subtask(config: Config) -> Optional[str]:
     return None
 
 
+# --- Living self-guide (Dean-owned standing directives; eiDOS may PROPOSE) ---
+
+def read_self_guide(config: Config) -> str:
+    """Read self_guide.md — the operator-owned standing directives injected each tick.
+
+    Resilient: one non-UTF-8 byte or a missing file must NEVER brick the tick loop.
+    """
+    try:
+        return config.self_guide_path.read_text(encoding="utf-8", errors="replace").strip()
+    except (FileNotFoundError, OSError, UnicodeError):
+        return ""
+
+
+def read_self_guide_proposed(config: Config) -> str:
+    try:
+        return config.self_guide_proposed_path.read_text(encoding="utf-8", errors="replace").strip()
+    except (FileNotFoundError, OSError, UnicodeError):
+        return ""
+
+
+def write_self_guide(config: Config, content: str) -> None:
+    """Atomically write the LIVE self_guide.md. Dashboard/operator path only."""
+    config.workspace.mkdir(parents=True, exist_ok=True)
+    content = (content or "")[: config.self_guide_max_bytes]
+    fd, tmp_path = tempfile.mkstemp(dir=str(config.workspace), prefix=".self_guide_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        replace_with_retry(tmp_path, str(config.self_guide_path))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def write_self_guide_proposal(config: Config, content: str, rationale: str = "", tick=None) -> None:
+    """eiDOS-side: stage a PROPOSED self-guide (never the live file) + audit-log it."""
+    config.workspace.mkdir(parents=True, exist_ok=True)
+    content = (content or "")[: config.self_guide_max_bytes]
+    fd, tmp_path = tempfile.mkstemp(dir=str(config.workspace), prefix=".self_guide_prop_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        replace_with_retry(tmp_path, str(config.self_guide_proposed_path))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    try:
+        with open(config.self_guide_proposals_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "tick": tick,
+                "rationale": (rationale or "")[:300],
+                "chars": len(content),
+            }) + "\n")
+    except OSError:
+        pass
+
+
 # --- Train of thought (continuous stream of consciousness) ---
 
 def append_thought(config: Config, tick, text: str) -> None:

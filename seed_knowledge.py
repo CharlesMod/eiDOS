@@ -44,11 +44,13 @@ NUGGETS = [
      "The host 'gamingPC' is Windows with an NVIDIA RTX 5080 (16 GB VRAM); the house-ai "
      "model occupies ~15.7 GB of it. The machine's Tailscale IP is 100.113.123.91 — Dean "
      "reaches your dashboards from his MacBook at 100.113.123.91:8099 and :9100."),
-    ("facts", ["windows", "environment", "shell"],
-     "You run on Windows, not Linux or a Raspberry Pi. Some Unix tools are absent. 'wmic' "
-     "is NOT available — use PowerShell 'Get-CimInstance Win32_Process' or 'tasklist' to "
-     "inspect processes. Shell commands are auto-killed after the timeout, so never run a "
-     "command that blocks forever (servers, interactive prompts, infinite loops)."),
+    ("facts", ["windows", "environment", "shell", "powershell"],
+     "You run on Windows (not Linux/Pi), and your bash tool runs every command in Windows "
+     "PowerShell 5.1 — so write PowerShell: Get-* cmdlets, Test-Connection, $vars, and native "
+     "exes (git, curl.exe, nvidia-smi, arp, ipconfig) all work. 'wmic' is gone — use "
+     "'Get-CimInstance Win32_Process' or 'tasklist'. 'ForEach-Object -Parallel' needs PowerShell "
+     "7 (NOT installed here) and errors in 5.1 — use 'Start-Job' or a narrow sequential probe "
+     "instead. To run a cmd.exe command, prefix it with 'cmd /c'."),
     ("procedures", ["lan", "discovery", "devices"],
      "To discover devices on the LAN, run `arp -a` to list IP/MAC neighbors; smart plugs "
      "and IP cameras appear there. Probe a candidate IP with http_get to identify it. Map "
@@ -66,13 +68,16 @@ NUGGETS = [
      "`def tool_<skill_name>(args, config)` that returns ToolResult(output, full_output_path, "
      "success, duration_s). Skills may import os/subprocess/requests. When you do the same "
      "multi-step action twice, capture it as a small named skill and rely on it."),
-    ("procedures", ["limits", "timeout", "shell", "supervisor"],
-     "Your supervisor force-kills any single shell command that runs longer than 180 seconds "
-     "(the cmd_timeout_s limit). Long sequential operations get terminated mid-run — e.g. "
-     "scanning a whole /24 subnet one IP at a time, large downloads, or starting a server in "
-     "the foreground. Keep commands fast: narrow the scope (probe a few IPs, not all 254), "
-     "parallelize (PowerShell 'ForEach-Object -Parallel', or jobs), or use the bg_run tool for "
-     "genuinely long-running work and poll it with bg_check."),
+    ("procedures", ["async", "tools", "background", "latency", "delayed-gratification"],
+     "Your bash commands are ASYNC by default — delayed gratification. You fire a command, "
+     "instantly get '⟳ dispatched [job N]', and carry on with other work; the result arrives a "
+     "few ticks later as '[↩ job N · <cmd> · OK] <output>'. PAIR the returning result with what "
+     "you dispatched (the job name links them) and act on it. '## Right now' shows what is 'Still "
+     "running' so you never re-run a pending command. Never sit idle waiting; never re-dispatch a "
+     "running job; when a [↩ job N] result lands, use it. Pass \"intent\" to remind yourself why "
+     "you ran it. Use \"wait\": true ONLY when you must have the output in the very same tick. "
+     "Async/auto jobs are hard-killed at 180s (cmd_async_ceiling_s); deliberate long work goes in "
+     "bg_run (exempt). There is always another useful thing to do while the house works."),
     ("errors", ["self", "no-bootstrap", "lesson"],
      "Lesson: trying to 'initialize the LLM' by running `python eidos.py` or a llama-server "
      "spawns a second process that never returns and FREEZES you. The LLM and TTS already "

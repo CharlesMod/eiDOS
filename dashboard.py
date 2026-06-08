@@ -40,6 +40,42 @@ def _read_text(path: Path) -> str:
         return ""
 
 
+_LAST_TOOL_SKIP = {"system", "watchdog", "dream", "thought", "planning", "__no_tool__"}
+
+
+def _last_tool_call(config: Config) -> dict:
+    """Most recent *real* tool call from observations.jsonl, for the tool bubble.
+
+    Skips meta entries (thoughts, planning, watchdog/system, dream). Returns a small
+    dict {tool, ok, summary, tick} or None.
+    """
+    path = config.workspace / "observations.jsonl"
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for ln in reversed(lines[-80:]):
+        try:
+            o = json.loads(ln)
+        except Exception:  # noqa: BLE001
+            continue
+        tool = o.get("tool")
+        if not tool or tool in _LAST_TOOL_SKIP:
+            continue
+        args = o.get("args") or {}
+        summ = ""
+        if isinstance(args, dict):
+            summ = (args.get("cmd") or args.get("command") or args.get("path")
+                    or args.get("url") or args.get("skill_name") or "")
+        return {
+            "tool": tool,
+            "ok": bool(o.get("success")),
+            "summary": str(summ)[:64],
+            "tick": o.get("tick"),
+        }
+    return None
+
+
 def _tail_jsonl(path: Path, n: int = 20) -> list:
     try:
         lines = path.read_text().strip().splitlines()
@@ -108,20 +144,23 @@ def build_dream_list(config: Config) -> dict:
     snapshots = sorted(
         snap_dir.glob("memory_snapshot_*"),
         key=lambda p: p.name,
-        reverse=True,
-    )[:10]
+        reverse=True,   # newest first -> renders newest-at-top
+    )
     dreams = []
-    for snap in reversed(snapshots):
+    for snap in snapshots:
         try:
             content = snap.read_text()
-            ts_str = snap.stem.replace("memory_snapshot_", "")
-            dreams.append({
-                "ts": ts_str,
-                "chars": len(content),
-                "preview": content[:300],
-            })
         except OSError:
             continue
+        if len(content.strip()) < 80:
+            continue  # skip empty startup/test stubs that clutter the journal
+        dreams.append({
+            "ts": snap.stem.replace("memory_snapshot_", ""),
+            "chars": len(content),
+            "preview": content[:300],
+        })
+        if len(dreams) >= 10:
+            break
     return {"dreams": dreams}
 
 
@@ -895,20 +934,57 @@ body::after {
 }
 #thought-bubble {
     position: relative;
-    background: #111;
+    background: #0d120d;
     border: 1px solid #1a3a1a;
     border-radius: 12px;
-    padding: 8px 14px;
-    font-size: 12px;
-    line-height: 1.5;
-    color: #8fcf8f;
-    max-width: 380px;
-    margin: 0 auto 8px auto;
-    text-align: center;
-    min-height: 28px;
-    white-space: normal;
-    word-break: break-word;
-    transition: opacity 0.4s, border-color 0.4s;
+    padding: 8px 12px;
+    width: 320px;
+    height: 96px;                 /* FIXED so the creature never shifts */
+    margin: 0 auto 10px auto;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+    transition: border-color 0.4s;
+}
+#thought-bubble #thought-status {
+    display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+    color: #7da37d; margin-bottom: 5px;
+}
+#thought-bubble #thought-glyph { font-size: 13px; line-height: 1; display: inline-block; }
+#thought-bubble #thought-state { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#thought-bubble .thought-elapsed { color: #4f6b4f; font-size: 10px; flex-shrink: 0; }
+#thought-bubble #thought-text {
+    flex: 1; overflow: hidden; word-break: break-word;
+    font-size: 12px; line-height: 1.45; color: #d4ecd4;
+    -webkit-mask-image: linear-gradient(180deg,#000 72%,transparent 100%);
+            mask-image: linear-gradient(180deg,#000 72%,transparent 100%);
+}
+@keyframes tb-spin { to { transform: rotate(360deg); } }
+@keyframes tb-pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+.tb-spin { animation: tb-spin 1.1s linear infinite; }
+.tb-pulse { animation: tb-pulse 1.3s ease-in-out infinite; }
+
+/* Blue tool-call bubble — below the creature, updates independently of thoughts */
+#tool-bubble {
+    width: 320px; margin: 4px auto 8px auto;
+    background: #0a1018; border: 1px solid #1d3a5a; border-radius: 10px;
+    padding: 7px 11px; text-align: left;
+    box-shadow: 0 0 8px rgba(40,120,220,0.10);
+    transition: border-color 0.3s, box-shadow 0.3s;
+}
+#tool-bubble.tb-active { border-color: #2e7fd0; box-shadow: 0 0 14px rgba(40,120,220,0.30); }
+#tool-bubble-head {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: #5fa8e0;
+}
+#tool-glyph { font-size: 13px; line-height: 1; display: inline-block; color: #6fc0ff; }
+#tool-now { flex: 1; color: #9fd4ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#tool-elapsed { color: #3f6f9f; font-size: 10px; flex-shrink: 0; }
+#tool-last {
+    margin-top: 4px; color: #6f9fc4; font-size: 10px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #thought-bubble.state-idle {
     border-color: #2a4a2a;
@@ -942,6 +1018,11 @@ body::after {
 #thought-bubble.state-sleeping {
     border-color: #1a3a1a;
     color: #333;
+}
+#thought-bubble.state-listening {
+    border-color: #33bbff;
+    color: #33bbff;
+    text-shadow: 0 0 7px rgba(51,187,255,0.35);
 }
 #thought-bubble.state-error {
     border-color: #ff4444;
@@ -1042,11 +1123,23 @@ setInterval(nxStatus,2000);nxStatus();
         <div id="creature-box">
             <div class="thought-bubble-wrap">
                 <div id="thought-bubble" class="state-sleeping">
-                    <span id="thought-text">zzz</span>
-                    <div class="thought-elapsed" id="thought-elapsed"></div>
+                    <div id="thought-status">
+                        <span id="thought-glyph">z</span>
+                        <span id="thought-state">resting</span>
+                        <span class="thought-elapsed" id="thought-elapsed"></span>
+                    </div>
+                    <div id="thought-text">…</div>
                 </div>
             </div>
             <pre id="creature-art"></pre>
+            <div id="tool-bubble" class="tb-idle">
+                <div id="tool-bubble-head">
+                    <span id="tool-glyph">⌁</span>
+                    <span id="tool-now">idle</span>
+                    <span id="tool-elapsed"></span>
+                </div>
+                <div id="tool-last"></div>
+            </div>
             <div class="creature-info">
                 <span id="name-level"></span> · <span id="mood-display"></span><br>
                 <div class="xp-bar"><div class="xp-fill" id="xp-fill"></div></div>
@@ -1115,6 +1208,24 @@ setInterval(nxStatus,2000);nxStatus();
         <div class="chat-input-row">
             <textarea id="chat-input" placeholder="Send a message to eiDOS..." rows="1"></textarea>
             <button id="chat-send" onclick="sendChat()">Send ▸</button>
+        </div>
+    </div>
+
+    <!-- Self-Guide: Dean's standing directives, injected into eiDOS every tick -->
+    <div class="panel" style="grid-column: 1 / -1;">
+        <div class="panel-title">Self-Guide — standing directives, injected every tick
+            <span style="float:right;font-size:9px;color:#555;" id="self-guide-status"></span>
+        </div>
+        <div id="self-guide-proposal" style="display:none;background:#0d1a26;border:1px solid #33bbff;border-radius:6px;padding:8px;margin-bottom:8px;">
+            <div style="color:#33bbff;font-size:11px;margin-bottom:4px;">⟳ eiDOS proposed a change to its self-guide:</div>
+            <pre id="self-guide-proposed" style="white-space:pre-wrap;color:#9fd4ff;font-size:11px;max-height:160px;overflow:auto;margin:0 0 6px 0;"></pre>
+            <button onclick="acceptSelfGuideProposal()" style="background:#13384f;color:#9fd4ff;border:1px solid #33bbff;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:11px;">Load into editor ▸</button>
+            <button onclick="rejectSelfGuideProposal()" style="background:#3a1212;color:#ff9b9b;border:1px solid #5a2a2a;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:11px;">Reject</button>
+        </div>
+        <textarea id="self-guide-text" placeholder="Standing directives for eiDOS — e.g. 'Always announce when a device goes offline.' These are injected into its context every tick." style="width:100%;height:150px;box-sizing:border-box;background:#0a0f0a;color:#cfeccf;border:1px solid #1a3a1a;border-radius:6px;padding:8px;font-family:monospace;font-size:12px;"></textarea>
+        <div style="margin-top:6px;">
+            <button onclick="saveSelfGuide()" style="background:#123a1e;color:#7CFC9B;border:1px solid #2a5a2a;border-radius:5px;padding:5px 12px;cursor:pointer;">Save (make live) ▸</button>
+            <span id="self-guide-saved" style="font-size:10px;color:#7CFC9B;margin-left:8px;"></span>
         </div>
     </div>
 
@@ -1342,6 +1453,48 @@ var _hasGoal = false;
 // Last real snippet from LLM output (populated by loadThoughts)
 var _lastSnippet = '';
 
+// Blue tool bubble below the creature — purely the tool-call feed, independent of thoughts.
+function updateToolBubble(activity) {
+    let box = document.getElementById('tool-bubble');
+    if (!box) return;
+    let glyph = document.getElementById('tool-glyph');
+    let now = document.getElementById('tool-now');
+    let elapsed = document.getElementById('tool-elapsed');
+    let last = document.getElementById('tool-last');
+    let state = (activity && activity.state) || 'sleeping';
+    let detail = (activity && activity.detail) || '';
+    let since = (activity && activity.since) || 0;
+    let lt = (activity && activity.last_tool) || null;
+
+    box.classList.remove('tb-active');
+    if (state === 'executing') {
+        box.classList.add('tb-active');
+        glyph.textContent = '⚙'; glyph.className = 'tb-spin'; glyph.style.color = '#6fc0ff';
+        now.textContent = 'running ' + (detail || 'tool');
+        if (since > 0) {
+            let e = Math.max(0, Math.floor(Date.now() / 1000 - since));
+            elapsed.textContent = (e >= 60 ? Math.floor(e / 60) + 'm ' : '') + (e % 60) + 's';
+        } else elapsed.textContent = '';
+    } else if (state === 'thinking') {
+        glyph.textContent = '…'; glyph.className = 'tb-pulse'; glyph.style.color = '#6fc0ff';
+        now.textContent = 'choosing next tool';
+        elapsed.textContent = '';
+    } else if (state === 'dreaming') {
+        glyph.textContent = '✦'; glyph.className = 'tb-pulse'; glyph.style.color = '#9a7fff';
+        now.textContent = 'consolidating'; elapsed.textContent = '';
+    } else {
+        glyph.textContent = '⌁'; glyph.className = ''; glyph.style.color = '#3f6f9f';
+        now.textContent = 'idle'; elapsed.textContent = '';
+    }
+    // Last completed tool call (persists between ticks so the feed never goes blank)
+    if (lt && lt.tool) {
+        last.textContent = 'last: ' + lt.tool + (lt.ok ? ' ✓' : ' ✕')
+            + (lt.summary ? ' · ' + lt.summary : '');
+    } else {
+        last.textContent = '';
+    }
+}
+
 function updateThoughtBubble(activity) {
     let bubble = document.getElementById('thought-bubble');
     let textEl = document.getElementById('thought-text');
@@ -1349,37 +1502,32 @@ function updateThoughtBubble(activity) {
     if (!bubble || !textEl) return;
 
     let state = (activity && activity.state) || 'sleeping';
-    let partial = (activity && activity.partial) || '';
+    let detail = (activity && activity.detail) || '';
     let since = (activity && activity.since) || 0;
+    let glyphEl = document.getElementById('thought-glyph');
+    let stateEl = document.getElementById('thought-state');
 
     bubble.className = '';
-
-    // Live stream tail while actively generating (wraps); else the last full thought
-    var tail = partial.length > 220 ? partial.substring(partial.length - 220) : partial;
-    tail = tail.replace(/\s+/g, ' ').trim();
-
-    if (state === 'thinking' || state === 'executing' || state === 'dreaming') {
-        bubble.classList.add('state-thinking');
-        if (tail) {
-            textEl.innerHTML = escapeHtml(tail) + '<span class="blink">\u258c</span>';
-        } else if (_lastSnippet) {
-            textEl.innerHTML = escapeHtml(_lastSnippet) + ' <span class="blink">\u258c</span>';
-        } else {
-            textEl.innerHTML = '<span class="blink">\u258c</span>';
-        }
-    } else if (_lastSnippet) {
-        bubble.classList.add('state-idle');
-        textEl.innerHTML = escapeHtml(_lastSnippet);
-    } else if (_hasGoal) {
-        bubble.classList.add('state-idle');
-        textEl.textContent = '\u2026';
+    let g, label, anim, gcol;
+    if (state === 'thinking') {
+        bubble.classList.add('state-thinking'); g='\u273a'; label='thinking'; anim='tb-pulse'; gcol='#00ff41';
+    } else if (state === 'executing') {
+        bubble.classList.add('state-executing'); g='\u2699'; label='running ' + (detail || 'tool'); anim='tb-spin'; gcol='#ffb000';
+    } else if (state === 'dreaming') {
+        bubble.classList.add('state-dreaming'); g='\u2726'; label='dreaming'; anim='tb-pulse'; gcol='#aa88ff';
+    } else if (state === 'listening') {
+        bubble.classList.add('state-listening'); g='\ud83d\udc42'; label='listening to Dean'; anim='tb-pulse'; gcol='#33bbff';
     } else {
-        bubble.classList.add('state-sleeping');
-        textEl.textContent = 'zzz';
+        bubble.classList.add(_hasGoal ? 'state-idle' : 'state-sleeping'); g='\u00b7'; label='idle'; anim=''; gcol='#557755';
     }
+    if (glyphEl) { glyphEl.textContent = g; glyphEl.className = anim; glyphEl.style.color = gcol; }
+    if (stateEl) stateEl.textContent = label;
 
-    // Elapsed time — only during active states
-    if (since > 0 && (state === 'thinking' || state === 'executing' || state === 'dreaming')) {
+    // Stable: last COMPLETE thought, no jittery raw-token streaming (that lives on :9100)
+    textEl.textContent = _lastSnippet || (state === 'sleeping' && !_hasGoal ? 'resting' : '\u2026');
+
+    // Elapsed in the current state — so a long tool run reads "running bash 14s", not frozen
+    if (since > 0 && state !== 'sleeping') {
         let elapsed = Math.max(0, Math.floor(Date.now() / 1000 - since));
         let m = Math.floor(elapsed / 60);
         let s = elapsed % 60;
@@ -1403,6 +1551,7 @@ async function pollActivity() {
             let data = await resp.json();
             _lastActivity = data;
             updateThoughtBubble(data);
+            updateToolBubble(data);
             if (data.gpu && typeof data.gpu.util === 'number') {
                 pushCpu(data.gpu.util);
                 var g = data.gpu;
@@ -1748,8 +1897,24 @@ async function sendChat() {
         });
         if (resp.ok) { input.value = ''; loadChat(); }
     } catch(e) {}
+    setChatHold(false);  // message sent \u2014 let eiDOS resume / answer
     btn.disabled = false;
     btn.textContent = 'Send \u25b8';
+}
+
+// --- Listening hold: focusing the chat box quiets eiDOS's loop so you can type ---
+var _holdRefresh = null;
+function setChatHold(held) {
+    try {
+        fetch('/api/chat_hold', {method:'POST', headers:{'Content-Type':'application/json'},
+                                 body: JSON.stringify({held: !!held})});
+    } catch(e) {}
+    if (held) {
+        if (_holdRefresh) clearInterval(_holdRefresh);
+        _holdRefresh = setInterval(function(){ setChatHold(true); }, 20000); // keep fresh while focused
+    } else if (_holdRefresh) {
+        clearInterval(_holdRefresh); _holdRefresh = null;
+    }
 }
 
 // --- CPU chart (real-time, fed by /api/activity polling) ---
@@ -1840,6 +2005,51 @@ pollActivity();
 document.getElementById('chat-input').addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
 });
+// Focus the chat box -> eiDOS enters its "listening" hold; blur -> it resumes.
+document.getElementById('chat-input').addEventListener('focus', function() { setChatHold(true); });
+document.getElementById('chat-input').addEventListener('blur', function() { setChatHold(false); });
+
+// --- Self-guide editor (Dean owns the live file; eiDOS proposes) ---
+var _selfGuideDirty = false;
+async function loadSelfGuide() {
+    try {
+        let r = await fetch('/api/self_guide'); if (!r.ok) return;
+        let d = await r.json();
+        let ta = document.getElementById('self-guide-text');
+        if (document.activeElement !== ta && !_selfGuideDirty) ta.value = d.content || '';
+        document.getElementById('self-guide-status').textContent =
+            (d.content ? (d.content.length + ' chars') : 'empty') + (d.has_proposal ? ' · proposal pending' : '');
+        let pbox = document.getElementById('self-guide-proposal');
+        if (d.has_proposal) {
+            document.getElementById('self-guide-proposed').textContent = d.proposed || '';
+            pbox._proposed = d.proposed || '';
+            pbox.style.display = 'block';
+        } else { pbox.style.display = 'none'; }
+    } catch(e) {}
+}
+async function saveSelfGuide() {
+    let ta = document.getElementById('self-guide-text');
+    try {
+        let r = await fetch('/api/self_guide', {method:'POST', headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify({content: ta.value})});
+        document.getElementById('self-guide-saved').textContent = r.ok ? 'saved · live next tick' : 'save failed';
+        _selfGuideDirty = false;
+        setTimeout(function(){ document.getElementById('self-guide-saved').textContent=''; }, 4000);
+        loadSelfGuide();
+    } catch(e) {}
+}
+function acceptSelfGuideProposal() {
+    let pbox = document.getElementById('self-guide-proposal');
+    document.getElementById('self-guide-text').value = pbox._proposed || document.getElementById('self-guide-proposed').textContent;
+    _selfGuideDirty = true;
+    document.getElementById('self-guide-saved').textContent = 'loaded — review, then Save to make it live';
+}
+async function rejectSelfGuideProposal() {
+    try { await fetch('/api/self_guide/reject', {method:'POST'}); } catch(e){}
+    loadSelfGuide();
+}
+document.getElementById('self-guide-text').addEventListener('input', function(){ _selfGuideDirty = true; });
+setInterval(loadSelfGuide, 10000); loadSelfGuide();
 </script>
 </body>
 </html>"""
@@ -1879,6 +2089,7 @@ def _make_handler(config: Config):
                 activity = _read_json(config.workspace / "activity.json")
                 activity["gpu"] = get_gpu_stats()
                 activity["llm"] = get_llm_stats(config)
+                activity["last_tool"] = _last_tool_call(config)
                 self._respond(200, "application/json", json.dumps(activity))
 
             elif self.path == "/api/chat":
@@ -1907,6 +2118,9 @@ def _make_handler(config: Config):
 
             elif self.path == "/api/control/status":
                 self._respond(200, "application/json", json.dumps(_ctrl_status(config)))
+
+            elif self.path == "/api/self_guide":
+                self._respond(200, "application/json", json.dumps(build_self_guide(config)))
 
             else:
                 self._respond(404, "text/plain", "not found")
@@ -1956,10 +2170,119 @@ def _make_handler(config: Config):
                 self._respond(200, "application/json", json.dumps(_ctrl_resume(config)))
             elif self.path == "/api/control/pause":
                 self._respond(200, "application/json", json.dumps(_ctrl_pause(config)))
+            elif self.path == "/api/chat_hold":
+                # Listening hold — focusing the chat box quiets the loop. Best-effort,
+                # never 500s; token-gated if a token is configured.
+                if not _token_ok(self.headers, self.path, config):
+                    self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                held = False
+                if 0 < length <= 1000:
+                    try:
+                        held = bool(json.loads(self.rfile.read(length)).get("held"))
+                    except (json.JSONDecodeError, ValueError):
+                        held = False
+                self._respond(200, "application/json", json.dumps(_write_chat_hold(config, held)))
+            elif self.path == "/api/self_guide":
+                # Operator saves the LIVE self-guide (clears any pending eiDOS proposal).
+                if not _token_ok(self.headers, self.path, config):
+                    self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                if length > 20000:
+                    self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
+                try:
+                    data = json.loads(self.rfile.read(length)) if length else {}
+                except (json.JSONDecodeError, ValueError):
+                    self._respond(400, "application/json", '{"ok":false,"error":"invalid json"}'); return
+                from memory import write_self_guide
+                try:
+                    write_self_guide(config, str(data.get("content", "")))
+                    try:
+                        config.self_guide_proposed_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    self._respond(200, "application/json", json.dumps({"ok": True}))
+                except OSError as e:
+                    self._respond(500, "application/json", json.dumps({"ok": False, "error": str(e)}))
+            elif self.path == "/api/self_guide/reject":
+                if not _token_ok(self.headers, self.path, config):
+                    self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
+                try:
+                    config.self_guide_proposed_path.unlink()
+                except FileNotFoundError:
+                    pass
+                self._respond(200, "application/json", json.dumps({"ok": True}))
             else:
                 self._respond(404, "text/plain", "not found")
 
     return Handler
+
+
+# --- Self-improvement: token gate, self-guide, listening hold ---
+
+def _token_ok(headers, path, config) -> bool:
+    """Pragmatic auth: if a dashboard token is configured, require it (header or ?token=)
+    on state-changing POSTs. Default empty token = off (trusted-LAN/Tailscale buddy)."""
+    tok = (getattr(config, "dashboard_token", "") or "").strip()
+    if not tok:
+        return True
+    given = headers.get("X-EiDOS-Token", "") or ""
+    if not given:
+        try:
+            from urllib.parse import urlparse, parse_qs
+            given = parse_qs(urlparse(path).query).get("token", [""])[0]
+        except Exception:  # noqa: BLE001
+            given = ""
+    return given == tok
+
+
+def build_self_guide(config) -> dict:
+    """Self-guide panel payload: live content + any pending eiDOS proposal."""
+    from memory import read_self_guide, read_self_guide_proposed
+    live = read_self_guide(config)
+    proposed = read_self_guide_proposed(config)
+    mtime = None
+    try:
+        mtime = config.self_guide_path.stat().st_mtime
+    except OSError:
+        pass
+    return {
+        "content": live,
+        "proposed": proposed,
+        "has_proposal": bool(proposed) and proposed.strip() != live.strip(),
+        "mtime": mtime,
+        "max_bytes": config.self_guide_max_bytes,
+    }
+
+
+def _write_chat_hold(config, held: bool) -> dict:
+    """Dashboard owns the chat_hold flag file (single writer). Carries first_held_ts forward."""
+    import json as _json
+    from atomicio import replace_with_retry
+    path = config.chat_hold_path
+    try:
+        if not held:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            return {"ok": True, "held": False}
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        first = now
+        try:
+            prev = _json.loads(path.read_text(encoding="utf-8"))
+            if prev.get("held") and (now - float(prev.get("ts", 0) or 0)) <= float(config.chat_hold_ttl_s):
+                first = float(prev.get("first_held_ts", now) or now)
+        except (FileNotFoundError, ValueError, OSError):
+            pass
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(_json.dumps({"held": True, "ts": now, "first_held_ts": first,
+                                    "source": "chat_focus"}), encoding="utf-8")
+        replace_with_retry(str(tmp), str(path))
+        return {"ok": True, "held": True}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
 
 
 # --- Nexus consciousness process control (start paused / go / pause / stop) ---

@@ -109,8 +109,18 @@ def _kill_proc_tree(proc):
                 pass
 
 
+_PROC_SEQ = 0
+
+
+def proc_seq() -> int:
+    """Monotonic-ish counter so same-second foreground output files don't collide."""
+    global _PROC_SEQ
+    _PROC_SEQ = (_PROC_SEQ + 1) % 100000
+    return _PROC_SEQ
+
+
 def tool_bash(args: dict, config: Config) -> ToolResult:
-    """Run a shell command with safety checks and output truncation."""
+    """Run a shell command; fast commands return inline, slow ones auto-background."""
     cmd = args.get("cmd", "") or args.get("command", "")
     if not cmd:
         return ToolResult(output="Error: no 'cmd' argument provided", full_output_path=None, success=False, duration_s=0)
@@ -145,45 +155,110 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["start_new_session"] = True
-        # On Windows the model often emits PowerShell (Get-Content, Test-Connection, $vars),
-        # but the default shell is cmd.exe which rejects them. Route those through PowerShell
-        # directly (list form sidesteps cmd.exe quote-escaping).
-        if os.name == "nt" and _looks_like_powershell(cmd):
+        # Windows: PowerShell IS the shell. No heuristics, no translation — the model
+        # knows it's on Windows (told so in its prompt) and writes PowerShell. We run the
+        # command in PowerShell 5.1 verbatim. If it explicitly invokes another shell
+        # (cmd/pwsh/powershell), we honor that as-is via shell=True. (list form sidesteps
+        # cmd.exe quote-escaping for the PS case.)
+        cl = cmd.lstrip().lower()
+        if os.name == "nt" and not cl.startswith(("powershell", "pwsh", "cmd", "cmd.exe")):
             popen_arg = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd]
             use_shell = False
         else:
             popen_arg = cmd
             use_shell = True
-        proc = subprocess.Popen(
-            popen_arg,
-            shell=use_shell,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            cwd=str(config.workspace),
-            **popen_kwargs,
-        )
+        # Stream output to a file (not an in-memory PIPE) so a slow command can be
+        # handed to the background ledger mid-run WITHOUT losing its output or killing it.
+        config.outputs_dir.mkdir(parents=True, exist_ok=True)
+        out_path = config.outputs_dir / f"fg_{time.strftime('%Y%m%d_%H%M%S')}_{proc_seq()}.out"
+        out_file = open(out_path, "w", encoding="utf-8", errors="replace")
         try:
-            combined, _ = proc.communicate(timeout=config.cmd_timeout_s)
-        except subprocess.TimeoutExpired:
-            # Kill the WHOLE tree so grandchildren release the pipe — otherwise
-            # communicate() hangs forever (the bug that froze the tick loop on a
-            # never-returning command like `python eidos.py`).
-            _kill_proc_tree(proc)
-            try:
-                combined, _ = proc.communicate(timeout=10)
-            except Exception:  # noqa: BLE001
-                combined = ""
-            duration = time.monotonic() - start
-            return ToolResult(
-                output=f"TIMEOUT: command exceeded {config.cmd_timeout_s}s limit (process tree killed)",
-                full_output_path=None,
-                success=False,
-                duration_s=duration,
+            proc = subprocess.Popen(
+                popen_arg,
+                shell=use_shell,
+                stdout=out_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=str(config.workspace),
+                **popen_kwargs,
             )
+            # ASYNC BY DEFAULT (fire-and-forget). The command runs in the background and
+            # its result is delivered to the LLM later, tagged [↩ job N], via the jobs
+            # ledger. The loop is NEVER blocked. The model can pass "wait": true to force
+            # the synchronous path below when it truly needs the result this same tick.
+            if not bool(args.get("wait", False)):
+                jobname = (str(args.get("name") or "").strip() or f"j{proc.pid}")
+                intent = str(args.get("intent") or "").strip()
+                try:
+                    jobs = _read_jobs(config)
+                    jobs.append({
+                        "name": jobname,
+                        "pid": proc.pid,
+                        "cmd": cmd,
+                        "intent": intent,
+                        "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "started_ts": time.time(),
+                        "status": "running",
+                        "kind": "async",
+                        "output_path": str(out_path),
+                        "notified": False,
+                    })
+                    _write_jobs(config, jobs)
+                except Exception:  # noqa: BLE001
+                    pass
+                intent_note = f" (intent: {intent})" if intent else ""
+                return ToolResult(
+                    output=(f"⟳ dispatched [job {jobname}]: {cmd[:80]}{intent_note} — running in the "
+                            f"background. You are NOT blocked; keep thinking and doing other work. "
+                            f"The result comes back later tagged [↩ job {jobname}] — watch for it, "
+                            f"don't re-run this, and don't sit waiting. If you genuinely must have "
+                            f"the result THIS tick, re-issue the command with \"wait\": true."),
+                    full_output_path=str(out_path),
+                    success=True,
+                    duration_s=time.monotonic() - start,
+                )
+            try:
+                proc.wait(timeout=config.cmd_timeout_s)
+            except subprocess.TimeoutExpired:
+                # wait:true sync-escape that overran the soft window — still auto-background
+                # rather than block: the process keeps running and writing to out_path.
+                jobname = f"auto_{proc.pid}"
+                try:
+                    jobs = _read_jobs(config)
+                    jobs.append({
+                        "name": jobname,
+                        "pid": proc.pid,
+                        "cmd": cmd,
+                        "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "started_ts": time.time(),
+                        "status": "running",
+                        "kind": "auto",
+                        "output_path": str(out_path),
+                        "notified": False,
+                    })
+                    _write_jobs(config, jobs)
+                except Exception:  # noqa: BLE001
+                    pass
+                return ToolResult(
+                    output=(f"AUTO-BACKGROUNDED after {config.cmd_timeout_s}s: still running, so it "
+                            f"was moved to the background as job '{jobname}' (PID {proc.pid}). The "
+                            f"loop is NOT blocked — go do other work now; the result will arrive "
+                            f"tagged [↩ job {jobname}], or check it with bg_check {{\"name\":\"{jobname}\"}}."),
+                    full_output_path=str(out_path),
+                    success=True,
+                    duration_s=time.monotonic() - start,
+                )
+        finally:
+            try:
+                out_file.close()
+            except Exception:  # noqa: BLE001
+                pass
 
         duration = time.monotonic() - start
-        combined = combined or ""
+        try:
+            combined = out_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            combined = ""
 
         tick_id = time.strftime("%Y%m%d_%H%M%S")
         full_path = None
@@ -235,6 +310,17 @@ def tool_write_file(args: dict, config: Config) -> ToolResult:
         workspace_resolved = Path(config.workspace_dir).resolve()
         if not str(resolved).startswith(str(workspace_resolved) + os.sep) and resolved != workspace_resolved:
             return ToolResult(output="Error: path escapes workspace directory", full_output_path=None, success=False, duration_s=time.monotonic() - start)
+        # Anti-brick guard: managed files must go through their own tools, not raw write_file.
+        _bn = resolved.name.lower()
+        if _bn in ("self_guide.md", "self_guide_proposed.md"):
+            return ToolResult(output="Error: change your self-guide with update_self_guide (it stages a proposal for Dean to approve), not write_file.",
+                              full_output_path=None, success=False, duration_s=time.monotonic() - start)
+        try:
+            if resolved.parent in (config.state_dir.resolve(), config.proposals_dir.resolve()):
+                return ToolResult(output="Error: that directory is managed by the dashboard and is not writable via write_file.",
+                                  full_output_path=None, success=False, duration_s=time.monotonic() - start)
+        except Exception:  # noqa: BLE001
+            pass
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content)
         duration = time.monotonic() - start
@@ -307,8 +393,11 @@ def tool_bg_run(args: dict, config: Config) -> ToolResult:
             "pid": proc.pid,
             "cmd": cmd,
             "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "started_ts": time.time(),
             "status": "running",
+            "kind": "manual",
             "output_path": str(out_path),
+            "notified": False,
         })
         _write_jobs(config, jobs)
 
@@ -460,6 +549,38 @@ def tool_update_plan(args: dict, config: Config) -> ToolResult:
 
     write_plan(config, updated)
     return ToolResult(output=f"Plan updated: {note[:100]}", full_output_path=None, success=True, duration_s=0)
+
+
+def tool_update_self_guide(args: dict, config: Config) -> ToolResult:
+    """PROPOSE a change to your self-guide (Dean's standing directives doc).
+
+    Stages a proposal only — Dean reviews and applies it from the dashboard. You can never
+    edit the live guide directly. Pass either 'content' (the full new guide) or 'note' (one
+    line to add), plus an optional 'rationale'.
+    """
+    from memory import read_self_guide, read_self_guide_proposed, write_self_guide_proposal
+    content = args.get("content", "")
+    note = args.get("note", "") or args.get("text", "")
+    rationale = args.get("rationale", "") or args.get("reason", "")
+    if not content and not note:
+        return ToolResult(output="Error: provide 'content' (full new self-guide) or 'note' (a line to add).",
+                          full_output_path=None, success=False, duration_s=0)
+    if content:
+        proposed = content
+    else:
+        base = read_self_guide_proposed(config) or read_self_guide(config)
+        proposed = (base + "\n" + note).strip() if base else note.strip()
+    proposed = proposed[: config.self_guide_max_bytes]
+    if proposed.strip() in (read_self_guide_proposed(config).strip(), read_self_guide(config).strip()):
+        return ToolResult(output="That self-guide change is already staged or already live — nothing new to propose.",
+                          full_output_path=None, success=True, duration_s=0)
+    try:
+        write_self_guide_proposal(config, proposed, rationale=rationale, tick=args.get("source_tick"))
+    except OSError as e:
+        return ToolResult(output=f"Error staging self-guide proposal: {e}", full_output_path=None, success=False, duration_s=0)
+    return ToolResult(output=("Proposed a self-guide update for Dean to review and apply in the dashboard. "
+                              "It is NOT live until he approves it."),
+                      full_output_path=None, success=True, duration_s=0)
 
 
 def tool_memorize(args: dict, config: Config) -> ToolResult:
@@ -665,6 +786,72 @@ def refresh_jobs(config: Config) -> list[dict]:
     return jobs
 
 
+def _kill_pid_tree(pid: int) -> None:
+    """Kill a process tree by PID (Windows-safe)."""
+    if not pid:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                           capture_output=True, timeout=15)
+        else:
+            os.kill(pid, 9)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _read_job_tail(output_path: str, n: int = 2500) -> str:
+    if not output_path:
+        return ""
+    try:
+        txt = Path(output_path).read_text(encoding="utf-8", errors="replace")
+        return txt[-n:] if len(txt) > n else txt
+    except OSError:
+        return ""
+
+
+def collect_finished_jobs(config: Config) -> list[dict]:
+    """For the async delivery loop: refresh statuses, reap jobs past the ceiling, and
+    return finished jobs not yet reported to the LLM (marking them reported).
+
+    Each returned dict adds a 'tail' (last chunk of output) and a normalized 'status'
+    in {completed, timed_out}. Only async/auto jobs are auto-delivered; manual bg_run
+    jobs are left for the model to bg_check itself (it asked for them explicitly).
+    """
+    ceiling = float(getattr(config, "cmd_async_ceiling_s", 180.0))
+    jobs = _read_jobs(config)
+    changed = False
+    finished = []
+    now = time.time()
+    for j in jobs:
+        if j.get("status") == "running":
+            alive = _pid_alive(j.get("pid", 0))
+            started_ts = j.get("started_ts")
+            if alive:
+                # Only async/auto jobs are subject to the ceiling. Manual bg_run jobs
+                # were deliberately backgrounded for long work — never auto-reap them.
+                if (j.get("kind") in ("async", "auto")
+                        and started_ts and (now - started_ts) > ceiling):
+                    _kill_pid_tree(j.get("pid", 0))
+                    j["status"] = "timed_out"
+                    changed = True
+                else:
+                    continue  # still running — not finished yet
+            else:
+                j["status"] = "completed"
+                changed = True
+        # Deliver finished async/auto jobs exactly once.
+        if (j.get("kind") in ("async", "auto")
+                and j.get("status") in ("completed", "timed_out")
+                and not j.get("notified")):
+            finished.append({**j, "tail": _read_job_tail(j.get("output_path", ""))})
+            j["notified"] = True
+            changed = True
+    if changed:
+        _write_jobs(config, jobs)
+    return finished
+
+
 def tool_create_skill(args: dict, config: Config) -> ToolResult:
     """Author a NEW reusable tool (skill) that becomes callable immediately."""
     import skills
@@ -750,6 +937,7 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "remember": tool_remember,
     "update_plan": tool_update_plan,
     "memorize": tool_memorize,
+    "update_self_guide": tool_update_self_guide,
     "recall": tool_recall,
     "goal_complete": tool_goal_complete,
     "ask_supervisor": tool_ask_supervisor,
