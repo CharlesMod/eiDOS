@@ -306,6 +306,51 @@ def load_active_skills(config: Config) -> list[str]:
 # Public API (called by the create_skill / edit_skill / ... tools)
 # ---------------------------------------------------------------------------
 
+# Generic verb/qualifier tokens that don't identify a skill's DOMAIN.
+_SKILL_STOPWORDS = {
+    "check", "test", "get", "poll", "scan", "probe", "update", "watch", "verify", "wait",
+    "save", "register", "identify", "resolve", "list", "read", "write", "run", "make", "set",
+    "fetch", "query", "monitor", "detect", "find", "discover", "connect", "status", "state",
+    "info", "data", "map", "value", "result", "active", "readiness", "conn", "connection",
+    "port", "ports", "the", "for", "and", "with", "from", "into",
+}
+
+
+def _skill_subject(name: str) -> set:
+    """Domain nouns in a skill name (mqtt, octoprint, cert, network…), minus generic verbs."""
+    return {t for t in re.split(r"[_\W]+", (name or "").lower())
+            if len(t) >= 4 and t not in _SKILL_STOPWORDS}
+
+
+def _similar_skills(name: str, skills: dict) -> list:
+    """Existing active skills that share a domain noun with `name` (likely duplicates)."""
+    subj = _skill_subject(name)
+    if not subj:
+        return []
+    out = []
+    for ex, ent in skills.items():
+        if ex == name or ent.get("status") != "active":
+            continue
+        if _skill_subject(ex) & subj:
+            out.append(ex)
+    return out
+
+
+def skills_brief(config: Config, max_n: int = 45) -> str:
+    """Compact, recency-sorted list of active skill names for per-tick context awareness."""
+    m = _load_manifest(config)
+    sk = m.get("skills", {})
+    names = [n for n, e in sk.items() if e.get("status") == "active"]
+    if not names:
+        return ""
+    names.sort(key=lambda n: sk[n].get("updated", ""), reverse=True)
+    shown = names[:max_n]
+    s = ", ".join(shown)
+    if len(names) > max_n:
+        s += f", …(+{len(names) - max_n} more)"
+    return s
+
+
 def create_skill(config: Config, name: str, code: str,
                  description: str = "", args_schema: Optional[dict] = None) -> dict:
     """Author a brand-new skill. Validates, dry-runs, saves, and hot-loads it."""
@@ -313,6 +358,14 @@ def create_skill(config: Config, name: str, code: str,
     m = _load_manifest(config)
     if name in m["skills"]:
         return {"success": False, "errors": [f"skill '{name}' already exists — use edit_skill"]}
+    # Near-duplicate guard — the #1 source of wasted motion was authoring a 7th MQTT/OctoPrint
+    # skill instead of calling the one already built. Block domain-duplicates; redirect to reuse.
+    dup = _similar_skills(name, m["skills"])
+    if dup:
+        return {"success": False, "errors": [
+            f"You ALREADY have skill(s) for this domain: {', '.join(sorted(dup)[:6])}. "
+            f"CALL one as a tool (e.g. <tool>{sorted(dup)[0]}</tool>), or use edit_skill to improve "
+            f"it. Do NOT author a near-duplicate — reuse what you built."]}
 
     errs = _validate_source(name, code)
     if errs:

@@ -557,6 +557,18 @@ def _assemble_briefing(
                 "Dean owns this file; you may PROPOSE changes with update_self_guide.\n"
                 + _truncate(guide, config.context_self_guide_max_chars, "self_guide"))
 
+    # Your skills — so you CALL them instead of re-authoring near-duplicates (was the #1 waste:
+    # 56 skills authored, 0 ever reused, because they were invisible each tick).
+    try:
+        from skills import skills_brief
+        sb = skills_brief(config)
+        if sb:
+            durable.append("## Your skills — CALL these by name as tools (e.g. <tool>check_mqtt_port</tool>). "
+                           "Do NOT author a new skill that duplicates one of these; reuse it, or edit_skill "
+                           "to improve it.\n" + sb)
+    except Exception:  # noqa: BLE001
+        pass
+
     goal = read_goal(config)
     if goal:
         durable.append(f"## Mission\n{_truncate(goal, config.context_goal_max_chars, 'goal')}")
@@ -575,12 +587,20 @@ def _assemble_briefing(
     if intel:
         durable.append(f"## What you already know (recalled from memory)\n{intel}")
 
-    # Dean's messages + your replies — highest priority
+    # Dean's messages + the messages YOU already sent him — highest priority. Surfacing your
+    # own standing messages stops the "ask Dean for the MQTT creds again" re-ping loop: if you
+    # already asked and he hasn't answered, he's just away — do NOT re-ask, go do other work.
     interventions = read_interventions(config)
-    recent_replies = _read_recent_replies(config, n=3)
-    chat_parts = [f"[you said @ {r.get('ts', '?')}] {r.get('text', '')}" for r in recent_replies]
+    recent_replies = _read_recent_replies(config, n=6)
+    chat_parts = []
     for i in (interventions or []):
-        chat_parts.append(f"[Dean @ {i['filename']}] {i['content']}")
+        chat_parts.append(f"[Dean → you @ {i['filename']}] {i['content']}")
+    if recent_replies:
+        chat_parts.append("Messages YOU already sent Dean (he may simply be away — do NOT repeat "
+                          "an ask he hasn't answered; if you're blocked waiting on him, switch to "
+                          "other useful work and let it rest):")
+        for r in recent_replies:
+            chat_parts.append(f"  • [you @ {r.get('ts', '?')}] {(r.get('text', '') or '')[:170]}")
     if chat_parts:
         durable.append("## Conversation with Dean\n" + "\n".join(chat_parts))
 

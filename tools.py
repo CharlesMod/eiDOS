@@ -614,6 +614,40 @@ def tool_list_self_edits(args: dict, config: Config) -> ToolResult:
                       full_output_path=None, success=True, duration_s=0)
 
 
+def tool_check_messages(args: dict, config: Config) -> ToolResult:
+    """Inspect your conversation with Boss — his messages to you and every message YOU'VE sent
+    him — so you never repeat an ask he hasn't answered. Read-only (does not consume anything).
+    """
+    import json as _json
+    parts = []
+    # Boss's messages (peek the interventions dir WITHOUT consuming them)
+    idir = config.interventions_dir
+    if idir.exists():
+        files = sorted([p for p in idir.iterdir() if not p.name.startswith(".")],
+                       key=lambda p: p.name)
+        for p in files[-10:]:
+            tag = "Boss → you" + (" (already handled)" if p.suffix == ".done" else " (PENDING)")
+            try:
+                parts.append(f"[{tag}] {p.read_text(encoding='utf-8', errors='replace')[:300]}")
+            except OSError:
+                pass
+    # Your sent replies
+    rp = config.workspace / "chat_replies.jsonl"
+    if rp.exists():
+        try:
+            lines = [_json.loads(l) for l in rp.read_text(encoding="utf-8").splitlines() if l.strip()]
+            for r in lines[-12:]:
+                parts.append(f"[you → Boss @ t{r.get('tick')}] {(r.get('text') or '')[:300]}")
+        except (OSError, ValueError):
+            pass
+    if not parts:
+        return ToolResult(output="No messages yet — you haven't talked with Boss.",
+                          full_output_path=None, success=True, duration_s=0)
+    return ToolResult(output=("Your conversation with Boss (use this before messaging him — don't "
+                              "repeat an unanswered ask):\n" + "\n".join(parts)),
+                      full_output_path=None, success=True, duration_s=0)
+
+
 def tool_memorize(args: dict, config: Config) -> ToolResult:
     """Store a durable knowledge entry in the long-term knowledge store."""
     from knowledge import store_entry
@@ -982,6 +1016,8 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "create_skill": tool_create_skill,
     "edit_skill": tool_edit_skill,
     "list_skills": tool_list_skills,
+    "check_tools": tool_list_skills,        # alias — "inspect your toolkit" on demand
+    "check_messages": tool_check_messages,  # inspect your conversation with Boss
     "rollback_skill": tool_rollback_skill,
 }
 
