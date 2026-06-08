@@ -93,6 +93,16 @@ def store_entry(
         category = "facts"
     tags = [t.strip().lower() for t in tags if t.strip()]
 
+    # Reject near-duplicates at the source (the store bloated to 265 entries for one small LAN
+    # because dream-extraction kept re-writing the same facts). If an entry with the same normalized
+    # content already exists, return it instead of adding a duplicate.
+    _norm = " ".join((content or "").lower().split())[:140]
+    if _norm:
+        for e in load_index(config):
+            ep = " ".join((e.get("content_preview") or "").lower().split())[:140]
+            if ep and ep == _norm:
+                return e.get("id")
+
     entry_id = _make_id(content, category)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 

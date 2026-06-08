@@ -91,12 +91,23 @@ a delivered job is not also "still running."
 ---
 
 ## Build order (each step ghost-tested before the next; 1-hour in-situ run at the end)
-1. Linter quote-aware + auto-correct (safe, removes the active lie). ✅ unit-test.
-2. World-state panel + seed/learned split (Point 1). Ghost: panel shows learned facts.
-3. Current-focus collapse + kill drift + self-guide/​goal fixes (Point 2). Ghost: one objective.
-4. "New since last tick" salience block + tick-prompt branch (Point 3). Ghost: Boss msg surfaced.
-5. Redundancy/dedup trim (Point 4 cleanup). Ghost: leaner, no dupes.
-6. Wipe → reseed (new scheme) → 1-hour supervised in-situ run; observe via the hourly check-in.
+1. ✅ DONE — Linter quote-aware + auto-correct (removes the active lie). Unit-tested 8/8.
+2. ✅ DONE — World-model panel + seed/learned split (P1). Ghost: panel shows the 4 learned facts, 0 seeds.
+3. ✅ DONE — Current-focus collapse + kill drift + self-guide/goal fixes (P2). Ghost: one objective, no Subgoals, no "chat listener".
+4. ✅ DONE — "New since last tick" salience block + tick-prompt branch (P3). Ghost: Boss msg elevated + reply-first.
+5. ✅ DONE (partial) — knowledge store-time dedup (kills the 265-entry bloat at source). Full tick ~3310 tok (−30%).
+   ⏭ DEFERRED — KV-stable prefix reorder (move volatile time/tick/presence to the bottom so the stable
+   prefix — system+self-guide+mission+skills — is byte-identical across ticks and its KV is reused). Bigger
+   blast radius; do carefully AFTER observing the run. Verify llama.cpp prompt caching is on for house-ai.
+6. ⏭ Wipe → reseed (new scheme) → 1-hour supervised in-situ run; observe via the hourly check-in.
+
+## Still-divergent from the doc (structural-agency items — bigger, do after the run validates 1-5)
+- **Goal-Tension (Ventral Striatum):** replace the prompt-instruction "have an inner life when idle" with a
+  glue-computed incompletion/regret pressure that nominates the highest-tension task when idle.
+- **ACC teeth + Insula strain:** the loop-breaker is still partly advisory; make repeated-failure accumulate a
+  strain signal that *mechanically* lowers the retry budget / forces a method switch (not a prose plea).
+- **Condition/temperament label** (STABLE/STRAINED/RECOVERY/FOCUSED) from recent success/failure, replacing
+  XP-only mood. These are the doc's "behavior from glue signals, not prompt text" — the deepest non-divergence.
 
 ---
 
