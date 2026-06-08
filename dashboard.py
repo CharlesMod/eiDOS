@@ -303,7 +303,7 @@ def build_thoughts(config: Config, limit: int = 30) -> dict:
                 "tick": e.get("tick", 0),
                 "ts": e.get("ts", ""),
                 "elapsed_s": 0,
-                "preview": text[:160],
+                "preview": text,
                 "raw_tail": text[-60:].replace("\n", " ").strip(),
                 "segments": [{"type": "thinking", "text": text}],
             })
@@ -688,9 +688,9 @@ body::after {
 }
 /* Buddy Thoughts expanded list */
 .thoughts-list {
-    max-height: 400px;
+    max-height: 460px;
     overflow-y: auto;
-    font-size: 11px;
+    font-size: 12.5px;
 }
 .thought-entry {
     border-bottom: 1px solid #1a3a1a;
@@ -718,11 +718,12 @@ body::after {
     flex-shrink: 0;
 }
 .thought-preview {
-    color: #668866;
+    color: #8fcf8f;
     flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    overflow: visible;
+    word-break: break-word;
+    line-height: 1.55;
 }
 .thought-elapsed {
     color: #444;
@@ -897,16 +898,16 @@ body::after {
     background: #111;
     border: 1px solid #1a3a1a;
     border-radius: 12px;
-    padding: 6px 12px;
-    font-size: 11px;
-    color: #668866;
-    max-width: 320px;
+    padding: 8px 14px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #8fcf8f;
+    max-width: 380px;
     margin: 0 auto 8px auto;
     text-align: center;
     min-height: 28px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    word-break: break-word;
     transition: opacity 0.4s, border-color 0.4s;
 }
 #thought-bubble.state-idle {
@@ -1353,21 +1354,22 @@ function updateThoughtBubble(activity) {
 
     bubble.className = '';
 
-    // Get the last ~60 raw chars of whatever is streaming
-    var tail = partial.length > 60 ? partial.substring(partial.length - 60) : partial;
-    // Collapse whitespace for display
+    // Live stream tail while actively generating (wraps); else the last full thought
+    var tail = partial.length > 220 ? partial.substring(partial.length - 220) : partial;
     tail = tail.replace(/\s+/g, ' ').trim();
 
     if (state === 'thinking' || state === 'executing' || state === 'dreaming') {
         bubble.classList.add('state-thinking');
         if (tail) {
-            textEl.innerHTML = '\u2026' + escapeHtml(tail) + '<span class="blink">\u258c</span>';
+            textEl.innerHTML = escapeHtml(tail) + '<span class="blink">\u258c</span>';
+        } else if (_lastSnippet) {
+            textEl.innerHTML = escapeHtml(_lastSnippet) + ' <span class="blink">\u258c</span>';
         } else {
-            textEl.innerHTML = '\u2026<span class="blink">\u258c</span>';
+            textEl.innerHTML = '<span class="blink">\u258c</span>';
         }
     } else if (_lastSnippet) {
         bubble.classList.add('state-idle');
-        textEl.innerHTML = '\u2026' + escapeHtml(_lastSnippet) + '\u2026';
+        textEl.innerHTML = escapeHtml(_lastSnippet);
     } else if (_hasGoal) {
         bubble.classList.add('state-idle');
         textEl.textContent = '\u2026';
@@ -1504,10 +1506,9 @@ async function loadThoughts() {
             // Extract last real tokens for thought bubble
             if (thoughts.length > 0) {
                 let latest = thoughts[0]; // newest first
-                // Use the raw last tokens for thought bubble
-                let snippet = latest.raw_tail || latest.preview || '';
-                snippet = snippet.replace(/\s+/g, ' ').trim();
-                if (snippet.length > 60) snippet = snippet.substring(snippet.length - 60);
+                // Full latest thought for the bubble (readable, wraps)
+                let snippet = (latest.preview || latest.raw_tail || '').replace(/\s+/g, ' ').trim();
+                if (snippet.length > 240) snippet = snippet.substring(0, 240) + '…';
                 _lastSnippet = snippet;
             }
         }
@@ -2001,13 +2002,15 @@ def _ctrl_status(config):
     return {"running": running, "paused": pausefile.exists(), "pid": (pid if running else 0)}
 
 
-def _ctrl_start(config):
+def _eidos_should_run_path(config):
+    """Desired-state flag: present = the watchdog should keep eiDOS alive."""
+    return config.workspace / "eidos.should_run"
+
+
+def _spawn_eidos(config):
+    """Spawn the eidos process detached, record its pid, return the pid."""
     import subprocess, sys, os
-    pidfile, pausefile, kdir = _ctrl_paths(config)
-    st = _ctrl_status(config)
-    if st["running"]:
-        return {"ok": False, "message": f"already running (pid {st['pid']})", **st}
-    pausefile.write_text("paused on start - click GO to begin")  # boot PAUSED
+    _, _, kdir = _ctrl_paths(config)
     logf = open(config.workspace / "eidos_console.log", "ab")
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
@@ -2015,14 +2018,29 @@ def _ctrl_start(config):
         [sys.executable, str(kdir / "eidos.py"), "--config", str(kdir / "config.toml")],
         cwd=str(kdir), stdout=logf, stderr=subprocess.STDOUT, env=env, creationflags=flags,
     )
-    pidfile.write_text(str(proc.pid))
-    return {"ok": True, "message": f"started PAUSED (pid {proc.pid}) - click GO to wake it",
+    (config.workspace / "eidos.pid").write_text(str(proc.pid))
+    return proc.pid
+
+
+def _ctrl_start(config):
+    pidfile, pausefile, kdir = _ctrl_paths(config)
+    st = _ctrl_status(config)
+    if st["running"]:
+        return {"ok": False, "message": f"already running (pid {st['pid']})", **st}
+    pausefile.write_text("paused on start - click GO to begin")  # boot PAUSED
+    _eidos_should_run_path(config).write_text("1")   # arm the watchdog
+    pid = _spawn_eidos(config)
+    return {"ok": True, "message": f"started PAUSED (pid {pid}) - click GO to wake it",
             **_ctrl_status(config)}
 
 
 def _ctrl_stop(config):
     import subprocess, os
     pidfile, pausefile, _ = _ctrl_paths(config)
+    try:
+        _eidos_should_run_path(config).unlink()   # disarm watchdog: this is an intentional stop
+    except OSError:
+        pass
     st = _ctrl_status(config)
     if not st["running"]:
         try:
@@ -2056,6 +2074,77 @@ def _ctrl_pause(config):
     _, pausefile, _ = _ctrl_paths(config)
     pausefile.write_text("paused by operator")
     return {"ok": True, "message": "paused", **_ctrl_status(config)}
+
+
+# --- Watchdog: auto-restart eiDOS on unexpected death + record the crash so it learns ---
+
+def _read_console_tail(config, n=30):
+    try:
+        lines = (config.workspace / "eidos_console.log").read_text(
+            encoding="utf-8", errors="replace").splitlines()
+        return "\n".join(lines[-n:])[-1200:]
+    except Exception:  # noqa: BLE001
+        return "(no console output captured)"
+
+
+def _watchdog_note(config, msg):
+    """Record a crash/recovery note where eiDOS will see it: observation + durable knowledge."""
+    import json, time
+    try:
+        obs = {"tick": 0, "tool": "watchdog", "success": False,
+               "output": msg[:1500],
+               "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        with open(config.workspace / "observations.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(obs) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import knowledge
+        knowledge.store_entry(config, msg[:600], ["crash", "watchdog", "recovery"], "errors")
+    except Exception:  # noqa: BLE001
+        pass
+    print(f"[watchdog] {msg[:140]}")
+
+
+def _watchdog_loop(config):
+    """Supervise eiDOS: when it should be running but has died, record why and respawn it.
+
+    Distinguishes an intentional Stop (eidos.should_run removed) from a crash, and backs
+    off if it crash-loops so it never thrashes.
+    """
+    import time
+    restarts = []
+    while True:
+        try:
+            time.sleep(5)
+            if not _eidos_should_run_path(config).exists():
+                continue  # operator stopped it — do not resurrect
+            try:
+                pid = int((config.workspace / "eidos.pid").read_text().strip())
+            except Exception:  # noqa: BLE001
+                pid = 0
+            if pid and _ctrl_pid_alive(pid):
+                continue  # healthy
+            now = time.time()
+            restarts = [t for t in restarts if now - t < 180]
+            if len(restarts) >= 5:
+                try:
+                    _eidos_should_run_path(config).unlink()
+                except OSError:
+                    pass
+                _watchdog_note(config, "eiDOS crash-looped (5 restarts in 3 min). Watchdog "
+                                       "standing down — needs operator attention.")
+                continue
+            tail = _read_console_tail(config, 30)
+            _watchdog_note(config,
+                           "eiDOS process died unexpectedly. Last console output before death:\n"
+                           + tail + "\n\nThe watchdog is auto-restarting you. Note what happened "
+                           "above and adapt so it does not recur.")
+            restarts.append(now)
+            new_pid = _spawn_eidos(config)
+            print(f"[watchdog] respawned eiDOS as pid {new_pid}")
+        except Exception:  # noqa: BLE001 — the watchdog must never die
+            pass
 
 
 # --- GPU + LLM telemetry for the dashboard (nvidia-smi + metrics.jsonl tail) ---
@@ -2127,6 +2216,9 @@ def main():
     handler = _make_handler(config)
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     server.daemon_threads = True
+    import threading
+    threading.Thread(target=_watchdog_loop, args=(config,), daemon=True).start()
+    print("[watchdog] armed — eiDOS auto-restart-on-crash enabled")
     print(f"[dashboard] Serving on http://0.0.0.0:{port}")
     print(f"[dashboard] Reading from {config.workspace}")
     try:
