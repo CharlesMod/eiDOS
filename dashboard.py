@@ -2563,7 +2563,15 @@ def _ctrl_stop(config):
         pidfile.unlink()
     except OSError:
         pass
-    return {"ok": True, "message": f"force-killed pid {pid} (and children)", **_ctrl_status(config)}
+    # Reap eidos's detached background jobs — they survive its kill and would otherwise orphan.
+    reaped = 0
+    try:
+        import tools
+        reaped = tools.reap_jobs(config, kill_all=True)
+    except Exception:  # noqa: BLE001
+        pass
+    msg = f"force-killed pid {pid} (and children)" + (f"; reaped {reaped} bg job(s)" if reaped else "")
+    return {"ok": True, "message": msg, **_ctrl_status(config)}
 
 
 def _ctrl_resume(config):

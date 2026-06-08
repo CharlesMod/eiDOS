@@ -48,7 +48,7 @@ from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rot
 from safety import check_ram, get_cpu_temp, kill_child_processes, check_disk_space
 from session import human_present, take_workspace_snapshot, workspace_diff
 from telemetry import write_heartbeat, append_metrics, write_activity, get_cpu_pct
-from tools import execute_tool, refresh_jobs, collect_finished_jobs
+from tools import execute_tool, refresh_jobs, collect_finished_jobs, reap_jobs
 
 logger = logging.getLogger("eidos")
 
@@ -93,6 +93,15 @@ def main():
             print(f"[skills] loaded {len(loaded)}: {', '.join(loaded)}")
     except Exception as e:  # noqa: BLE001
         print(f"[skills] load failed: {e}")
+
+    # Reap any background jobs orphaned by the previous run (bg_run/async detach into their own
+    # process group, so they survive a kill of eidos and would otherwise run forever).
+    try:
+        n = reap_jobs(config, kill_all=True)
+        if n:
+            print(f"[jobs] reaped {n} orphaned background job(s) from the previous run")
+    except Exception as e:  # noqa: BLE001
+        print(f"[jobs] reap failed: {e}")
 
     # Signal handling for clean shutdown
     signal.signal(signal.SIGTERM, _handle_signal)

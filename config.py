@@ -43,7 +43,8 @@ class Config:
 
     # Safety
     cmd_timeout_s: int = 120
-    cmd_async_ceiling_s: float = 180.0  # hard kill for async/auto bg jobs (manual bg_run exempt)
+    cmd_async_ceiling_s: float = 180.0  # hard kill for async/auto bg jobs
+    bg_job_max_age_s: float = 1800.0    # generous lifetime cap for MANUAL bg_run jobs (kills runaways)
     disk_min_gb: float = 1.0
     ram_max_pct: float = 85.0
     bg_output_max_bytes: int = 10_000_000  # 10MB cap for bg_run output files
@@ -263,6 +264,7 @@ def load_config(path: str = "config.toml") -> Config:
         safety = data.get("safety", {})
         config.cmd_timeout_s = safety.get("cmd_timeout_s", config.cmd_timeout_s)
         config.cmd_async_ceiling_s = safety.get("cmd_async_ceiling_s", config.cmd_async_ceiling_s)
+        config.bg_job_max_age_s = safety.get("bg_job_max_age_s", config.bg_job_max_age_s)
         config.disk_min_gb = safety.get("disk_min_gb", config.disk_min_gb)
         config.ram_max_pct = safety.get("ram_max_pct", config.ram_max_pct)
         config.bg_output_max_bytes = safety.get("bg_output_max_bytes", config.bg_output_max_bytes)

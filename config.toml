@@ -39,6 +39,9 @@ cmd_timeout_s = 10
 # killed and reported as [↩ job N · TIMED OUT]. Manual bg_run jobs are EXEMPT (you
 # deliberately backgrounded those for long work).
 cmd_async_ceiling_s = 180
+# Generous lifetime cap for MANUAL bg_run jobs — long work is fine, but a runaway/infinite
+# bg command (e.g. a `while($true)` poll loop) gets killed after this so it can't run forever.
+bg_job_max_age_s = 1800
 disk_min_gb = 1.0
 ram_max_pct = 90.0
 bg_output_max_bytes = 10000000

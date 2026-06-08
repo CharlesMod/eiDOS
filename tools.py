@@ -366,6 +366,17 @@ def tool_bg_run(args: dict, config: Config) -> ToolResult:
     if blocked:
         return ToolResult(output=f"BLOCKED: {blocked}", full_output_path=None, success=False, duration_s=0)
 
+    # Reject obvious unbounded loops — they orphan and run forever (a `while($true)` cert-poller
+    # once ran all night). Run a single check now, or a BOUNDED loop, and re-check later yourself.
+    _low = cmd.lower().replace(" ", "")
+    if any(p in _low for p in ("while($true)", "while(true)", "while($true){", "while(1)",
+                               "whiletrue:", "for(;;)", "while:1", "while1:")):
+        return ToolResult(output=("BLOCKED: that command loops forever and would orphan a runaway "
+                                  "background process. Don't poll in an infinite loop — run a SINGLE "
+                                  "check now (or a bounded loop with a fixed retry count) and re-check "
+                                  "later on a future tick or with bg_check."),
+                          full_output_path=None, success=False, duration_s=0)
+
     start = time.monotonic()
     config.outputs_dir.mkdir(parents=True, exist_ok=True)
     out_path = config.outputs_dir / f"bg_{name}.out"
@@ -855,6 +866,34 @@ def refresh_jobs(config: Config) -> list[dict]:
     return jobs
 
 
+def reap_jobs(config: Config, kill_all: bool = False) -> int:
+    """Kill orphaned background jobs and update the ledger; return count killed.
+
+    kill_all=True kills EVERY still-running tracked job — use on eidos startup/stop to clear a
+    previous run's detached children (bg_run/async use a new process group, so they survive a
+    taskkill of eidos itself, and would otherwise run forever). Also marks dead pids completed.
+    """
+    jobs = _read_jobs(config)
+    killed = 0
+    changed = False
+    for j in jobs:
+        if j.get("status") != "running":
+            continue
+        pid = j.get("pid", 0)
+        if not _pid_alive(pid):
+            j["status"] = "completed"
+            changed = True
+            continue
+        if kill_all:
+            _kill_pid_tree(pid)
+            j["status"] = "reaped"
+            killed += 1
+            changed = True
+    if changed:
+        _write_jobs(config, jobs)
+    return killed
+
+
 def _kill_pid_tree(pid: int) -> None:
     """Kill a process tree by PID (Windows-safe)."""
     if not pid:
@@ -897,10 +936,15 @@ def collect_finished_jobs(config: Config) -> list[dict]:
             alive = _pid_alive(j.get("pid", 0))
             started_ts = j.get("started_ts")
             if alive:
-                # Only async/auto jobs are subject to the ceiling. Manual bg_run jobs
-                # were deliberately backgrounded for long work — never auto-reap them.
+                manual_cap = float(getattr(config, "bg_job_max_age_s", 1800.0))
                 if (j.get("kind") in ("async", "auto")
                         and started_ts and (now - started_ts) > ceiling):
+                    _kill_pid_tree(j.get("pid", 0))
+                    j["status"] = "timed_out"
+                    changed = True
+                elif (started_ts and manual_cap > 0 and (now - started_ts) > manual_cap):
+                    # Even deliberately-backgrounded manual bg_run jobs get a GENEROUS lifetime cap,
+                    # so a runaway/infinite bg command (e.g. an all-night poll loop) can't run forever.
                     _kill_pid_tree(j.get("pid", 0))
                     j["status"] = "timed_out"
                     changed = True
