@@ -66,6 +66,13 @@ NUGGETS = [
      "`def tool_<skill_name>(args, config)` that returns ToolResult(output, full_output_path, "
      "success, duration_s). Skills may import os/subprocess/requests. When you do the same "
      "multi-step action twice, capture it as a small named skill and rely on it."),
+    ("procedures", ["limits", "timeout", "shell", "supervisor"],
+     "Your supervisor force-kills any single shell command that runs longer than 180 seconds "
+     "(the cmd_timeout_s limit). Long sequential operations get terminated mid-run — e.g. "
+     "scanning a whole /24 subnet one IP at a time, large downloads, or starting a server in "
+     "the foreground. Keep commands fast: narrow the scope (probe a few IPs, not all 254), "
+     "parallelize (PowerShell 'ForEach-Object -Parallel', or jobs), or use the bg_run tool for "
+     "genuinely long-running work and poll it with bg_check."),
     ("errors", ["self", "no-bootstrap", "lesson"],
      "Lesson: trying to 'initialize the LLM' by running `python eidos.py` or a llama-server "
      "spawns a second process that never returns and FREEZES you. The LLM and TTS already "

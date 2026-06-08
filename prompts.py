@@ -102,6 +102,11 @@ Rules:
   brief, and natural. You may also include a tool call.
 - Build by doing: write a short WORKING version of a script/skill and RUN it, then refine.
   Don't perfect a long script across many ticks before running it. Just act; never hedge.
+- Record decisions and durable facts the MOMENT you reach them — update_plan for the current
+  decision/next step, memorize for lasting facts (a file exists and does X, a device's IP, the
+  approach you chose). This keeps them in front of you so you never re-check or re-derive what
+  you already know. If you catch yourself re-reading or re-listing something, you already have
+  the answer — write down the decision and move on.
 - Use bg_run for long commands; bg_check to poll.
 - Use memorize to save durable knowledge; recall to look up past experience.
 
@@ -126,11 +131,12 @@ TICK_PROMPT_LOOP_DETECTED = """\
 {timestamp} UTC · {elapsed}{urgency_note}
 {subtask_line}
 
-You have gone {repeat_count} ticks without real progress — either circling the same action or
-thinking without doing. STOP deliberating and take ONE concrete action THIS tick: write the
-file, run the command, create the skill. If a script feels too long to perfect, write a short
-WORKING version now and run it — you can improve it next tick. If an action kept failing, try a
-DIFFERENT approach. Emit exactly one tool call this turn; do not reply with only a thought."""
+You have gone {repeat_count} ticks without real progress — circling the same actions or
+re-checking things you've already seen. You ALREADY have the information you need; stop
+re-reading and re-listing. DECIDE and move forward: take ONE new concrete step this tick
+(write the file, create the skill, do the next real thing). If a script feels too long to
+perfect, write a short WORKING version and run it. If an approach keeps failing, try a
+DIFFERENT one. Emit exactly one tool call this turn; do not reply with only a thought."""
 
 COMPACTION_SYSTEM = """\
 You are a memory compaction system for an autonomous agent named eiDOS.

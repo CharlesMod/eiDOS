@@ -535,8 +535,9 @@ def run_loop(config: Config, persona=None, wal=None):
         loop_detected = False
         repeat_count = 0
         if len(recent_hashes) >= config.loop_detect_window:
-            if len(set(recent_hashes)) == 1:
-                loop_detected = True   # same action repeated with no new result
+            uniq = set(recent_hashes)
+            if len(uniq) <= 2:
+                loop_detected = True   # repeating one action, or cycling between two (A-B-A-B)
                 repeat_count = len(recent_hashes)
             elif all(str(h).startswith("th_") or h == "__no_tool__" for h in recent_hashes):
                 loop_detected = True   # ruminating: thinking without acting

@@ -15,7 +15,7 @@ presence_penalty = 0.5
 
 [tick]
 interval_s = 2.5           # tick cadence (fast supervised mode); wakes instantly on chat/intervention
-loop_detect_window = 3
+loop_detect_window = 4
 
 [compaction]
 token_threshold = 8000
@@ -30,7 +30,7 @@ context_max_chars = 40000
 truncation_chars = 3000
 
 [safety]
-cmd_timeout_s = 120
+cmd_timeout_s = 180
 disk_min_gb = 1.0
 ram_max_pct = 90.0
 bg_output_max_bytes = 10000000

@@ -90,40 +90,64 @@ def _log_overrun(config: Config, tick_number: int, section: str,
 # Inverted-pyramid observation rendering (briefing model)
 # ---------------------------------------------------------------------------
 
-def _render_observations_pyramid(observations: list[dict], full_budget: int = 2000) -> str:
-    """Render observations in inverted-pyramid style.
+def _obs_sig(o: dict):
+    """Signature for detecting repeated actions (same tool + same args/output)."""
+    a = o.get("args")
+    if a:
+        return (o.get("tool"), str(a))
+    return (o.get("tool"), (o.get("output", "") or "")[:80])
 
-    - Most recent: full output (up to full_budget chars)
-    - One before: tool + success + first line (~150 chars)
-    - Two before: tool + outcome only (~80 chars)
-    - Older: dropped
+
+def _render_observations_pyramid(observations: list[dict], full_budget: int = 2000) -> str:
+    """Render observations newest-first, collapsing repeats and flagging loops.
+
+    Wider than before (up to ~12) so it can SEE its own recent history, but kept
+    compact: consecutive identical actions collapse to one line with a ×N count,
+    and if the window is dominated by 1-2 repeated actions (including A-B-A-B
+    alternation, which has no consecutive duplicates) a salient loop warning is
+    prepended so the model can notice it is stuck and break out.
     """
     if not observations:
         return ""
 
+    # Loop warning across the whole window (catches alternation).
+    _skip = {"system", "watchdog", "thought", "dream"}
+    action_sigs = [_obs_sig(o) for o in observations if o.get("tool") not in _skip]
+    loop_note = ""
+    if len(action_sigs) >= 4 and 1 <= len(set(action_sigs)) <= 2:
+        names = " and ".join(sorted({str(s[0]) for s in action_sigs}))
+        loop_note = (f"⚠ You have been repeating the same action(s) — {names} — with no "
+                     f"new result. You ALREADY have this information. Stop repeating it; decide "
+                     f"and take a different, concrete next step.\n\n")
+
+    # Collapse consecutive identical entries.
+    collapsed = []
+    for o in observations:
+        s = _obs_sig(o)
+        if collapsed and collapsed[-1][0] == s:
+            collapsed[-1][1] += 1
+        else:
+            collapsed.append([s, 1, o])
+
     lines = []
-    for i, obs in enumerate(observations):
-        ts = obs.get("ts", "?")
+    for i, (_s, count, obs) in enumerate(collapsed):
+        if i > 11:
+            break
         tick = obs.get("tick", "?")
         tool = obs.get("tool", "?")
         success = "OK" if obs.get("success", False) else "FAIL"
-        output = obs.get("output", "")
-
+        output = obs.get("output", "") or ""
+        rep = f" ×{count} (repeated — no new result)" if count > 1 else ""
         if i == 0:
-            # Most recent: full detail
-            truncated = output[:full_budget] if len(output) > full_budget else output
-            lines.append(f"[tick {tick} | {tool} | {success}]\n{truncated}")
-        elif i == 1:
-            # Previous: one-line summary
+            truncated = output[:full_budget]
+            lines.append(f"[tick {tick} | {tool} | {success}]{rep}\n{truncated}")
+        elif i <= 3:
             first_line = output.split("\n")[0][:120] if output else ""
-            lines.append(f"[tick {tick} | {tool} | {success}] {first_line}")
-        elif i == 2:
-            # Two back: outcome only
-            lines.append(f"[tick {tick} | {tool} | {success}]")
+            lines.append(f"[tick {tick} | {tool} | {success}]{rep} {first_line}")
         else:
-            break  # drop older
+            lines.append(f"[tick {tick} | {tool} | {success}]{rep}")
 
-    return "\n".join(lines)
+    return loop_note + "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -478,9 +502,9 @@ def _assemble_briefing(
     if env_alerts:
         sections.append(f"## Environment\n{env_alerts}")
 
-    # Observations — inverted pyramid
+    # Observations — wider window (so it can see its own recent history), collapsed
     observations = read_recent_observations(
-        config, max_chars=config.context_obs_max_chars, max_count=3)
+        config, max_chars=config.context_obs_max_chars, max_count=12)
     if observations:
         obs_text = _render_observations_pyramid(observations, full_budget=2000)
         if len(obs_text) > config.context_obs_max_chars:
@@ -489,13 +513,30 @@ def _assemble_briefing(
             obs_text = _truncate(obs_text, config.context_obs_max_chars, "observations")
         sections.append(f"## Recent Observations\n{obs_text}")
 
-    # Your own train of thought — the salient point to continue FROM (kept last)
-    thoughts = read_recent_thoughts(config, n=6)
+    # Your own train of thought — the salient point to continue FROM (kept last).
+    # Consecutive near-identical thoughts collapse so a stuck loop reads as one line.
+    thoughts = read_recent_thoughts(config, n=10)
     if thoughts:
-        tlines = [f"- {t.get('text', '').strip()}" for t in thoughts if t.get('text')]
+        def _tnorm(t):
+            return "".join(c for c in (t.get("text", "") or "").lower()
+                           if c.isalnum() or c == " ")[:45]
+        groups = []
+        for t in thoughts:
+            txt = (t.get("text", "") or "").strip()
+            if not txt:
+                continue
+            k = _tnorm(t)
+            if groups and groups[-1][0] == k:
+                groups[-1][1] += 1
+            else:
+                groups.append([k, 1, txt])
+        tlines = []
+        for _k, count, txt in groups:
+            rep = f"  ×{count} (you keep thinking this — act on it or move on)" if count > 1 else ""
+            tlines.append(f"- {txt}{rep}")
         thought_text = "\n".join(tlines)
-        if len(thought_text) > 1800:
-            thought_text = "…\n" + thought_text[-1800:]
+        if len(thought_text) > 2200:
+            thought_text = "…\n" + thought_text[-2200:]
         sections.append(f"## Your recent train of thought (continue from the last one)\n{thought_text}")
 
     user_content = "\n\n".join(sections)
