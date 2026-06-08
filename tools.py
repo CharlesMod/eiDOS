@@ -59,6 +59,28 @@ def _normalize_workspace_path(path: str, config: Config) -> Path:
     return p
 
 
+def _looks_like_powershell(cmd: str) -> bool:
+    """Heuristic: does this command want PowerShell rather than cmd.exe?"""
+    import re
+    c = cmd.strip()
+    low = c.lower()
+    if low.startswith(("powershell", "pwsh")):
+        return False  # already explicit PowerShell
+    verbs = ("Get|Set|New|Remove|Start|Stop|Restart|Test|Select|Where|ForEach|Write|Read|Out|"
+             "Import|Export|Invoke|Add|Clear|Copy|Move|Rename|Measure|Sort|Group|Format|Convert|"
+             "ConvertTo|ConvertFrom|Resolve|Enable|Disable|Update|Install|Uninstall|Find|Wait|"
+             "Receive|Send|Compare|Join|Split|Tee")
+    if re.search(r'(?:^|[\s|;(&])(?:' + verbs + r')-[A-Za-z]\w*', c, re.IGNORECASE):
+        return True
+    if "$_" in c or "-computername" in low:
+        return True
+    for tok in ("| where-object", "| foreach-object", "| select-object",
+                "| measure-object", "| sort-object", "write-host", "write-output"):
+        if tok in low:
+            return True
+    return False
+
+
 def _kill_proc_tree(proc):
     """Kill a process and its entire descendant tree (Windows-safe).
 
@@ -123,9 +145,18 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["start_new_session"] = True
+        # On Windows the model often emits PowerShell (Get-Content, Test-Connection, $vars),
+        # but the default shell is cmd.exe which rejects them. Route those through PowerShell
+        # directly (list form sidesteps cmd.exe quote-escaping).
+        if os.name == "nt" and _looks_like_powershell(cmd):
+            popen_arg = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd]
+            use_shell = False
+        else:
+            popen_arg = cmd
+            use_shell = True
         proc = subprocess.Popen(
-            cmd,
-            shell=True,
+            popen_arg,
+            shell=use_shell,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

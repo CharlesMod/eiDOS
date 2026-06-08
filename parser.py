@@ -35,6 +35,24 @@ TOOL_ALT_FORMAT = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
+# Builtin tool names the model sometimes emits AS the tag (shorthand),
+# e.g. <bash>{"cmd": "..."}</bash> instead of <tool>bash</tool><args>...</args>.
+_KNOWN_TOOL_TAGS = {
+    "bash", "read_file", "write_file", "http_get", "remember", "update_plan",
+    "memorize", "recall", "plan_goal", "goal_complete", "ask_supervisor",
+    "bg_run", "bg_check", "create_skill", "edit_skill", "list_skills", "rollback_skill",
+}
+
+
+def _known_tool_tags() -> set:
+    tags = set(_KNOWN_TOOL_TAGS)
+    try:
+        from tools import TOOLS
+        tags.update(TOOLS.keys())
+    except Exception:  # noqa: BLE001
+        pass
+    return tags
+
 
 @dataclasses.dataclass
 class ToolCall:
@@ -136,6 +154,28 @@ def parse_tool_call(text: str) -> Optional[ToolCall]:
         args = _try_parse_json(args_str)
         if args is not None:
             return ToolCall(tool=tool_name, args=args, raw=match.group(0))
+
+    # Fallback: shorthand where the model uses the TOOL NAME as the tag,
+    # e.g. <bash>{"cmd": "..."}</bash>  or  <bash>ls -la</bash>  or unclosed <bash>{...
+    known = _known_tool_tags()
+    _reserved = {"tool", "args", "reply", "think", "thinking", "thought"}
+    for m in re.finditer(r'<([a-z_]\w*)>\s*(.*?)\s*</\1>', text, re.DOTALL | re.IGNORECASE):
+        name = m.group(1).lower().strip()
+        if name in _reserved or name not in known:
+            continue
+        body = m.group(2).strip()
+        args = _try_parse_json(body)
+        if args is not None:
+            return ToolCall(tool=name, args=args, raw=m.group(0))
+        if name in _TEXT_ARG_TOOLS and body and not body.startswith(("{", "[")):
+            return ToolCall(tool=name, args={_TEXT_ARG_TOOLS[name]: body}, raw=m.group(0))
+    m = re.search(r'<([a-z_]\w*)>\s*(\{.*)', text, re.DOTALL | re.IGNORECASE)
+    if m:
+        name = m.group(1).lower().strip()
+        if name in known and name not in _reserved:
+            args = _try_parse_json(m.group(2).strip())
+            if args is not None:
+                return ToolCall(tool=name, args=args, raw=m.group(0))
 
     return None
 

@@ -536,7 +536,10 @@ def run_loop(config: Config, persona=None, wal=None):
         repeat_count = 0
         if len(recent_hashes) >= config.loop_detect_window:
             if len(set(recent_hashes)) == 1:
-                loop_detected = True
+                loop_detected = True   # same action repeated with no new result
+                repeat_count = len(recent_hashes)
+            elif all(str(h).startswith("th_") or h == "__no_tool__" for h in recent_hashes):
+                loop_detected = True   # ruminating: thinking without acting
                 repeat_count = len(recent_hashes)
 
         # --- Assemble context ---
