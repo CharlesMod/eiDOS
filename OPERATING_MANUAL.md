@@ -11,13 +11,20 @@ Topics: `tts` (speak) · `vision` (see) · `ask_ai` (think) · `network` (discov
 ---
 
 ## tts — SPEAK in your GLaDOS voice
-**Easiest by far: the `speak(text)` tool.** One call generates your GLaDOS voice AND plays it through the
-dashboard (:8099) — wherever Boss has the dashboard open is the speaker (he clicks "🔊 Voice: on" once to
-enable browser audio). You do NOT handle playback yourself. `speak {"text":"Hello Boss."}` — done. Use this
-to actually be HEARD; use `<reply>` for silent text. The rest of this section is the raw pipeline `speak`
-uses, for when you need to build on it.
+**Use the `speak(text)` tool. That's the whole answer.** `speak {"text":"Hello Boss."}` returns INSTANTLY —
+it just hands your words to the dashboard, which streams your GLaDOS voice (live, low-latency) to wherever
+Boss has the dashboard open (he clicks "🔊 Voice: on" once). You do NOT wait for audio, you do NOT generate
+wavs, you do NOT handle playback. Use it to be HEARD; use `<reply>` for silent text.
+- **Keep each utterance to ~ONE sentence.** Generation shares the GPU with your mind, so short lines speak
+  fastest; a paragraph can take many seconds.
+- **NEVER build a 'speak' / 'speak_glados' / TTS skill.** `speak` IS your voice — building your own just
+  re-creates the slow path you're avoiding. If `speak` reports the voice system was momentarily
+  unreachable, that's fine — it'll play when reachable; do NOT reinvent it.
+- If a clip doesn't play, it's almost always that Boss hasn't clicked "🔊 Voice: on" yet — not your problem
+  to solve from this side.
 
-Your voice is the Chatterbox TTS server (:8004) behind a GLaDOS FX proxy (:8005).
+The rest of this section is the raw pipeline, for reference only. Your voice is the Chatterbox TTS server
+(:8004) behind a GLaDOS FX proxy (:8005); the dashboard now streams it through a live ffmpeg FX pipe.
 
 - **Endpoint:** `POST http://127.0.0.1:8005/v1/audio/speech`
   (`:8005` = full GLaDOS effect — use this. `:8004` = the raw clone with no effects.)

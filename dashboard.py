@@ -180,6 +180,96 @@ def speech_unsubscribe(q) -> None:
         _speech_subs.discard(q)
 
 
+# --- Streaming GLaDOS voice: lazy generation. eiDOS submits TEXT (instant return); the browser pulls
+#     /api/speech/stream which generates via Chatterbox's streaming TTS and applies the GLaDOS FX through
+#     a live ffmpeg pipe, streaming audio to the browser as it's synthesized (low time-to-first-audio,
+#     GLaDOS character preserved). No 50s blocking generate, so `speak` can never time out. ---
+import subprocess as _sp_subprocess
+import os as _sp_os
+
+_GLADOS_FFMPEG = _sp_os.environ.get(
+    "GLADOS_FFMPEG",
+    r"C:\Users\cmod\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0.1-full_build\bin\ffmpeg.exe")
+if not _sp_os.path.isfile(_GLADOS_FFMPEG):
+    _GLADOS_FFMPEG = "ffmpeg"
+# Chain B "buzzy robot" — same FX as glados_proxy.py (keep in sync).
+_GLADOS_FX = ("highpass=f=100,lowpass=f=7000,vibrato=f=6:d=0.12,"
+              "chorus=0.6:0.9:55|65:0.5|0.4:0.3|0.45:2.2|1.5,"
+              "tremolo=f=72:d=0.18,aecho=0.8:0.75:18:0.22,"
+              "equalizer=f=2200:t=q:w=1.2:g=5,alimiter=limit=0.95")
+
+_speech_texts: dict = {}            # id -> text (ephemeral, capped)
+_speech_texts_lock = _sp_threading.Lock()
+
+
+def speech_remember(sid: str, text: str) -> None:
+    with _speech_texts_lock:
+        _speech_texts[sid] = text
+        if len(_speech_texts) > 64:  # drop oldest
+            for k in list(_speech_texts)[:-64]:
+                _speech_texts.pop(k, None)
+
+
+def speech_text(sid: str) -> str:
+    with _speech_texts_lock:
+        return _speech_texts.get(sid, "")
+
+
+def stream_glados(text: str, out) -> None:
+    """Generate `text` as streaming GLaDOS speech and write WAV bytes to `out` (the browser) as they come:
+    Chatterbox /tts stream=true  ->  ffmpeg GLaDOS-FX pipe  ->  out. Best-effort; closes cleanly on error."""
+    import urllib.request
+    payload = json.dumps({"text": text, "voice_mode": "clone",
+                          "reference_audio_filename": "glados.wav",
+                          "output_format": "wav", "stream": True}).encode("utf-8")
+    req = urllib.request.Request("http://127.0.0.1:8004/tts", data=payload,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        tts = urllib.request.urlopen(req, timeout=300)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("stream_glados: TTS open failed: %s", e)
+        return
+    proc = _sp_subprocess.Popen(
+        [_GLADOS_FFMPEG, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
+         "-af", _GLADOS_FX, "-f", "wav", "pipe:1"],
+        stdin=_sp_subprocess.PIPE, stdout=_sp_subprocess.PIPE, stderr=_sp_subprocess.DEVNULL)
+
+    def _pump_in():
+        try:
+            while True:
+                chunk = tts.read(8192)
+                if not chunk:
+                    break
+                proc.stdin.write(chunk)
+            proc.stdin.close()
+        except Exception:  # noqa: BLE001 - browser hung up or ffmpeg died; close and let main exit
+            try:
+                proc.stdin.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    t = _sp_threading.Thread(target=_pump_in, daemon=True)
+    t.start()
+    try:
+        while True:
+            data = proc.stdout.read(8192)
+            if not data:
+                break
+            out.write(data)
+            out.flush()
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        pass
+    finally:
+        try:
+            proc.stdout.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def build_dream_list(config: Config) -> dict:
     """Read last 10 memory snapshots (dream records)."""
     snap_dir = config.workspace / "snapshots"
@@ -1164,19 +1254,25 @@ async function nxStatus(){
   }catch(e){}
 }
 setInterval(nxStatus,2000);nxStatus();
-// --- Voice: eiDOS PUSHES each utterance over SSE; we play it instantly through THIS browser.
-//     No polling — zero arbitrary delay. Each SSE event is a fresh utterance, so just play it. ---
-let nxVoiceOn=false, nxES=null;
-function nxPlay(id){ const a=document.getElementById('nx-audio'); a.src='/api/speech/file?id='+id; a.play().catch(()=>{}); }
-function nxConnectSSE(){
-  if(nxES) return;
-  nxES = new EventSource('/api/speech/events');   // browser auto-reconnects on drop
-  nxES.onmessage = (e)=>{ if(!nxVoiceOn) return; try{const d=JSON.parse(e.data); if(d.id) nxPlay(d.id);}catch(_){} };
-}
-async function toggleVoice(){
+// --- Voice: eiDOS pushes each utterance id over SSE; we STREAM the GLaDOS audio through THIS browser.
+//     Streaming = low latency; the <audio> element is "blessed" under your click so Firefox/Safari
+//     allow the later callback-triggered playback (the reason you heard nothing before). ---
+const NX_SILENT='data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAACAgICAgICAgA==';
+let nxVoiceOn=false, nxES=null, nxAC=null;
+function nxLabel(extra){ const b=document.getElementById('nx-voice'); const base=nxVoiceOn?'&#128266; Voice: on':'&#128263; Voice: off'; b.innerHTML=extra?extra+' '+base:base; if(extra) setTimeout(()=>{b.innerHTML=base;},1400); }
+function nxBlip(){ try{ nxAC=nxAC||new (window.AudioContext||window.webkitAudioContext)(); if(nxAC.state==='suspended')nxAC.resume(); const o=nxAC.createOscillator(),g=nxAC.createGain(); o.frequency.value=660; g.gain.value=0.05; o.connect(g); g.connect(nxAC.destination); o.start(); o.stop(nxAC.currentTime+0.12);}catch(_){} }
+function nxPlay(id){ const a=document.getElementById('nx-audio'); a.muted=false; a.src='/api/speech/stream?id='+id+'&t='+Date.now(); a.play().then(()=>nxLabel('&#9654;')).catch(()=>nxLabel('&#9888; blocked')); }
+function nxConnectSSE(){ if(nxES)return; nxES=new EventSource('/api/speech/events'); nxES.onmessage=(e)=>{ if(!nxVoiceOn)return; try{const d=JSON.parse(e.data); if(d.id) nxPlay(d.id);}catch(_){} }; }
+function toggleVoice(){
   nxVoiceOn=!nxVoiceOn;
-  document.getElementById('nx-voice').innerHTML = nxVoiceOn ? '&#128266; Voice: on' : '&#128263; Voice: off';
-  if(nxVoiceOn){ const a=document.getElementById('nx-audio'); a.muted=false; try{await a.play();}catch(_){}; nxConnectSSE(); }
+  if(nxVoiceOn){
+    const a=document.getElementById('nx-audio');
+    a.muted=true; a.src=NX_SILENT; a.play().catch(()=>{});   // bless under THIS click -> later play() allowed
+    setTimeout(()=>{a.muted=false;},250);
+    nxBlip();            // audible "armed" confirmation so you know it's working
+    nxConnectSSE();
+  }
+  nxLabel('');
 }
 </script>
 <div class="container">
@@ -2318,6 +2414,24 @@ def _make_handler(config: Config):
                 else:
                     self._respond(404, "text/plain", "no such clip")
 
+            elif self.path.startswith("/api/speech/stream"):
+                from urllib.parse import urlparse, parse_qs
+                sid = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
+                text = speech_text(sid)
+                if not text:
+                    self._respond(404, "text/plain", "no such utterance")
+                else:
+                    try:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "audio/wav")
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        stream_glados(text, self.wfile)  # streams GLaDOS audio until done/disconnect
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        pass
+                return
+
             elif self.path == "/api/thoughts":
                 data = build_thoughts(config)
                 self._respond(200, "application/json", json.dumps(data))
@@ -2409,6 +2523,22 @@ def _make_handler(config: Config):
                     sid = None
                 n = speech_publish(str(sid)) if sid else 0
                 self._respond(200, "application/json", json.dumps({"ok": bool(sid), "delivered": n}))
+            elif self.path == "/api/speech/say":
+                # eiDOS submits TEXT to speak (instant). We remember it + push the id; the browser pulls
+                # /api/speech/stream which generates the streaming GLaDOS audio on demand.
+                try:
+                    length = int(self.headers.get("Content-Length", 0) or 0)
+                    body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+                    sid = str(body.get("id") or "")
+                    text = (body.get("text") or "").strip()
+                except Exception:  # noqa: BLE001
+                    sid, text = "", ""
+                if sid and text:
+                    speech_remember(sid, text)
+                    n = speech_publish(sid)
+                    self._respond(200, "application/json", json.dumps({"ok": True, "id": sid, "delivered": n}))
+                else:
+                    self._respond(400, "application/json", json.dumps({"ok": False, "error": "need id+text"}))
             elif self.path == "/api/chat_hold":
                 # Listening hold — focusing the chat box quiets the loop. Best-effort,
                 # never 500s; token-gated if a token is configured.

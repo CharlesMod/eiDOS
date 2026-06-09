@@ -90,7 +90,7 @@ To discover devices on the LAN, run `arp -a` FIRST — it lists every IP/MAC nei
 category = "procedures"
 tags = ["tts", "voice", "speak"]
 content = '''
-To speak aloud (GLaDOS voice): POST to http://127.0.0.1:8005/v1/audio/speech (the FX proxy) with JSON body whose model is chatterbox, input is your text, voice is glados.wav, and response_format is wav — it returns audio/wav bytes. The path MUST be /v1/audio/speech (root gives 405); voice MUST be glados.wav not glados (else 404); format MUST be wav not mp3 (else 500). Call manual with topic tts for the full recipe, and capture it as a reusable 'speak' skill (with a 30s timeout).
+To speak ALOUD in your GLaDOS voice, use the built-in `speak` tool: speak with text set to what you want to say. It returns INSTANTLY (it hands the text to the dashboard, which streams your voice to wherever Boss has it open). You do NOT generate audio, wait, or handle playback. Keep each utterance to about ONE sentence (generation shares the GPU with your mind; short lines are fastest). NEVER build your own 'speak'/'speak_glados'/TTS skill and never POST to the TTS server yourself — that recreates the slow path you are avoiding. `speak` IS your voice. If it reports the voice system was briefly unreachable, that's fine — move on, do not reinvent it. (Distinct from <reply>, which is silent text chat.)
 '''
 
 [[nugget]]
