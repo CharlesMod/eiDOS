@@ -56,49 +56,6 @@ def write_plan(config: Config, content: str) -> None:
         raise
 
 
-def read_subgoals(config: Config) -> str:
-    """Read subgoals.md. Returns empty string if missing."""
-    try:
-        return config.subgoals_path.read_text().strip()
-    except FileNotFoundError:
-        return ""
-
-
-def write_subgoals(config: Config, content: str) -> None:
-    """Atomically write subgoals.md (temp file + rename)."""
-    config.workspace.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        dir=str(config.workspace),
-        prefix=".subgoals_",
-        suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
-        replace_with_retry(tmp_path, str(config.subgoals_path))
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-import re
-from typing import Optional
-
-def current_subtask(config: Config) -> Optional[str]:
-    """Return the first unchecked subtask from subgoals.md, or None."""
-    text = read_subgoals(config)
-    if not text:
-        return None
-    for line in text.splitlines():
-        if re.match(r"^\s*-\s*\[ \]", line):
-            return re.sub(r"^\s*-\s*\[ \]\s*", "", line)
-    return None
-
-
-# --- Living self-guide (Dean-owned standing directives; eiDOS may PROPOSE) ---
 
 def read_self_guide(config: Config) -> str:
     """Read self_guide.md — the operator-owned standing directives injected each tick.

@@ -67,8 +67,6 @@ class Config:
     ])
 
     # Self-healing
-    llm_restart_cmd: str = ""       # e.g. "systemctl restart llama-server"
-    llm_local_only: bool = False     # production: True — restart always means local llama-server
     llm_max_consecutive_failures: int = 5
 
     # Adaptive token management — for thinking models that may exhaust budget
@@ -125,10 +123,6 @@ class Config:
     embedding_model_dir: str = "models/all-MiniLM-L6-v2"
 
     # Planning model (hot-swap for subgoal generation)
-    planning_model_path: str = "/home/ei/models/qwen3.5-4b-q4.gguf"
-    planning_context_size: int = 4096
-    planning_reasoning_budget: int = 512
-    planning_max_tokens: int = 512
 
     # Mock mode
     mock_mode: bool = False
@@ -162,10 +156,6 @@ class Config:
     @property
     def plan_path(self) -> Path:
         return self.workspace / "plan.md"
-
-    @property
-    def subgoals_path(self) -> Path:
-        return self.workspace / "subgoals.md"
 
     @property
     def observations_path(self) -> Path:
@@ -273,8 +263,6 @@ def load_config(path: str = "config.toml") -> Config:
             config.protected_patterns = safety["protected_patterns"]
 
         healing = data.get("self_healing", {})
-        config.llm_restart_cmd = healing.get("restart_cmd", config.llm_restart_cmd)
-        config.llm_local_only = healing.get("local_only", config.llm_local_only)
         config.llm_max_consecutive_failures = healing.get(
             "max_consecutive_failures", config.llm_max_consecutive_failures)
         config.llm_max_tokens_ceiling = healing.get(
@@ -334,7 +322,6 @@ def load_config(path: str = "config.toml") -> Config:
         config.self_edit_max_proposal_bytes = si.get("self_edit_max_proposal_bytes", config.self_edit_max_proposal_bytes)
         config.self_edit_health_probe_s = si.get("self_edit_health_probe_s", config.self_edit_health_probe_s)
 
-        planning = data.get("planning", {})
         config.planning_model_path = planning.get("model_path", config.planning_model_path)
         config.planning_context_size = planning.get("context_size", config.planning_context_size)
         config.planning_reasoning_budget = planning.get("reasoning_budget", config.planning_reasoning_budget)

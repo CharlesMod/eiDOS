@@ -904,45 +904,6 @@ def tool_ask_supervisor(args: dict, config: Config) -> ToolResult:
     )
 
 
-def tool_plan_goal(args: dict, config: Config) -> ToolResult:
-    """Break a goal into subgoals using the planning model (hot-swap to larger model)."""
-    from llm import planning_complete, LLMError
-    from memory import read_subgoals, write_subgoals
-    from prompts import PLANNING_SYSTEM, PLANNING_USER
-
-    goal = args.get("goal", "")
-    if not goal:
-        return ToolResult(output="Error: 'goal' required", full_output_path=None, success=False, duration_s=0)
-
-    context = args.get("context", "")
-    start = time.monotonic()
-
-    messages = [
-        {"role": "system", "content": PLANNING_SYSTEM},
-        {"role": "user", "content": PLANNING_USER.format(goal=goal, context=context)},
-    ]
-
-    try:
-        result = planning_complete(messages, config)
-    except LLMError as e:
-        return ToolResult(
-            output=f"Planning model error: {e}",
-            full_output_path=None, success=False,
-            duration_s=time.monotonic() - start,
-        )
-
-    # Write to subgoals.md (replaces existing)
-    write_subgoals(config, result.strip())
-
-    elapsed = time.monotonic() - start
-    return ToolResult(
-        output=f"Subgoals generated and saved ({len(result)} chars, {elapsed:.0f}s):\n{result[:500]}",
-        full_output_path=None, success=True,
-        duration_s=elapsed,
-    )
-
-
-# --- Jobs ledger helpers ---
 
 def _pid_alive(pid: int) -> bool:
     """Cross-platform check whether a process id is currently running."""
@@ -1732,7 +1693,6 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "recall": tool_recall,
     "goal_complete": tool_goal_complete,
     "ask_supervisor": tool_ask_supervisor,
-    "plan_goal": tool_plan_goal,
     "create_skill": tool_create_skill,
     "edit_skill": tool_edit_skill,
     "list_skills": tool_list_skills,
@@ -1838,7 +1798,7 @@ def execute_tool(call: ToolCall, config: Config) -> ToolResult:
     try:
         # Self-authored skills are time-bounded: they run in the tick with no internal cap, so a hung
         # one would freeze the loop. Built-in tools are already bounded (bash auto-backgrounds, the net
-        # primitives self-time-out, plan_goal is a deliberate LLM hot-swap) — run them directly.
+        # primitives self-time-out) — run them directly.
         if call.tool not in _BUILTIN_TOOL_NAMES:
             timeout_s = float(getattr(config, "skill_watchdog_s", _SKILL_WATCHDOG_DEFAULT_S)
                               or _SKILL_WATCHDOG_DEFAULT_S)

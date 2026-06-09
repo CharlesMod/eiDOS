@@ -306,34 +306,6 @@ class TestMemory(unittest.TestCase):
         tmp_files = list(Path(self.config.workspace_dir).glob(".plan_*"))
         self.assertEqual(len(tmp_files), 0)
 
-    # --- Subgoals (subgoals.md) tests ---
-
-    def test_read_subgoals_missing(self):
-        from memory import read_subgoals
-        self.assertEqual(read_subgoals(self.config), "")
-
-    def test_write_read_subgoals(self):
-        from memory import read_subgoals, write_subgoals
-        content = "Goal: Learn Python\nDone when: can write a web app\n\n- [ ] Install Python\n- [ ] Write hello world"
-        write_subgoals(self.config, content)
-        self.assertEqual(read_subgoals(self.config), content)
-
-    def test_subgoals_path(self):
-        self.assertTrue(str(self.config.subgoals_path).endswith("subgoals.md"))
-
-    def test_subgoals_separate_from_plan(self):
-        from memory import read_subgoals, write_subgoals
-        write_plan(self.config, "plan text")
-        write_subgoals(self.config, "subgoals text")
-        self.assertEqual(read_plan(self.config), "plan text")
-        self.assertEqual(read_subgoals(self.config), "subgoals text")
-
-    def test_write_subgoals_atomic(self):
-        from memory import write_subgoals
-        write_subgoals(self.config, "subgoals content")
-        tmp_files = list(Path(self.config.workspace_dir).glob(".subgoals_*"))
-        self.assertEqual(len(tmp_files), 0)
-
 
 if __name__ == "__main__":
     unittest.main()

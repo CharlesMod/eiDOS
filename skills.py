@@ -40,7 +40,7 @@ MANIFEST_NAME = "_index.json"
 RESERVED_NAMES = {
     "bash", "write_file", "read_file", "bg_run", "bg_check", "http_get",
     "remember", "update_plan", "memorize", "recall", "goal_complete",
-    "ask_supervisor", "plan_goal",
+    "ask_supervisor",
     "create_skill", "edit_skill", "list_skills", "rollback_skill",
 }
 

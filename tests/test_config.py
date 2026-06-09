@@ -57,7 +57,6 @@ class TestConfig(unittest.TestCase):
 
     def test_self_healing_defaults(self):
         config = Config()
-        self.assertEqual(config.llm_restart_cmd, "")
         self.assertEqual(config.llm_max_consecutive_failures, 5)
 
     def test_adaptive_token_defaults(self):

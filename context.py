@@ -18,7 +18,7 @@ from collections import Counter
 from pathlib import Path
 
 from config import Config
-from memory import read_goal, read_memory, read_plan, read_subgoals, read_recent_observations, read_interventions, current_subtask, read_recent_thoughts, read_self_guide
+from memory import read_goal, read_memory, read_plan, read_recent_observations, read_interventions, read_recent_thoughts, read_self_guide
 from env_snapshot import generate as generate_env_snapshot
 from env_snapshot import generate_alerts as generate_env_alerts
 from prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_BRIEFING, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED
@@ -262,13 +262,12 @@ def _build_relevant_recall(config: Config, exclude_ids: set) -> str:
         from knowledge import search_bm25, format_recalled
     except ImportError:
         return ""
-    step = (current_subtask(config) or "").strip()
-    if not step:
-        for line in (read_plan(config) or "").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                step = line
-                break
+    step = ""
+    for line in (read_plan(config) or "").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            step = line
+            break
     if not step:
         return ""
     results = [r for r in search_bm25(config, step, top_k=config.knowledge_recall_top_k)
@@ -476,14 +475,6 @@ def _assemble_legacy(
         sections.append(f"## Goal\n{goal}")
     else:
         sections.append("## Goal\n(No goal set. Waiting for goal.md to be created.)")
-
-    # Subgoals
-    subgoals = read_subgoals(config)
-    if subgoals:
-        if len(subgoals) > config.context_subgoals_max_chars:
-            _log_overrun(config, tick_number, "subgoals", len(subgoals), config.context_subgoals_max_chars)
-            subgoals = _truncate(subgoals, config.context_subgoals_max_chars, "subgoals")
-        sections.append(f"## Subgoals\n{subgoals}")
 
     # 3. Memory — budget-capped
     memory = read_memory(config)

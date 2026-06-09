@@ -12,7 +12,6 @@ Available tools (prefer specialised tools over bash when one fits):
 - write_file: Write content to a file. Args: {{"path": "...", "content": "..."}}  ← USE THIS for file writing, not bash
 - remember: Write an urgent note to working memory. Args: {{"note": "..."}}
 - update_plan: Update your plan/checklist. Args: {{"note": "..."}}
-- plan_goal: Break a goal into subgoals using the planning model. Args: {{"goal": "...", "context": "..."}}
 - bash: Run a shell command. Args: {{"cmd": "..."}}  ← only when no other tool applies
 - bg_run: Start a background job. Args: {{"cmd": "...", "name": "..."}}
 - bg_check: Check a background job. Args: {{"name": "..."}}
@@ -349,41 +348,3 @@ COMPACTION_COMBINED_USER = """\
 Produce the updated plan and extract knowledge now."""
 
 # ---------------------------------------------------------------------------
-# Subgoal planning prompt (used by plan_goal tool with larger model)
-# ---------------------------------------------------------------------------
-
-PLANNING_SYSTEM = """\
-You are a planning assistant for an autonomous agent named eiDOS running on a Raspberry Pi.
-The agent has just received a new goal. Your job is to break it into concrete, actionable subgoals.
-
-For each subgoal, provide:
-- A checkbox line: - [ ] description
-- A measurable end criterion in parentheses
-
-Also state the overall completion criterion at the top.
-
-Rules:
-- 3-7 subgoals (keep it focused)
-- Each subgoal should be independently verifiable
-- Order them logically (dependencies first)
-- Include a final "verify & report" subgoal
-- Stay under 1200 characters total
-
-Output format:
-Goal: (restate the goal in one line)
-Done when: (measurable completion criterion)
-
-- [ ] Subgoal 1 (done when: criterion)
-- [ ] Subgoal 2 (done when: criterion)
-...
-
-Output ONLY the subgoal list. No preamble, no explanation."""
-
-PLANNING_USER = """\
-## Goal
-{goal}
-
-## Context
-{context}
-
-Break this goal into subgoals now."""

@@ -473,18 +473,6 @@ class TestBriefingModel(unittest.TestCase):
         tick_msg = messages[2]["content"]
         self.assertIn("repeated the same action", tick_msg.lower())
 
-    def test_subgoals_section_shown(self):
-        from memory import write_subgoals
-        write_subgoals(self.config, "- [ ] Step 1\n- [ ] Step 2")
-        messages = self._assemble()
-        content = messages[1]["content"]
-        self.assertIn("## Subgoals", content)
-        self.assertIn("- [ ] Step 1", content)
-
-    def test_no_subgoals_no_section(self):
-        messages = self._assemble()
-        content = messages[1]["content"]
-        self.assertNotIn("## Subgoals", content)
 
 
 # -------------------------------------------------------------------

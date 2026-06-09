@@ -16,7 +16,7 @@ from tools import (
     execute_tool, tool_bash, tool_write_file, tool_read_file,
     tool_bg_run, tool_bg_check, tool_http_get,
     tool_remember, tool_update_plan, tool_memorize, tool_recall,
-    tool_goal_complete, tool_ask_supervisor, tool_plan_goal,
+    tool_goal_complete, tool_ask_supervisor,
     refresh_jobs, _read_jobs, _write_jobs, ToolResult,
 )
 
@@ -454,39 +454,6 @@ class TestTools(unittest.TestCase):
         self.assertIn("update_plan", TOOLS)
         self.assertIn("memorize", TOOLS)
         self.assertIn("recall", TOOLS)
-        self.assertIn("plan_goal", TOOLS)
-
-    # --- plan_goal ---
-
-    def test_plan_goal_missing_goal(self):
-        result = tool_plan_goal({}, self.config)
-        self.assertFalse(result.success)
-        self.assertIn("'goal' required", result.output)
-
-    @patch("llm.planning_complete")
-    def test_plan_goal_writes_subgoals(self, mock_planning):
-        mock_planning.return_value = "Goal: Test\nDone when: tests pass\n\n- [ ] Write tests\n- [ ] Run tests"
-        result = tool_plan_goal({"goal": "Test the app", "context": "Python project"}, self.config)
-        self.assertTrue(result.success)
-        self.assertIn("Subgoals generated", result.output)
-        # Verify subgoals.md was written
-        from memory import read_subgoals
-        subgoals = read_subgoals(self.config)
-        self.assertIn("- [ ] Write tests", subgoals)
-
-    @patch("llm.planning_complete")
-    def test_plan_goal_handles_llm_error(self, mock_planning):
-        from llm import LLMError
-        mock_planning.side_effect = LLMError("connection failed")
-        result = tool_plan_goal({"goal": "Test"}, self.config)
-        self.assertFalse(result.success)
-        self.assertIn("Planning model error", result.output)
-
-    def test_plan_goal_via_dispatch(self):
-        call = ToolCall(tool="plan_goal", args={"goal": "test"}, raw="")
-        with patch("llm.planning_complete", return_value="- [ ] Step 1"):
-            result = execute_tool(call, self.config)
-        self.assertTrue(result.success)
 
 
 class TestSkillWatchdog(unittest.TestCase):

@@ -489,7 +489,6 @@ def build_status(config: Config) -> dict:
     goal = _read_text(config.workspace / "goal.md")
     memory = _read_text(config.workspace / "memory.md")
     plan = _read_text(config.workspace / "plan.md")[:2000]
-    subgoals = _read_text(config.workspace / "subgoals.md")[:2000]
     observations = _tail_jsonl(config.workspace / "observations.jsonl", 20)
     paused = (config.workspace / "paused").exists()
     flavor = _read_json(config.workspace / "flavor.json")
@@ -530,7 +529,6 @@ def build_status(config: Config) -> dict:
         "creature": creature,
         "goal": goal[:500],
         "plan": plan,
-        "subgoals": subgoals,
         "memory": memory[:3000],
         "observations": observations,
         "narration": narration,
@@ -1714,26 +1712,15 @@ function updatePlan(data) {
     let el = document.getElementById('plan-progress');
     let meterEl = document.getElementById('plan-meter');
     if (!el) return;
-    let subgoals = data.subgoals || '';
     let plan = data.plan || '';
-    let source = subgoals || plan;
-    if (!source) {
+    if (!plan) {
         el.innerHTML = '<span style="color:#333;">No plan yet.</span>';
         if (meterEl) meterEl.textContent = '';
         return;
     }
 
     let parts = [];
-
-    // Render subgoals first if present
-    if (subgoals) {
-        parts.push(_renderChecklist(subgoals, 'Subgoals'));
-    }
-
-    // Render plan below
-    if (plan) {
-        parts.push(_renderChecklist(plan, subgoals ? 'Working Plan' : ''));
-    }
+    parts.push(_renderChecklist(plan, ''));
 
     // Combine meter counts
     let totalChecked = 0, totalItems = 0;

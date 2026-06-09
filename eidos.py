@@ -27,7 +27,6 @@ from memory import (
     append_observation,
     append_thought,
     read_goal,
-    read_subgoals,
     validate_observations,
     write_memory,
 )
@@ -532,7 +531,6 @@ def run_loop(config: Config, persona=None, wal=None):
         import hashlib
         goal_hash = hashlib.md5(goal.encode()).hexdigest()
         goal_changed = last_goal_hash is not None and goal_hash != last_goal_hash
-        fresh_goal = last_goal_hash is None and not read_subgoals(config)
         if goal_changed:
             goal_start_time = time.time()
         last_goal_hash = goal_hash
@@ -574,40 +572,6 @@ def run_loop(config: Config, persona=None, wal=None):
                 "output": f"RAM pressure ({ram_pct:.0f}%), killed {killed} child process(es)",
             })
             print(f"{pfx} RAM pressure: {ram_pct:.0f}%, killed children")
-
-        # --- Auto-plan on fresh/changed goal (call plan_goal directly) ---
-        # OFF by default: auto-decomposition drifted into platform-contradicting subgoals (e.g.
-        # "build a chat listener", "build a memory database") that became the most-salient — and
-        # wrong — "current task" every tick. The single source of objective is now goal.md's
-        # Immediate focus + the agent's own update_plan, surfaced as one "## Current focus" block.
-        if (goal_changed or fresh_goal) and getattr(config, "auto_subgoals", False):
-            label = "NEW GOAL DETECTED" if goal_changed else "FRESH GOAL — no subgoals exist"
-            print(f"{pfx} {label} — auto-generating subgoals")
-            write_activity(config, "planning", detail="breaking goal into subgoals")
-            try:
-                from tools import tool_plan_goal
-                plan_result = tool_plan_goal(
-                    {"goal": goal[:500], "context": "auto-plan on fresh goal"},
-                    config,
-                )
-                append_observation(config, {
-                    "tick": tick_number,
-                    "tool": "plan_goal",
-                    "success": plan_result.success,
-                    "output": plan_result.output[:500],
-                })
-                if plan_result.success:
-                    print(f"{pfx} Subgoals generated ({plan_result.duration_s:.0f}s)")
-                else:
-                    print(f"{pfx} Auto-plan failed: {plan_result.output[:100]}")
-            except Exception as e:
-                print(f"{pfx} Auto-plan error: {e}")
-                append_observation(config, {
-                    "tick": tick_number,
-                    "tool": "plan_goal",
-                    "success": False,
-                    "output": f"Auto-plan failed: {e}",
-                })
 
         # --- Loop detection ---
         loop_detected = False
