@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -1132,6 +1133,17 @@ def tool_create_skill(args: dict, config: Config) -> ToolResult:
         if re.search(r"socket\.|TcpClient|create_connection|urllib|http", code) and "import" in code:
             nudge += ("\n➤ Prefer COMPOSING the built-in primitives (net_scan, tcp_probe, http_probe, "
                       "udp_listen) over re-writing raw socket/HTTP code — they're parameterized and tested.")
+        # Timeout hygiene: a skill that does network/socket/subprocess I/O with NO explicit timeout can
+        # wedge the tick (tick 342 froze the loop ~6.7 min). The execute_tool watchdog is the hard
+        # backstop; this nudge gets the skill fixed at the source so it never trips the watchdog.
+        if re.search(r"requests\.(get|post|put|delete|head|patch|request)\s*\(|\.urlopen\s*\(|"
+                     r"create_connection\s*\(|subprocess\.(run|call|check_output|Popen)\s*\(|"
+                     r"\.connect\s*\(", code) and "timeout" not in code:
+            nudge += ("\n⏱ This skill makes a network/socket/subprocess call with NO timeout — that can "
+                      "freeze the whole tick loop if the peer stalls (it has, for ~6.7 min). Pass an "
+                      "explicit timeout to EVERY such call (e.g. requests.get(url, timeout=5), "
+                      "socket.create_connection(addr, timeout=5), subprocess.run(..., timeout=10)). "
+                      "A skill that overruns ~30s is killed by the watchdog and returns a failure.")
         return ToolResult(
             output=(f"{msg}\n➤ You now HAVE a reusable tool '{name}'. CALL it as a TOOL — "
                     f"<tool>{name}</tool> with <args>{{...}}</args> — NOT via bash, and don't re-derive "
@@ -1379,6 +1391,95 @@ def tool_udp_listen(args: dict, config: Config) -> ToolResult:
                       full_output_path=None, success=True, duration_s=time.monotonic() - t)
 
 
+def tool_ask_ai(args: dict, config: Config) -> ToolResult:
+    """Use your own model as a one-shot REASONING SUBROUTINE — separate from your tick loop. Hand it a
+    bounded job (summarize a big CPU-worker output, analyze scan results, draft a script, answer a
+    knowledge question) and get the answer back as text, WITHOUT spending your tick context on it.
+    This is how you 'think hard' about a chunk of data: background the work, then ask_ai to digest it."""
+    import llm
+    prompt = (args.get("prompt") or args.get("question") or args.get("task") or args.get("text") or "").strip()
+    if not prompt:
+        return ToolResult(output="Error: provide 'prompt' — the question/task for your AI to work on "
+                          "(optionally 'system' to steer it, 'max_tokens' to size the answer).",
+                          full_output_path=None, success=False, duration_s=0)
+    system = (args.get("system") or
+              "You are eiDOS's private reasoning subroutine. Answer the request directly, concisely, and "
+              "factually. When given data to analyze or summarize, extract the concrete specifics that "
+              "matter (IPs, ports, names, numbers, errors) — no preamble.").strip()
+    try:
+        mt = int(args.get("max_tokens", 800))
+    except Exception:  # noqa: BLE001
+        mt = 800
+    mt = max(64, min(mt, 2048))
+    try:
+        out = llm.complete([{"role": "system", "content": system},
+                            {"role": "user", "content": prompt}],
+                           config, temperature=0.3, max_tokens=mt)
+    except Exception as e:  # noqa: BLE001 - includes LLMError / ReasoningExhausted
+        return ToolResult(output=f"ask_ai failed: {type(e).__name__}: {e}",
+                          full_output_path=None, success=False, duration_s=0)
+    return ToolResult(output=(out or "").strip() or "(the model returned no answer)",
+                      full_output_path=None, success=True, duration_s=0)
+
+
+def tool_vision(args: dict, config: Config) -> ToolResult:
+    """SEE an image. Send a picture (a camera snapshot you saved, a local file, or an http URL) to your
+    vision-capable model and get back a description or an answer to a question about it. Use this whenever
+    a task needs EYES — what's on a camera, what a screenshot shows, reading a label. Pass 'image' (path
+    or URL) and optionally 'question'."""
+    import llm, base64, os, urllib.request
+    src = (args.get("image") or args.get("url") or args.get("path") or args.get("file") or "").strip()
+    question = (args.get("question") or args.get("prompt") or
+                "Describe what you see in detail. Note anything notable, any text, and the overall scene.").strip()
+    if not src:
+        return ToolResult(output="Error: provide 'image' — a local path (e.g. a snapshot you saved) or an "
+                          "http(s) URL. Optionally 'question' to ask something specific about it.",
+                          full_output_path=None, success=False, duration_s=0)
+    try:
+        if src.startswith(("http://", "https://")):
+            req = urllib.request.Request(src, headers={"User-Agent": "eiDOS"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                raw = r.read()
+        else:
+            p = src
+            if not os.path.isabs(p):
+                cand = config.workspace / p
+                if cand.exists():
+                    p = str(cand)
+            with open(p, "rb") as f:
+                raw = f.read()
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(output=f"vision: could not load image '{src}': {type(e).__name__}: {e}",
+                          full_output_path=None, success=False, duration_s=0)
+    if not raw:
+        return ToolResult(output=f"vision: image '{src}' was empty.",
+                          full_output_path=None, success=False, duration_s=0)
+    if len(raw) > 8 * 1024 * 1024:
+        return ToolResult(output=f"vision: image is {len(raw)//1024}KB (>8MB cap); resize/downscale it first.",
+                          full_output_path=None, success=False, duration_s=0)
+    # Sniff the MIME from magic bytes (jpeg/png/gif/webp); default to jpeg.
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        mime = "image/png"
+    elif raw[:3] == b"GIF":
+        mime = "image/gif"
+    elif raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        mime = "image/webp"
+    else:
+        mime = "image/jpeg"
+    data_uri = f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": question},
+        {"type": "image_url", "image_url": {"url": data_uri}},
+    ]}]
+    try:
+        out = llm.complete(messages, config, temperature=0.2, max_tokens=512)
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(output=f"vision call failed (model may not be vision-enabled right now): "
+                          f"{type(e).__name__}: {e}", full_output_path=None, success=False, duration_s=0)
+    return ToolResult(output=(out or "").strip() or "(the model returned no description)",
+                      full_output_path=None, success=True, duration_s=0)
+
+
 # --- Tool registry ---
 
 def _obj_tick(config: Config) -> int:
@@ -1497,6 +1598,10 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "note_read": tool_note_read,
     "note_list": tool_note_list,
     "note_close": tool_note_close,
+    # Innate cognition — your own model as callable subroutines (think hard / see images)
+    "ask_ai": tool_ask_ai,        # one-shot reasoning subroutine (digest data, draft, analyze)
+    "vision": tool_vision,        # SEE an image (camera snapshot / file / URL)
+    "see": tool_vision,           # alias
     # Objective backlog — your open commitments; the gate rotates focus among them automatically
     "objective_add": tool_objective_add,
     "objective_done": tool_objective_done,
@@ -1510,9 +1615,67 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
 }
 
 
+# Built-in tool names, snapshotted at import time — BEFORE any self-authored skill is hot-loaded into
+# TOOLS (skills.py adds them at runtime via TOOLS[name] = runner). Anything dispatched whose name is
+# NOT in this set is therefore a skill, and gets the wall-clock watchdog below.
+_BUILTIN_TOOL_NAMES = frozenset(TOOLS)
+
+# Wall-clock cap for a single self-authored skill call. A skill runs SYNCHRONOUSLY in the tick and has
+# no internal timeout, so a blocking network/socket/subprocess call with no timeout wedges the whole
+# loop (tick 342: a camera_snapshot skill held a connection to 192.168.86.63 and froze the loop ~6.7
+# min, missing an operator message). llm.request_timeout_s does NOT cover skill execution — only the
+# LLM call. This is a backstop, not a target latency (doctrine: even 45s foreground is too long — a
+# real skill should answer in seconds or background its work). Overridable via config.skill_watchdog_s.
+_SKILL_WATCHDOG_DEFAULT_S = 30.0
+
+
+def _run_skill_under_watchdog(call: ToolCall, handler: Callable, config: Config,
+                              timeout_s: float) -> ToolResult:
+    """Run a skill handler in a daemon thread bounded by a wall-clock timeout.
+
+    On overrun we ABANDON the thread (Python can't force-kill one) and return a failed ToolResult so
+    the tick loop keeps moving — the never-block-on-a-tool principle. The orphaned thread dies when its
+    call finally returns/errors, or when eidos restarts (reap_jobs/process exit). The skill's own work
+    (files, etc.) is unaffected; only the loop is freed.
+    """
+    box: dict = {}
+
+    def _target():
+        t = time.monotonic()
+        try:
+            box["res"] = handler(call.args, config)
+        except Exception as e:  # noqa: BLE001 - mirror execute_tool's last-resort guard
+            box["res"] = ToolResult(
+                output=f"Tool '{call.tool}' raised {type(e).__name__}: {e}",
+                full_output_path=None, success=False, duration_s=time.monotonic() - t)
+
+    th = threading.Thread(target=_target, name=f"skill-{call.tool}", daemon=True)
+    start = time.monotonic()
+    th.start()
+    th.join(timeout_s)
+    if th.is_alive():
+        return ToolResult(
+            output=(
+                f"WATCHDOG: skill '{call.tool}' ran past {timeout_s:.0f}s and was ABANDONED so the tick "
+                f"loop is NOT blocked (tick 342: a skill's timeout-less network call froze the loop ~6.7 "
+                f"min). Its call is still running detached and will be cleaned up on the next eidos "
+                f"restart. FIX THE SKILL with edit_skill: put an explicit timeout on EVERY network / HTTP "
+                f"/ socket / subprocess call — e.g. requests.get(url, timeout=5), "
+                f"socket.create_connection(addr, timeout=5), subprocess.run(..., timeout=10) — or compose "
+                f"the built-in bounded primitives (tcp_probe / http_probe / net_scan / udp_listen). For "
+                f"genuinely long work, dispatch it with bash/bg_run instead of doing it inline."),
+            full_output_path=None, success=False, duration_s=time.monotonic() - start)
+    res = box.get("res")
+    if not isinstance(res, ToolResult):
+        return ToolResult(output=f"Tool '{call.tool}' produced no result.",
+                          full_output_path=None, success=False, duration_s=time.monotonic() - start)
+    return res
+
+
 def execute_tool(call: ToolCall, config: Config) -> ToolResult:
     """Look up and execute a tool by name. Never raises — a broken tool/skill
-    returns a failed ToolResult instead of crashing the tick loop."""
+    returns a failed ToolResult instead of crashing the tick loop — and never blocks the tick loop
+    longer than the skill watchdog (self-authored skills only; built-ins are bounded/trusted)."""
     handler = TOOLS.get(call.tool)
     if not handler:
         return ToolResult(
@@ -1522,6 +1685,13 @@ def execute_tool(call: ToolCall, config: Config) -> ToolResult:
             duration_s=0,
         )
     try:
+        # Self-authored skills are time-bounded: they run in the tick with no internal cap, so a hung
+        # one would freeze the loop. Built-in tools are already bounded (bash auto-backgrounds, the net
+        # primitives self-time-out, plan_goal is a deliberate LLM hot-swap) — run them directly.
+        if call.tool not in _BUILTIN_TOOL_NAMES:
+            timeout_s = float(getattr(config, "skill_watchdog_s", _SKILL_WATCHDOG_DEFAULT_S)
+                              or _SKILL_WATCHDOG_DEFAULT_S)
+            return _run_skill_under_watchdog(call, handler, config, timeout_s)
         return handler(call.args, config)
     except Exception as e:  # noqa: BLE001 - last-resort guard around all tools/skills
         return ToolResult(

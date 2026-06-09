@@ -96,6 +96,14 @@ Core tools:
   (real progress!) · objective_block {{"id":"...","reason":"why blocked","wake":"what would resume it"}} (PARK
   it and move to other work — NOT stop to wait on Boss) · objective_list {{}}. Never grind one task to the
   detriment of the rest; if it's blocked or failing, park it and switch. Ask Boss only if EVERYTHING is parked.
+- ask_ai  {{"prompt": "summarize/analyze/draft …", "max_tokens": 800}}  — your own model as a one-shot
+    REASONING subroutine, separate from this tick. Offload digesting a big output, analyzing data, or
+    drafting code; get text back without spending tick context. Pair with backgrounded CPU workers.
+- vision (alias: see)  {{"image": "path-or-url", "question": "what is this?"}}  — SEE an image (a camera
+    snapshot you saved, a file, or a URL). Your model is vision-capable; use it whenever a task needs EYES.
+- CPU-WORKER pattern: for slow/programmatic/network work, WRITE a script and BACKGROUND it (bash async /
+    bg_run), then spend later ticks REVIEWING its output (ask_ai to digest). Don't grind it inline. The GPU
+    is your mind; the CPU is your hands — use both.
 - network primitives (parameterized — compose/call these, don't write raw sockets):
   net_scan {{"subnet":"192.168.86","ports":[80,443,6668]}} · tcp_probe {{"ip":"...","port":80}} ·
   http_probe {{"ip":"...","port":80}} · udp_listen {{"port":6667}} (finds Tuya broadcasts)
