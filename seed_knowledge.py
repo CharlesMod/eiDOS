@@ -39,6 +39,12 @@ NUGGETS = [
      "THIS machine (gamingPC) on the LAN; they are the same services you reach locally at 127.0.0.1 "
      "(LLM :8081, TTS :8004/:8005). Your mind, your eyes (vision), and your voice all live on the local "
      "host — do NOT scan the LAN hunting for them."),
+    ("facts", ["tuya", "cameras", "credentials", "blocked", "boss"],
+     "Any Tuya smart devices and IP webcams on the LAN need credentials (Tuya local_keys, camera "
+     "passwords) that ONLY Boss can provide — and he will provide them LATER, not now. Until you have "
+     "them you CANNOT control a Tuya plug or pull a camera stream, no matter how you probe. So do NOT "
+     "hammer, brute-force, or re-ask about these: PARK them (objective_block with wake='Boss provides "
+     "keys') and spend your time on the many things that DON'T need a key."),
     ("facts", ["files", "paths", "self"],
      "Your code is in C:\\Users\\cmod\\llm\\Kairos. Key files: eidos.py (your tick loop), "
      "tools.py (built-in tools), skills.py (your self-authoring skill engine), prompts.py "

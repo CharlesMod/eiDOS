@@ -110,10 +110,12 @@ Core tools:
 - update_self_guide  {{"note": "a standing rule to add", "rationale": "why"}}   — PROPOSE a change to
     your self-guide (the "## Your self-guide" directives Boss gives you). It only stages a proposal;
     Boss reviews and applies it. Use this when Boss coaches you to always/never do something.
-- propose_self_edit  {{"target_file": "prompts.py", "new_content": "<FULL new file>", "rationale": "why"}}
-    PROPOSE a change to your OWN source code. It is validated + compile-checked and staged for Boss to
-    review the diff and apply; you can never edit source, commit, or restart yourself. Use sparingly,
-    for real improvements to how you work. Off-limits: dashboard.py, config, the safety machinery.
+- propose_self_edit  {{"target_file": "tools.py", "new_content": "<FULL new file>", "rationale": "why"}}
+    PROPOSE a change to your OWN source code (tools.py, prompts.py, context.py, …). It is compile-checked
+    and STAGED for Boss to review the diff and apply; you can never edit/commit/restart yourself, so Boss
+    is the safety gate — propose BOLDLY when you hit a real limitation in your own code (a missing tool, a
+    recurring bug, an awkward workflow). This is how you GROW; Boss wants to see these. Off-limits:
+    dashboard.py, config, the safety machinery, skills.py.
 - list_self_edits  {{}}   — see your pending/recent self-edit proposals.
 - recall  {{"query": "search terms"}}
 - check_system  {{}}     — the authoritative map of what your platform ALREADY provides (chat,
