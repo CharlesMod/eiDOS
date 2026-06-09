@@ -141,6 +141,25 @@ def _write_chat_reply(config: Config, tick_number: int, reply_text: str):
         f.write(entry + "\n")
 
 
+def _auto_speak(config: Config, text: str) -> None:
+    """Voice an outgoing chat reply through the dashboard so Boss HEARS every response — the voice is
+    first-class, not opt-in. Best-effort and short-only (long replies stay text; the GPU is shared, so a
+    paragraph of TTS would lag). Also the backstop: if the model hedges with text instead of calling
+    `speak`, this speaks it anyway."""
+    t = (text or "").strip()
+    if not t or len(t) > 320:
+        return
+    try:
+        import urllib.request as _u
+        sid = str(int(time.time() * 1000))
+        req = _u.Request("http://127.0.0.1:8099/api/speech/say",
+                         data=json.dumps({"id": sid, "text": t}).encode("utf-8"),
+                         headers={"Content-Type": "application/json"}, method="POST")
+        _u.urlopen(req, timeout=4).read()
+    except Exception:  # noqa: BLE001 - voice is best-effort; never disturb the tick
+        pass
+
+
 def _has_pending_interventions(config: Config) -> bool:
     """Check if any un-consumed intervention files exist."""
     idir = config.interventions_dir
@@ -834,6 +853,10 @@ def run_loop(config: Config, persona=None, wal=None):
 
         # --- Parse tool call ---
         call = parse_tool_call(response)
+        # Auto-speak: voice the reply so Boss HEARS every response (first-class voice + backstop for when
+        # the model hedges with text instead of calling `speak`). Skip if it already spoke this tick.
+        if reply_text and not (call and getattr(call, "tool", "") == "speak"):
+            _auto_speak(config, reply_text)
         if not call:
             if reply_text:
                 # Reply-only turn: no tool call needed — valid chat response

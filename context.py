@@ -360,15 +360,29 @@ def assemble_context(
 # ---------------------------------------------------------------------------
 
 def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
-                       repeat_count, max_ticks, boss_waiting=False, tension=0):
+                       repeat_count, max_ticks, boss_waiting=False, tension=0, boss_text=""):
     """Build the tick prompt message (shared by both modes)."""
     now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     elapsed = _format_elapsed(time.time() - goal_start_time)
-    boss_prefix = ("Boss just messaged you (see 'New since last tick' above). Reply with "
-                   "<reply>…</reply> THIS tick before any other work.\n\n") if boss_waiting else ""
-    # Replying to Boss is itself the circuit-breaker, so don't also stack the loop-detected variant
-    # (its "do not reply with only a thought" tail contradicts "reply to Boss").
+    boss_prefix = ""
     if boss_waiting:
+        # A Boss message is a HIGH-PRIORITY COMMAND, not a note to acknowledge. The old prompt funneled
+        # everything into a text <reply>; that's why "speak to me" produced typed text. If he wants to be
+        # HEARD, the action is a `speak` call — required, not optional.
+        bt = (boss_text or "").lower()
+        wants_voice = any(k in bt for k in (
+            "speak", "say ", "tts", "out loud", "aloud", "hear you", "hear me", "voice", "tell me out"))
+        if wants_voice:
+            boss_prefix = ("🔊 BOSS WANTS TO HEAR YOU (he said so in chat). THIS TICK you MUST call `speak` "
+                           "with what you want to say — a text-only <reply> does NOT satisfy this. You may "
+                           "ALSO <reply> the same words, but the spoken call is the point. One sentence. "
+                           "Do not narrate that you'll speak, do not test the pipeline — just speak.\n\n")
+        else:
+            boss_prefix = ("Boss just messaged you (see 'New since last tick') — this is a HIGH-PRIORITY "
+                           "COMMAND, not a note to acknowledge. DO what he asks THIS tick: <reply> to him AND "
+                           "take any action he requested (speak, run, build), then keep acting on it until "
+                           "it's actually done. Do NOT acknowledge and wander off to other work.\n\n")
+        # Replying to Boss is itself the circuit-breaker, so don't also stack the loop-detected variant.
         loop_detected = False
     # Park pressure at the decision point: `tension` is now the ACTIVE objective's frustration (0..FRUST_PARK).
     # Near the cap, warn that the gate is about to rotate — pivot or park it yourself NOW.
@@ -932,7 +946,8 @@ def _assemble_briefing(
     # 5. Tick prompt (branches to 'reply to Boss first' when a message just arrived)
     tick_msg = _build_tick_prompt(config, tick_number, goal_start_time,
                                   loop_detected, repeat_count, max_ticks,
-                                  boss_waiting=bool(interventions), tension=tension)
+                                  boss_waiting=bool(interventions), tension=tension,
+                                  boss_text=" ".join((i.get("content") or "") for i in (interventions or [])))
     messages.append({"role": "user", "content": tick_msg})
 
     # Hard-enforce total context ceiling
