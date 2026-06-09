@@ -1480,6 +1480,43 @@ def tool_vision(args: dict, config: Config) -> ToolResult:
                       full_output_path=None, success=True, duration_s=0)
 
 
+def tool_manual(args: dict, config: Config) -> ToolResult:
+    """Read your OPERATING MANUAL — tested how-to (exact endpoints, payloads, working examples) for your
+    big-lift features. Pass 'topic' (tts/vision/ask_ai/network/devices/cpu) for one section, or nothing
+    for the whole thing. READ THIS before reverse-engineering a feature — the recipes are verified, so
+    you skip the 405/404/500 dead-ends. e.g. manual {"topic":"tts"} before you try to speak."""
+    import re
+    from pathlib import Path
+    topic = (args.get("topic") or args.get("section") or args.get("query") or
+             args.get("feature") or "").strip().lower()
+    path = Path(__file__).resolve().parent / "OPERATING_MANUAL.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(output=f"manual unavailable: {e}", full_output_path=None, success=False, duration_s=0)
+    if not topic:
+        return ToolResult(output=text, full_output_path=None, success=True, duration_s=0)
+    syn = {"speak": "tts", "voice": "tts", "say": "tts", "audio": "tts",
+           "see": "vision", "image": "vision", "look": "vision",
+           "think": "ask_ai", "ai": "ask_ai", "reason": "ask_ai", "summarize": "ask_ai",
+           "scan": "network", "lan": "network", "discover": "network",
+           "device": "devices", "camera": "devices", "cameras": "devices", "tuya": "devices",
+           "plug": "devices", "printer": "devices", "octoprint": "devices",
+           "background": "cpu", "worker": "cpu", "script": "cpu", "bash": "cpu"}
+    want = syn.get(topic, topic)
+    sections = re.split(r"\n(?=## )", text)
+    for s in sections:
+        first = s.strip().splitlines()[0].lower() if s.strip() else ""
+        if first.startswith(f"## {want}"):
+            return ToolResult(output=s.strip(), full_output_path=None, success=True, duration_s=0)
+    for s in sections:  # fallback: keyword anywhere in a section
+        if want in s.lower():
+            return ToolResult(output=s.strip(), full_output_path=None, success=True, duration_s=0)
+    return ToolResult(output=f"No manual section matched '{topic}'. Topics: tts, vision, ask_ai, network, "
+                      f"devices, cpu. Call manual {{}} (no topic) for the whole manual.",
+                      full_output_path=None, success=True, duration_s=0)
+
+
 # --- Tool registry ---
 
 def _obj_tick(config: Config) -> int:
@@ -1598,6 +1635,8 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "note_read": tool_note_read,
     "note_list": tool_note_list,
     "note_close": tool_note_close,
+    # Operating manual — tested how-to (endpoints/payloads) for big-lift features; read before improvising
+    "manual": tool_manual,
     # Innate cognition — your own model as callable subroutines (think hard / see images)
     "ask_ai": tool_ask_ai,        # one-shot reasoning subroutine (digest data, draft, analyze)
     "vision": tool_vision,        # SEE an image (camera snapshot / file / URL)

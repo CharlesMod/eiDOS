@@ -96,6 +96,9 @@ Core tools:
   (real progress!) · objective_block {{"id":"...","reason":"why blocked","wake":"what would resume it"}} (PARK
   it and move to other work — NOT stop to wait on Boss) · objective_list {{}}. Never grind one task to the
   detriment of the rest; if it's blocked or failing, park it and switch. Ask Boss only if EVERYTHING is parked.
+- manual  {{"topic": "tts"}}  — your OPERATING MANUAL: tested how-to (exact endpoints/payloads/examples)
+    for big features (tts/vision/ask_ai/network/devices/cpu). READ IT before improvising — e.g. to speak,
+    `manual {{"topic":"tts"}}` first, so you skip the 405/404/500 dead-ends. The recipes are verified.
 - ask_ai  {{"prompt": "summarize/analyze/draft …", "max_tokens": 800}}  — your own model as a one-shot
     REASONING subroutine, separate from this tick. Offload digesting a big output, analyzing data, or
     drafting code; get text back without spending tick context. Pair with backgrounded CPU workers.

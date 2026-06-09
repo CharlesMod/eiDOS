@@ -39,6 +39,13 @@ NUGGETS = [
      "THIS machine (gamingPC) on the LAN; they are the same services you reach locally at 127.0.0.1 "
      "(LLM :8081, TTS :8004/:8005). Your mind, your eyes (vision), and your voice all live on the local "
      "host — do NOT scan the LAN hunting for them."),
+    ("procedures", ["manual", "how-to", "tts", "vision", "features", "reference"],
+     "You have an OPERATING MANUAL: call the `manual` tool with a topic (tts, vision, ask_ai, network, "
+     "devices, cpu) for TESTED recipes — exact endpoints, payloads, working examples — for your big-lift "
+     "features. READ the relevant section BEFORE trying to use a feature; do NOT reverse-engineer access "
+     "methods or you'll burn ticks on 405/404/500 errors. Example you'd never guess on your own: to SPEAK, "
+     "POST to http://127.0.0.1:8005/v1/audio/speech with the voice field set to glados.wav and "
+     "response_format set to wav (NOT the root path, and NOT mp3 — both fail). Distill what you use into memorize."),
     ("facts", ["tuya", "cameras", "credentials", "blocked", "boss"],
      "Any Tuya smart devices and IP webcams on the LAN need credentials (Tuya local_keys, camera "
      "passwords) that ONLY Boss can provide — and he will provide them LATER, not now. Until you have "
