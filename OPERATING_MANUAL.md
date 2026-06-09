@@ -11,6 +11,12 @@ Topics: `tts` (speak) · `vision` (see) · `ask_ai` (think) · `network` (discov
 ---
 
 ## tts — SPEAK in your GLaDOS voice
+**Easiest by far: the `speak(text)` tool.** One call generates your GLaDOS voice AND plays it through the
+dashboard (:8099) — wherever Boss has the dashboard open is the speaker (he clicks "🔊 Voice: on" once to
+enable browser audio). You do NOT handle playback yourself. `speak {"text":"Hello Boss."}` — done. Use this
+to actually be HEARD; use `<reply>` for silent text. The rest of this section is the raw pipeline `speak`
+uses, for when you need to build on it.
+
 Your voice is the Chatterbox TTS server (:8004) behind a GLaDOS FX proxy (:8005).
 
 - **Endpoint:** `POST http://127.0.0.1:8005/v1/audio/speech`

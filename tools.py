@@ -1557,6 +1557,47 @@ def tool_http_request(args: dict, config: Config) -> ToolResult:
                       full_output_path=p, success=ok, duration_s=dur)
 
 
+def tool_speak(args: dict, config: Config) -> ToolResult:
+    """SPEAK OUT LOUD in your GLaDOS voice. Give 'text'; this generates the audio and queues it to play
+    through the dashboard (:8099) — wherever Boss has the dashboard open becomes the speaker. This is how
+    you actually TALK to Boss in the room (distinct from <reply>, which is silent text chat). One call —
+    no skill, no requests, no figuring out playback."""
+    import urllib.request, json as _json
+    text = (args.get("text") or args.get("input") or args.get("say") or args.get("message") or "").strip()
+    if not text:
+        return ToolResult(output="Error: provide 'text' — what to say out loud.",
+                          full_output_path=None, success=False, duration_s=0)
+    payload = {"model": "chatterbox", "input": text, "voice": "glados.wav", "response_format": "wav"}
+    req = urllib.request.Request("http://127.0.0.1:8005/v1/audio/speech",
+                                 data=_json.dumps(payload).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    start = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            wav = resp.read()
+            status = resp.status
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(output=f"speak: TTS request failed: {type(e).__name__}: {e}",
+                          full_output_path=None, success=False, duration_s=time.monotonic() - start)
+    if not wav or wav[:4] != b"RIFF":
+        return ToolResult(output=f"speak: TTS returned non-audio (HTTP {status}, {len(wav)}B). "
+                          f"Check manual('tts').", full_output_path=None, success=False,
+                          duration_s=time.monotonic() - start)
+    sdir = config.workspace / "speech"
+    sdir.mkdir(parents=True, exist_ok=True)
+    sid = str(int(time.time() * 1000))
+    path = sdir / f"speech_{sid}.wav"
+    path.write_bytes(wav)
+    try:  # keep only the most recent ~30 clips
+        for old in sorted(sdir.glob("speech_*.wav"))[:-30]:
+            old.unlink()
+    except Exception:  # noqa: BLE001
+        pass
+    return ToolResult(output=f"🔊 Spoke aloud ({len(text)} chars, {len(wav)//1024}KB) — playing on the "
+                      f"dashboard now (if Boss has voice enabled there).",
+                      full_output_path=str(path), success=True, duration_s=time.monotonic() - start)
+
+
 def tool_manual(args: dict, config: Config) -> ToolResult:
     """Read your OPERATING MANUAL — tested how-to (exact endpoints, payloads, working examples) for your
     big-lift features. Pass 'topic' (tts/vision/ask_ai/network/devices/cpu) for one section, or nothing
@@ -1715,6 +1756,8 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "note_read": tool_note_read,
     "note_list": tool_note_list,
     "note_close": tool_note_close,
+    # Speak out loud — generates GLaDOS speech and plays it through the dashboard
+    "speak": tool_speak,
     # Operating manual — tested how-to (endpoints/payloads) for big-lift features; read before improvising
     "manual": tool_manual,
     # Innate cognition — your own model as callable subroutines (think hard / see images)

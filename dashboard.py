@@ -136,6 +136,17 @@ def build_knowledge_list(config: Config) -> dict:
     return {"entries": entries[:25]}
 
 
+def latest_speech_id(config: Config) -> str:
+    """Newest queued speech clip id (epoch-ms string) from workspace/speech/, or '' if none.
+    eiDOS's `speak` tool drops speech_<id>.wav here; the dashboard browser polls + plays new ones."""
+    sdir = config.workspace / "speech"
+    if not sdir.exists():
+        return ""
+    ids = [p.stem.replace("speech_", "") for p in sdir.glob("speech_*.wav")]
+    ids = [s for s in ids if s.isdigit()]
+    return max(ids, key=int) if ids else ""
+
+
 def build_dream_list(config: Config) -> dict:
     """Read last 10 memory snapshots (dream records)."""
     snap_dir = config.workspace / "snapshots"
@@ -1089,6 +1100,8 @@ body::after {
   <button id="nx-go" onclick="nxCtl('resume')">GO &#9654;</button>
   <button id="nx-pause" onclick="nxCtl('pause')">&#9208; Pause</button>
   <button id="nx-stop" onclick="nxStop()">&#9632; STOP</button>
+  <button id="nx-voice" onclick="toggleVoice()" title="Play eiDOS's GLaDOS voice through this browser/device — click to enable">&#128263; Voice: off</button>
+  <audio id="nx-audio" preload="auto" style="display:none"></audio>
   <span id="nx-msg"></span>
 </div>
 <div style="height:38px"></div>
@@ -1118,6 +1131,27 @@ async function nxStatus(){
   }catch(e){}
 }
 setInterval(nxStatus,2000);nxStatus();
+// --- Voice: play eiDOS's spoken audio through THIS browser (wherever the dashboard is open) ---
+let nxVoiceOn=false, nxLastSpeech=null;
+async function nxInitVoice(){ try{const r=await fetch('/api/speech/latest');const d=await r.json();nxLastSpeech=d.id;}catch(e){} }
+function toggleVoice(){
+  nxVoiceOn=!nxVoiceOn;
+  document.getElementById('nx-voice').innerHTML = nxVoiceOn ? '&#128266; Voice: on' : '&#128263; Voice: off';
+  const a=document.getElementById('nx-audio');
+  if(nxVoiceOn){ a.muted=false; a.play().catch(()=>{}); }  // this click unlocks browser autoplay
+}
+async function nxPollSpeech(){
+  if(!nxVoiceOn) return;
+  try{
+    const r=await fetch('/api/speech/latest'); const d=await r.json();
+    if(d.id && d.id!==nxLastSpeech){
+      nxLastSpeech=d.id;
+      const a=document.getElementById('nx-audio');
+      a.src='/api/speech/file?id='+d.id; a.play().catch(()=>{});
+    }
+  }catch(e){}
+}
+setInterval(nxPollSpeech,1500); nxInitVoice();
 </script>
 <div class="container">
     <div class="header">
@@ -2216,6 +2250,19 @@ def _make_handler(config: Config):
             elif self.path == "/api/dreams":
                 data = build_dream_list(config)
                 self._respond(200, "application/json", json.dumps(data))
+
+            elif self.path == "/api/speech/latest":
+                self._respond(200, "application/json",
+                              json.dumps({"id": latest_speech_id(config) or None}))
+
+            elif self.path.startswith("/api/speech/file"):
+                from urllib.parse import urlparse, parse_qs
+                sid = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
+                fp = config.workspace / "speech" / ("speech_" + sid + ".wav")
+                if sid.isdigit() and fp.exists():
+                    self._respond(200, "audio/wav", fp.read_bytes())
+                else:
+                    self._respond(404, "text/plain", "no such clip")
 
             elif self.path == "/api/thoughts":
                 data = build_thoughts(config)
