@@ -142,9 +142,9 @@ def _write_chat_reply(config: Config, tick_number: int, reply_text: str):
 
 
 def _first_sentences(text: str, max_sentences: int = 2, max_chars: int = 200) -> str:
-    """The opening 1-2 sentences of a reply — what we voice. TTS here runs ~4x slower than realtime
-    (Chatterbox is GPU-starved by the house model), so speaking a paragraph would lag badly. The spoken
-    opener + readable text body is the right split on this hardware."""
+    """The opening 1-2 sentences of a reply — what we voice. TTS runs ~1.5x slower than realtime here
+    (Chatterbox's own pipeline; the house model now uses 64k ctx so VRAM isn't the bottleneck), so
+    speaking a long paragraph would still lag. The spoken opener + readable text body is the right split."""
     import re as _re
     parts = _re.split(r"(?<=[.!?])\s+", (text or "").strip())
     out = ""
@@ -157,8 +157,8 @@ def _first_sentences(text: str, max_sentences: int = 2, max_chars: int = 200) ->
 
 def _auto_speak(config: Config, text: str) -> None:
     """Voice an outgoing chat reply through the dashboard so Boss HEARS every response — the voice is
-    first-class, not opt-in. We speak only the opening 1-2 sentences (TTS is ~4x slower than realtime on
-    this GPU, so a paragraph would lag); the full text stays readable in chat. Also the backstop: if the
+    first-class, not opt-in. We speak only the opening 1-2 sentences (TTS is ~1.5x slower than realtime,
+    so a long paragraph would lag); the full text stays readable in chat. Also the backstop: if the
     model hedges with text instead of calling `speak`, this speaks the opener anyway."""
     t = _first_sentences(text)
     if not t:
