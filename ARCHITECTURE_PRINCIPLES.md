@@ -25,11 +25,19 @@ air / latency). An event is the ground truth. This is the same reason the tick l
 block on a tool (see #2): we react to reality, we don't wait on a clock and hope.
 
 **Concrete pattern (cross-process serialize):** the resource owner holds a `threading.Condition`
-and a boolean state; it flips the state and `notify_all()` on change. A waiter calls a blocking
-endpoint that does `with cond: while busy: cond.wait(timeout=cap)` and returns the instant it's
-released. One request, woken by an event, with a safety cap so nothing hangs forever. This is how
-the **GPU speech-gate** works (`gpu_gate.py` + dashboard `/api/gpu/wait`): the house tick yields to
-in-progress TTS and resumes the moment synthesis ends — no sleeps, no cooldown timers.
+and a state; it `notify_all()`s on change. A waiter calls a blocking endpoint that does
+`with cond: while busy: cond.wait(...)` and returns the instant it's released. One request, woken
+by an event. This is the **GPU speech-gate** (`gpu_gate.py` + dashboard `/api/gpu/wait`): the house
+tick yields to in-progress TTS and resumes the moment synthesis ends — no sleeps, no cooldown timers.
+
+**Don't bound an event-wait with a guessed duration — bound it with liveness.** The first cut of
+the speech-gate used an `8 s` cap, which is exactly the kind of magic number this principle warns
+against (too short for long speech, arbitrary). The fix: the producer stamps a `last_progress` time
+as it streams output; the waiter holds as long as progress is fresh and only bails after `STALL_S`
+with no progress (genuinely wedged), plus a generous absolute backstop. The single knob is a
+*liveness* threshold ("how long with zero output = stuck"), not a guess about how long the work
+"should" take — so it self-adapts to any utterance length. Reach for a fixed timeout only when
+there is no progress signal to observe at all.
 
 ## 2. The tick loop must never block on a tool (real-time, low-latency)
 Dispatch async by default (`bash` async, `bg_run`); a tool that hangs must not freeze the mind.
