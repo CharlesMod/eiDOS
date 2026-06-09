@@ -27,7 +27,9 @@ the `check_system` tool so it operates existing subsystems instead of rebuilding
 reinventing chat loggers and JSON memory stores at Lv.0). **When you add or change a subsystem/
 capability, update `eidos_capabilities.md`** (and, for a critical "never rebuild this", the condensed
 block in `prompts.py SYSTEM_PROMPT_BRIEFING`). That single update is how eiDOS learns the feature
-exists — far better than re-teaching it each time. Bootstrap facts also live in `seed_knowledge.py`.
+exists — far better than re-teaching it each time. The curated bootstrap facts pre-seeded into a
+fresh eiDOS after every wipe live in **`preserved_nuggets.toml`** (a small hand-edited `[[nugget]]`
+database; `seed_knowledge.py` just loads it). Add a durable fact there to make the next wipe smarter.
 
 ## Self-improvement system (live)
 eiDOS can be coached and improve itself from the :8099 dashboard. Principle: **eiDOS PROPOSES, the
