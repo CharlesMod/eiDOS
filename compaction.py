@@ -233,6 +233,50 @@ def _snapshot_memory(config: Config) -> None:
     snapshot_path.write_text(current)
 
 
+def _write_dream_record(config: Config, old_plan: str, new_plan: str,
+                        stored: int, removed: int) -> None:
+    """Write a human-readable dream record the Dream Journal can show. Captures the real output of
+    the briefing dream cycle: the flavor reflection, what was distilled, and the resulting plan."""
+    config.snapshots_dir.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+
+    # The flavor line is eiDOS's poetic self-reflection for this moment (emit_flavor → flavor.json).
+    flavor = ""
+    try:
+        fj = json.loads((config.workspace / "flavor.json").read_text(encoding="utf-8"))
+        flavor = (fj.get("text") or "").strip()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # The freshest reflections this dream extracted (newest knowledge of category 'reflections').
+    learned_lines = []
+    try:
+        import knowledge as _kn
+        for e in _kn.recent_learned(config, limit=4):
+            prev = (e.get("content_preview") or e.get("content") or "").strip().replace("\n", " ")
+            if prev:
+                learned_lines.append(f"- {prev[:140]}")
+    except Exception:  # noqa: BLE001
+        pass
+
+    parts = [f"# Dream @ {ts}"]
+    if flavor:
+        parts.append(f"_{flavor}_")
+    parts.append(
+        f"Distilled {removed} observation(s) → {stored} new knowledge entr"
+        f"{'y' if stored == 1 else 'ies'}. Plan {len(old_plan)} → {len(new_plan)} chars.")
+    if learned_lines:
+        parts.append("**Recently learned:**\n" + "\n".join(learned_lines))
+    if new_plan.strip():
+        parts.append("**Plan after dreaming:**\n" + new_plan.strip()[:500])
+
+    record = "\n\n".join(parts)
+    path = config.snapshots_dir / f"dream_{ts}.md"
+    tmp = path.with_suffix(".md.tmp")
+    tmp.write_text(record, encoding="utf-8")
+    replace_with_retry(tmp, path)
+
+
 def _build_fallback_memory(
     current_memory: str,
     goal: str,
@@ -433,6 +477,15 @@ def compact_briefing(config: Config, persona: dict = None) -> None:
 
     logger.info("dream cycle: plan %d→%d chars, %d knowledge entries stored",
                 len(current_plan), len(new_plan or ""), stored)
+
+    # Write a human-readable DREAM RECORD for the dashboard's Dream Journal. The old journal read
+    # memory.md snapshots, but the briefing dream distills into plan + knowledge (not memory.md), so
+    # those snapshots were empty 48-byte stubs and the journal showed nothing. Capture the real
+    # distillation here: the flavor reflection + what was learned + the resulting plan.
+    try:
+        _write_dream_record(config, current_plan, new_plan or "", stored, removed)
+    except Exception as exc:  # noqa: BLE001 - journaling must never disturb the dream
+        logger.warning("dream record write failed: %s", exc)
 
     # Semantic pre-fetch for next tick (Phase 5)
     if config.knowledge_embedding_enabled:

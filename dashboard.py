@@ -141,9 +141,11 @@ def build_dream_list(config: Config) -> dict:
     snap_dir = config.workspace / "snapshots"
     if not snap_dir.exists():
         return {"dreams": []}
+    # Prefer real dream records (the briefing dream cycle's distillation: flavor + learned + plan).
+    # Fall back to legacy memory_snapshot_* files. The <80-char filter below drops empty stubs.
     snapshots = sorted(
-        snap_dir.glob("memory_snapshot_*"),
-        key=lambda p: p.name,
+        list(snap_dir.glob("dream_*.md")) + list(snap_dir.glob("memory_snapshot_*")),
+        key=lambda p: p.stat().st_mtime,
         reverse=True,   # newest first -> renders newest-at-top
     )
     dreams = []
@@ -155,7 +157,7 @@ def build_dream_list(config: Config) -> dict:
         if len(content.strip()) < 80:
             continue  # skip empty startup/test stubs that clutter the journal
         dreams.append({
-            "ts": snap.stem.replace("memory_snapshot_", ""),
+            "ts": snap.stem.replace("memory_snapshot_", "").replace("dream_", ""),
             "chars": len(content),
             "preview": content[:300],
         })
