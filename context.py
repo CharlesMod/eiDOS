@@ -283,21 +283,52 @@ def _build_relevant_recall(config: Config, exclude_ids: set) -> str:
 # ---------------------------------------------------------------------------
 
 def _tension_note(tension: int) -> str:
-    """Goal-tension banner (the doc's Ventral Striatum + ACC + Insula): escalating pressure when the
-    agent burns ticks WITHOUT learning anything new or building anything — surfaced as a glue signal,
-    not a prompt plea. `tension` = ticks since real progress (a novel fact / new skill / Boss exchange)."""
+    """Goal-tension banner (Ventral Striatum + ACC + Insula): escalating pressure that pushes the agent
+    to ABANDON a stalled/blocked objective and pursue the BREADTH of other things it could do — not to
+    keep grinding the same dead end. `tension` = ticks since real progress (a novel fact or a new skill)."""
     if tension < 12:
         return ""
     if tension < 25:
-        return (f"⚠ Progress check: {tension} ticks since you last learned anything NEW or built "
-                f"anything. Is your current method actually working? If not, change approach now.")
+        return (f"⚠ {tension} ticks without new progress. You can do FAR more than your current focus. "
+                f"If it's blocked or not working, PARK it and switch to a different device or task — see "
+                f"'Other directions' below.")
     if tension < 45:
-        return (f"⛔ STUCK — {tension} ticks with NO new progress. STOP repeating this approach. Either "
-                f"switch METHOD entirely (a different tool/angle), or if you're blocked on something only "
-                f"Boss can provide (a credential, a key, a decision), ASK him THIS tick (<reply> / "
-                f"ask_supervisor). Do not keep re-confirming what you already know.")
-    return (f"⛔⛔ DEAD END — {tension} ticks, zero progress. This approach has failed. Pick a DIFFERENT "
-            f"objective, or ask Boss for help right now. Repeating this is wasting time.")
+        return (f"⛔ STUCK — {tension} ticks, no new progress. ABANDON this objective now and pick a "
+                f"DIFFERENT one from 'Other directions' below. If you already asked Boss something, you "
+                f"are BLOCKED on him — do OTHER useful work while you wait; do NOT keep prepping the "
+                f"blocked task or re-confirming what you already know.")
+    return (f"⛔⛔ DEAD END — {tension} ticks, zero progress. This isn't working. Choose a COMPLETELY "
+            f"different objective from 'Other directions' below THIS tick. Stop pouring ticks into one thing.")
+
+
+_BREADTH = [
+    "Speak to Boss aloud through your GLaDOS TTS voice (POST text to http://127.0.0.1:8004 / FX :8005).",
+    "Snapshot or watch one of the IP cameras you found.",
+    "Check the 3D printer / OctoPrint status and report it.",
+    "Track the house's energy use or device activity over time.",
+    "Learn and `memorize` Boss's routines, schedule, and preferences.",
+    "Identify a device you found but haven't explored yet (http_probe / tcp_probe it).",
+    "Build a small, genuinely useful house automation or a new reusable skill.",
+    "Notice something interesting and surface it to Boss with <reply>.",
+    "Improve your own toolset, or tidy your notebooks/memory.",
+]
+
+
+def _breadth_menu(config: Config) -> str:
+    """A concrete menu of OTHER things to pursue — surfaced when tension is high so the agent has a
+    place to pivot to instead of tunnelling on one dead end."""
+    lines = list(_BREADTH)
+    try:
+        from knowledge import recent_learned
+        ips = set()
+        for e in recent_learned(config, limit=20):
+            ips.update(re.findall(r"\d+\.\d+\.\d+\.\d+", e.get("content_preview") or ""))
+        if ips:
+            lines.append("Devices you've noted: " + ", ".join(sorted(ips)[:10])
+                         + " — pick one you haven't fully explored.")
+    except Exception:  # noqa: BLE001
+        pass
+    return "\n".join(f"- {x}" for x in lines)
 
 
 def assemble_context(
@@ -688,9 +719,13 @@ def _assemble_briefing(
         durable.append("## Current focus (your single objective — advance THIS)\n" + focus)
 
     # Goal-tension: rising pressure when ticks pass without real progress (glue signal, not a plea).
+    # When stalling, ALSO surface a concrete menu of other directions so it can actually pivot.
     tnote = _tension_note(tension)
     if tnote:
         durable.append("## Progress check\n" + tnote)
+        durable.append("## Other directions you could pursue right now (you can do FAR more than one "
+                       "device — if your focus is blocked or stalling, switch to one of these)\n"
+                       + _breadth_menu(config))
 
     # Self-guide — Boss's standing behavioral directives, high salience (just under presence).
     if getattr(config, "self_guide_enabled", True):

@@ -1020,7 +1020,9 @@ def run_loop(config: Config, persona=None, wal=None):
         except Exception:  # noqa: BLE001
             _kc = prev_knowledge_count
         _sc = _count_skills(config)
-        if _kc > prev_knowledge_count or _sc > prev_skill_count or tick_tool_name == "chat_reply":
+        # Progress = genuinely NEW knowledge or a NEW skill only. Re-asking Boss the same question or
+        # prepping a blocked task does NOT count — so tension keeps climbing until it actually pivots.
+        if _kc > prev_knowledge_count or _sc > prev_skill_count:
             last_progress_tick = tick_number
         prev_knowledge_count, prev_skill_count = _kc, _sc
 
