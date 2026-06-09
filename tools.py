@@ -1480,6 +1480,83 @@ def tool_vision(args: dict, config: Config) -> ToolResult:
                       full_output_path=None, success=True, duration_s=0)
 
 
+def tool_http_request(args: dict, config: Config) -> ToolResult:
+    """First-class HTTP client — any method (GET/POST/PUT/DELETE/PATCH) with JSON bodies, headers, and a
+    timeout, built on the stdlib so it NEVER needs the `requests` library (no skill-runner import issues).
+    USE THIS instead of writing requests/urllib code in a skill. JSON responses come back inline; BINARY
+    responses (audio, images) are saved to a file and the path returned. Args: url (required), method,
+    json (a dict body), data (a raw string body), headers (dict), timeout (s), save (output filename for
+    binary). Example — speak: http_request {"method":"POST","url":"http://127.0.0.1:8005/v1/audio/speech",
+    "json":{"model":"chatterbox","input":"Hello.","voice":"glados.wav","response_format":"wav"},"save":"say.wav"}."""
+    import urllib.request, urllib.error, json as _json
+    url = (args.get("url") or "").strip()
+    if not url:
+        return ToolResult(output="Error: 'url' required.", full_output_path=None, success=False, duration_s=0)
+    headers = dict(args.get("headers") or {})
+    headers.setdefault("User-Agent", "eiDOS/1.0")
+    body = None
+    if args.get("json") is not None:
+        try:
+            body = _json.dumps(args["json"]).encode("utf-8")
+        except Exception as e:  # noqa: BLE001
+            return ToolResult(output=f"Error: 'json' is not serializable: {e}",
+                              full_output_path=None, success=False, duration_s=0)
+        headers.setdefault("Content-Type", "application/json")
+    elif args.get("data") is not None:
+        d = args["data"]
+        body = d.encode("utf-8") if isinstance(d, str) else bytes(d)
+    method = (args.get("method") or ("POST" if body is not None else "GET")).upper()
+    try:
+        timeout = max(1.0, min(float(args.get("timeout", 30)), 120.0))
+    except Exception:  # noqa: BLE001
+        timeout = 30.0
+
+    start = time.monotonic()
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            status = resp.status
+            ctype = resp.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:  # 4xx/5xx — return the body so the model can read the error detail
+        raw = e.read() if hasattr(e, "read") else b""
+        status = e.code
+        ctype = e.headers.get("Content-Type", "") if e.headers else ""
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return ToolResult(output=f"HTTP {method} {url} failed: {type(e).__name__}: {e}",
+                          full_output_path=None, success=False, duration_s=time.monotonic() - start)
+    dur = time.monotonic() - start
+    ok = 200 <= status < 300
+    ct = ctype.lower()
+    is_text = (not ct) or any(t in ct for t in
+                              ("text", "json", "xml", "html", "javascript", "urlencoded", "x-yaml"))
+    if is_text:
+        text = raw.decode("utf-8", errors="replace")
+        full_path = None
+        if len(text) > config.output_truncation_chars:
+            full_path = _save_full_output(config, time.strftime("%Y%m%d_%H%M%S"), "http", text)
+        out = _truncate(text, config.output_truncation_chars, full_path)
+        return ToolResult(output=f"HTTP {status} · {ctype or 'no-type'} · {len(raw)}B\n{out}",
+                          full_output_path=full_path, success=ok, duration_s=dur)
+    # binary → save to a file
+    ext = {"audio/wav": ".wav", "audio/x-wav": ".wav", "audio/mpeg": ".mp3", "audio/mp3": ".mp3",
+           "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "application/pdf": ".pdf"}.get(
+               ct.split(";")[0].strip(), ".bin")
+    save = (args.get("save") or args.get("out") or "").strip()
+    if save:
+        p = save if os.path.isabs(save) else str(config.workspace / save)
+    else:
+        p = str(config.workspace / f"http_{time.strftime('%Y%m%d_%H%M%S')}{ext}")
+    try:
+        with open(p, "wb") as f:
+            f.write(raw)
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(output=f"HTTP {status} {ctype} {len(raw)}B but save failed: {e}",
+                          full_output_path=None, success=False, duration_s=dur)
+    return ToolResult(output=f"HTTP {status} · {ctype} · {len(raw)}B binary saved to {p}",
+                      full_output_path=p, success=ok, duration_s=dur)
+
+
 def tool_manual(args: dict, config: Config) -> ToolResult:
     """Read your OPERATING MANUAL — tested how-to (exact endpoints, payloads, working examples) for your
     big-lift features. Pass 'topic' (tts/vision/ask_ai/network/devices/cpu) for one section, or nothing
@@ -1613,6 +1690,9 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "bg_run": tool_bg_run,
     "bg_check": tool_bg_check,
     "http_get": tool_http_get,
+    "http_request": tool_http_request,   # first-class HTTP client (any method/JSON/headers, no `requests` dep)
+    "fetch": tool_http_request,          # alias
+    "http": tool_http_request,           # alias
     "remember": tool_remember,
     "update_plan": tool_update_plan,
     "memorize": tool_memorize,

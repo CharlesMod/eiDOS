@@ -25,20 +25,16 @@ Your voice is the Chatterbox TTS server (:8004) behind a GLaDOS FX proxy (:8005)
   2. `voice` must be the filename **`"glados.wav"`** (a file in `reference_audio/`), NOT `"glados"`
      → that returns **404 "Voice file not found"**. (`glados_golden.wav` also works.)
   3. `response_format` must be **`"wav"`**. `"mp3"`/`"opus"` return **500 "Failed to encode audio"**.
-- **Build a reusable skill** `speak(text)` like this (note the timeout — required, skills are 30s-bounded):
-  ```python
-  import requests
-  def tool_speak(args, config):
-      text = args.get("text", "")
-      r = requests.post("http://127.0.0.1:8005/v1/audio/speech",
-          json={"model":"chatterbox","input":text,"voice":"glados.wav","response_format":"wav"},
-          timeout=30)
-      out = str(config.workspace / "say.wav")
-      open(out, "wb").write(r.content)          # r.content is WAV bytes on HTTP 200
-      return ToolResult(output=f"spoke {len(text)} chars -> {out} ({len(r.content)}B, {r.status_code})",
-                        full_output_path=out, success=(r.status_code==200), duration_s=0)
+- **Easiest — ONE tool call, no skill, no `requests`:** use the built-in `http_request` tool:
   ```
-  Saving the .wav is enough to confirm it worked; playback to a speaker is a separate concern.
+  http_request {"method":"POST","url":"http://127.0.0.1:8005/v1/audio/speech",
+    "json":{"model":"chatterbox","input":"<what to say>","voice":"glados.wav","response_format":"wav"},
+    "save":"say.wav"}
+  ```
+  → it POSTs the JSON, gets the `audio/wav` back, and saves it to `workspace/say.wav` (binary responses are
+  auto-saved). Saving the .wav confirms it worked; playback to a speaker is a separate concern.
+- To make it a named `speak(text)` skill, have the skill call `http_request` internally — **never** `import
+  requests` in a skill (the skill runner can lack it; `http_request` is stdlib and always works).
 
 ---
 

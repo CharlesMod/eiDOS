@@ -25,6 +25,11 @@ check here and with `check_tools` to confirm it doesn't already exist. It almost
 - Built-in PRIMITIVES (parameterized; call as tools): `net_scan(subnet, ports)` (fast parallel scan, not
   a slow Test-NetConnection loop), `tcp_probe(ip, port)`, `http_probe(ip, port, path)`, `udp_listen(port)`
   (finds Tuya broadcasts on 6667). Use these instead of writing raw socket code.
+- For ANY HTTP — GET/POST/PUT/DELETE, JSON bodies, custom headers, binary downloads — use the
+  **`http_request`** tool (aliases `fetch`/`http`). It is stdlib-based: returns JSON/text inline and
+  auto-SAVES binary responses (audio/images) to a file. → **Never `import requests` in a skill** — the
+  skill runner can lack it (a recurring trap); `http_request` always works. e.g. to POST to a device API
+  or hit the TTS endpoint, ONE `http_request` call does it — no skill, no requests.
 - `create_skill(skill_name, skill_code)` validates, saves, and hot-loads a skill — callable next tick as
   `<tool>name</tool>` (NOT via bash). `edit_skill` improves one; `rollback_skill` reverts.
 - → Make skills MODULAR: take ip/port/etc as args (not hardcoded) and COMPOSE the primitives. Never author

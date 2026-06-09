@@ -96,6 +96,10 @@ Core tools:
   (real progress!) · objective_block {{"id":"...","reason":"why blocked","wake":"what would resume it"}} (PARK
   it and move to other work — NOT stop to wait on Boss) · objective_list {{}}. Never grind one task to the
   detriment of the rest; if it's blocked or failing, park it and switch. Ask Boss only if EVERYTHING is parked.
+- http_request (alias fetch)  {{"method":"POST","url":"...","json":{{...}},"headers":{{...}},"save":"out.wav"}}
+    — first-class HTTP for ANY method + JSON body + headers, built on the stdlib. Returns JSON/text inline,
+    auto-SAVES binary (audio/images) to a file. USE THIS for every HTTP need (TTS, device APIs, web) — never
+    `import requests` in a skill (the runner can lack it). GET is just {{"url":"..."}}.
 - manual  {{"topic": "tts"}}  — your OPERATING MANUAL: tested how-to (exact endpoints/payloads/examples)
     for big features (tts/vision/ask_ai/network/devices/cpu). READ IT before improvising — e.g. to speak,
     `manual {{"topic":"tts"}}` first, so you skip the 405/404/500 dead-ends. The recipes are verified.

@@ -162,3 +162,10 @@ tags = ["primitives", "tools", "skills", "network"]
 content = '''
 Use the built-in network PRIMITIVES instead of writing raw socket code: `net_scan(subnet, ports)` for a fast parallel port scan (NOT a slow sequential Test-NetConnection loop), `tcp_probe(ip, port)`, `http_probe(ip, port, path)`, `udp_listen(port)`. When you author your own skill with create_skill, make it MODULAR: take ip/port/etc as args (not hardcoded), and COMPOSE these primitives rather than re-deriving sockets. Call any skill as a TOOL — <tool>name</tool> — never via bash.
 '''
+
+[[nugget]]
+category = "procedures"
+tags = ["http", "requests", "post", "api", "tts", "tool"]
+content = '''
+For ANY HTTP — GET, POST, PUT, JSON bodies, headers, or downloading binary (audio/images) — use the built-in `http_request` tool (aliases `fetch` / `http`), NOT the `requests` library. It is stdlib-based and always works; `import requests` inside a skill often fails because the skill runner lacks it (a trap you keep hitting). http_request returns JSON/text inline and auto-saves binary responses to a file. Example, speaking aloud in one call: http_request with method POST, url http://127.0.0.1:8005/v1/audio/speech, json model=chatterbox input=<text> voice=glados.wav response_format=wav, save=say.wav. A plain GET is just url=...
+'''
