@@ -47,6 +47,13 @@ operator-controlled dashboard APPLIES** (git-reversible accident-safety, not adv
 - **Listening hold** — focusing the dashboard chat box quiets the loop (blue "listening" state).
 - Full design + deferred hardening: **`SELF_IMPROVEMENT_PLAN.md`**.
 
+## Architecture principles (read `ARCHITECTURE_PRINCIPLES.md`)
+Standing design preferences. #1 (Dean): **event-driven over polled — call-response, notification,
+or interrupt, never delay-based.** Prefer an interrupt/`notify`, else a bounded blocking acquire
+(server-side event wait), and only poll-with-sleep when there is genuinely no signal to subscribe
+to. No `sleep(N)`-and-hope, no fixed cooldown timers as a stand-in for "is it done yet". Delays are
+guesses; events are ground truth.
+
 ## Async tool model
 eiDOS's `bash` is **async by default**: it dispatches and the result returns later tagged `[↩ job N]`;
 pass `"wait": true` only when the output is needed that tick. Slow commands auto-background at

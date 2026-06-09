@@ -218,10 +218,50 @@ def speech_text(sid: str) -> str:
         return _speech_texts.get(sid, "")
 
 
+# --- GPU speech-gate (event-driven; see ARCHITECTURE_PRINCIPLES.md #1) -------------------
+# One GPU. TTS synthesis (here) and the house-model tick (eidos) both want it; when they overlap,
+# both slow ~2x. Rather than a sleep/cooldown, we expose an event: while TTS is synthesizing,
+# `_tts_active` is raised; eidos blocks on /api/gpu/wait, which returns the instant we notify on
+# completion. No polling, no fixed delay — the tick yields to live speech and resumes on the event.
+_gpu_cond = _sp_threading.Condition()
+_tts_active = 0  # in-flight synthesis count (supports overlap); guarded by _gpu_cond
+
+
+def gpu_tts_begin() -> None:
+    global _tts_active
+    with _gpu_cond:
+        _tts_active += 1
+
+
+def gpu_tts_end() -> None:
+    global _tts_active
+    with _gpu_cond:
+        _tts_active = max(0, _tts_active - 1)
+        if _tts_active == 0:
+            _gpu_cond.notify_all()  # wake any waiting tick the moment the GPU is free
+
+
+def gpu_wait_idle(cap_s: float) -> dict:
+    """Block until no TTS synthesis is active (woken by event), bounded by cap_s so a tick can
+    never hang forever. Returns the resulting state."""
+    import time as _t
+    deadline = _t.monotonic() + max(0.0, cap_s)
+    with _gpu_cond:
+        timed_out = False
+        while _tts_active > 0:
+            remaining = deadline - _t.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            _gpu_cond.wait(timeout=remaining)
+        return {"idle": _tts_active == 0, "timed_out": timed_out, "active": _tts_active}
+
+
 def stream_glados(text: str, out) -> None:
     """Generate `text` as streaming GLaDOS speech and write WAV bytes to `out` (the browser) as they come:
     Chatterbox /tts stream=true  ->  ffmpeg GLaDOS-FX pipe  ->  out. Best-effort; closes cleanly on error."""
     import urllib.request
+    gpu_tts_begin()  # raise the speech-gate: the house tick will yield until this synthesis ends
     payload = json.dumps({"text": text, "voice_mode": "clone",
                           "reference_audio_filename": "glados.wav",
                           "output_format": "wav", "stream": True}).encode("utf-8")
@@ -231,6 +271,7 @@ def stream_glados(text: str, out) -> None:
         tts = urllib.request.urlopen(req, timeout=300)
     except Exception as e:  # noqa: BLE001
         logger.warning("stream_glados: TTS open failed: %s", e)
+        gpu_tts_end()  # balance the begin() even on the early-out path
         return
     proc = _sp_subprocess.Popen(
         [_GLADOS_FFMPEG, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
@@ -271,6 +312,7 @@ def stream_glados(text: str, out) -> None:
             proc.kill()
         except Exception:  # noqa: BLE001
             pass
+        gpu_tts_end()  # lower the speech-gate and notify the waiting tick (synthesis done)
 
 
 def build_dream_list(config: Config) -> dict:
@@ -2434,6 +2476,17 @@ def _make_handler(config: Config):
                     except (BrokenPipeError, ConnectionResetError, OSError):
                         pass
                 return
+
+            elif self.path.startswith("/api/gpu/wait"):
+                # Event-driven GPU speech-gate: block until in-progress TTS synthesis finishes
+                # (woken by notify in gpu_tts_end), bounded by ?cap=<seconds> so a tick can't hang.
+                from urllib.parse import urlparse, parse_qs
+                try:
+                    cap = float((parse_qs(urlparse(self.path).query).get("cap") or ["8"])[0])
+                except (TypeError, ValueError):
+                    cap = 8.0
+                cap = min(max(cap, 0.0), 30.0)  # hard ceiling
+                self._respond(200, "application/json", json.dumps(gpu_wait_idle(cap)))
 
             elif self.path == "/api/thoughts":
                 data = build_thoughts(config)

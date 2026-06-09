@@ -22,6 +22,7 @@ from atomicio import replace_with_retry
 from context import assemble_context, _norm_cmd
 from compaction import should_compact, compact, compact_briefing, emit_flavor
 from llm import complete, LLMError, ReasoningExhausted
+from gpu_gate import yield_to_speech
 from memory import (
     append_observation,
     append_thought,
@@ -747,6 +748,11 @@ def run_loop(config: Config, persona=None, wal=None):
         def _on_token(partial_text):
             write_activity(config, "thinking", detail=f"tick {tick_number}",
                            partial=partial_text)
+
+        # GPU speech-gate (ARCHITECTURE_PRINCIPLES.md #1): if the dashboard is mid-TTS, yield the
+        # GPU and resume the instant synthesis finishes (event-driven, bounded). Speech preempts the
+        # background tick so voice stays crisp; returns immediately when no speech is in flight.
+        yield_to_speech(config)
 
         try:
             response = complete(messages, config, max_tokens=current_max_tokens,
