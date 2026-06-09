@@ -436,6 +436,13 @@ def run_loop(config: Config, persona=None, wal=None):
     except Exception:  # noqa: BLE001
         prev_knowledge_count = 0
     prev_skill_count = _count_skills(config)
+    # Objective backlog (Ventral Striatum / Action Gate): seed the open commitments once, then the
+    # gate rotates focus among them each tick so a stalled task never starves the rest of the system.
+    try:
+        import objectives as _obj
+        _obj.ensure_seeded(config, tick_number)
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("objective seed failed: %s", _e)
 
     pfx = _pfx(persona, config)
     print(f"{pfx} Starting tick loop (interval={config.tick_interval_s}s, mock={config.mock_mode})")
@@ -663,7 +670,14 @@ def run_loop(config: Config, persona=None, wal=None):
             logger.warning("async result delivery failed: %s", e)
 
         # --- Assemble context ---
-        tension = max(0, tick_number - last_progress_tick)
+        # `tension` is now the ACTIVE objective's frustration (the gate's per-objective counter),
+        # falling back to the legacy global stall count if the backlog isn't available.
+        try:
+            import objectives as _obj
+            _act = _obj.get_active(config)
+            tension = int(_act["frustration"]) if _act else max(0, tick_number - last_progress_tick)
+        except Exception:  # noqa: BLE001
+            tension = max(0, tick_number - last_progress_tick)
         messages = assemble_context(
             config,
             tick_number=tick_number,
@@ -1022,9 +1036,24 @@ def run_loop(config: Config, persona=None, wal=None):
         _sc = _count_skills(config)
         # Progress = genuinely NEW knowledge or a NEW skill only. Re-asking Boss the same question or
         # prepping a blocked task does NOT count — so tension keeps climbing until it actually pivots.
-        if _kc > prev_knowledge_count or _sc > prev_skill_count:
+        _made_progress = (_kc > prev_knowledge_count or _sc > prev_skill_count)
+        if _made_progress:
             last_progress_tick = tick_number
         prev_knowledge_count, prev_skill_count = _kc, _sc
+
+        # --- Action Gate: update the active objective's frustration from this tick's outcome, and
+        #     ROTATE focus deterministically if it has stalled/parked/finished. This is the structural
+        #     anti-rabbit-hole: the harness moves focus, the model doesn't get to keep grinding. ---
+        try:
+            import objectives as _obj
+            _gate = _obj.record_tick(config, made_progress=_made_progress,
+                                     tool_failed=(not tick_tool_success), tick_number=tick_number)
+            if _gate.get("rotated") and _gate.get("active"):
+                print(f"{pfx} Gate: rotated focus → {_gate['active']['title']}")
+            if _gate.get("escalate"):
+                print(f"{pfx} Gate: whole backlog blocked — surfacing to Boss once")
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("objective gate failed: %s", _e)
 
         # --- Sleep ---
         tick_number += 1

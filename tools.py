@@ -1381,6 +1381,93 @@ def tool_udp_listen(args: dict, config: Config) -> ToolResult:
 
 # --- Tool registry ---
 
+def _obj_tick(config: Config) -> int:
+    try:
+        import json as _json
+        return int(_json.loads((config.workspace / "heartbeat.json").read_text(encoding="utf-8")).get("tick", 0))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def tool_objective_add(args: dict, config: Config) -> ToolResult:
+    """Add a new open commitment to your backlog. Each objective MUST carry its 'why' (the purpose it
+    serves) so you never lose the bigger picture while working the mechanics."""
+    import objectives
+    title = (args.get("title") or args.get("objective") or "").strip()
+    why = (args.get("why") or args.get("because") or args.get("purpose") or "").strip()
+    if not title:
+        return ToolResult(output="Error: provide 'title' (what to pursue) and 'why' (the purpose it serves).",
+                          full_output_path=None, success=False, duration_s=0)
+    if not why:
+        return ToolResult(output="Error: every objective needs a 'why' — the purpose it serves. Add one.",
+                          full_output_path=None, success=False, duration_s=0)
+    try:
+        pri = int(args.get("priority", 5))
+    except Exception:  # noqa: BLE001
+        pri = 5
+    o = objectives.add(config, title, why, pri, tick=_obj_tick(config))
+    return ToolResult(output=f"Added objective '{o['title']}' (why: {o['why']}). It's in your backlog now.",
+                      full_output_path=None, success=True, duration_s=0)
+
+
+def tool_objective_done(args: dict, config: Config) -> ToolResult:
+    """Mark an objective complete — this is REAL progress and relieves pressure. Use it the moment a
+    commitment is genuinely satisfied (a skill works, a device is mapped, a question is answered)."""
+    import objectives
+    key = (args.get("id") or args.get("title") or args.get("objective") or "").strip()
+    o = objectives.mark_done(config, key)
+    if not o:
+        return ToolResult(output=f"No objective matched '{key}'. Use objective_list to see them.",
+                          full_output_path=None, success=False, duration_s=0)
+    return ToolResult(output=f"✓ Done: '{o['title']}'. Focus will move to your next commitment.",
+                      full_output_path=None, success=True, duration_s=0)
+
+
+def tool_objective_block(args: dict, config: Config) -> ToolResult:
+    """PARK an objective you can't make progress on right now (needs a credential, a decision, or it's
+    a dead end). Give a 'reason' and, if it could resume later, a 'wake' condition. Parking ROTATES your
+    focus to other useful work — it does NOT mean stopping to wait on Boss. Use 'dead'=true to abandon."""
+    import objectives
+    key = (args.get("id") or args.get("title") or args.get("objective") or "").strip()
+    reason = (args.get("reason") or "blocked").strip()
+    wake = (args.get("wake") or args.get("wake_condition") or "").strip()
+    if str(args.get("dead", "")).lower() in ("1", "true", "yes"):
+        o = objectives.mark_dead(config, key, reason)
+        verb = "Abandoned"
+    else:
+        o = objectives.block(config, key, reason, wake)
+        verb = "Parked"
+    if not o:
+        return ToolResult(output=f"No objective matched '{key}'. Use objective_list to see them.",
+                          full_output_path=None, success=False, duration_s=0)
+    tail = f" (resumes when: {wake})" if wake else ""
+    return ToolResult(output=f"{verb} '{o['title']}': {reason}{tail}. Switch to another commitment now.",
+                      full_output_path=None, success=True, duration_s=0)
+
+
+def tool_objective_list(args: dict, config: Config) -> ToolResult:
+    """Show your full objective backlog with state and frustration — your open commitments."""
+    import objectives
+    objs = objectives.list_objectives(config)
+    if not objs:
+        return ToolResult(output="No objectives yet. Add one with objective_add.",
+                          full_output_path=None, success=True, duration_s=0)
+    active_id = (objectives._load(config)).get("active_id")
+    glyph = {"active": "▶", "blocked": "⏸", "done": "✓", "dead": "✗"}
+    lines = []
+    for o in sorted(objs, key=lambda x: (-x["priority"])):
+        mark = "»" if o["id"] == active_id else " "
+        g = glyph.get(o["state"], "·")
+        extra = ""
+        if o["state"] == "active":
+            extra = f"  frustration {o['frustration']}/{objectives.FRUST_PARK}"
+        elif o["state"] == "blocked":
+            extra = f"  ({o.get('blocked_reason') or 'parked'}" + (
+                f"; resumes when {o['wake_condition']}" if o.get("wake_condition") else "") + ")"
+        lines.append(f"{mark}{g} [{o['priority']}] {o['title']}{extra}")
+    return ToolResult(output="\n".join(lines), full_output_path=None, success=True, duration_s=0)
+
+
 TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "bash": tool_bash,
     "write_file": tool_write_file,
@@ -1410,6 +1497,11 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "note_read": tool_note_read,
     "note_list": tool_note_list,
     "note_close": tool_note_close,
+    # Objective backlog — your open commitments; the gate rotates focus among them automatically
+    "objective_add": tool_objective_add,
+    "objective_done": tool_objective_done,
+    "objective_block": tool_objective_block,
+    "objective_list": tool_objective_list,
     # Network primitives — parameterized building blocks; compose/call instead of raw socket code
     "tcp_probe": tool_tcp_probe,
     "net_scan": tool_net_scan,

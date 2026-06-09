@@ -91,6 +91,11 @@ Core tools:
     each tick. Keep messy investigation notes here (NOT in memorize, NOT in your own JSON files).
   - memorize  {{"fact": "...", "tags": [...], "category": "facts|errors|procedures|reflections"}}  — ONE
     clean DURABLE fact (searchable via recall). Don't re-memorize what you already know.
+- OBJECTIVES — your backlog of open commitments; a gate auto-rotates your focus off any one that stalls:
+  objective_add {{"title":"...","why":"the purpose it serves","priority":1-9}} · objective_done {{"id":"..."}}
+  (real progress!) · objective_block {{"id":"...","reason":"why blocked","wake":"what would resume it"}} (PARK
+  it and move to other work — NOT stop to wait on Boss) · objective_list {{}}. Never grind one task to the
+  detriment of the rest; if it's blocked or failing, park it and switch. Ask Boss only if EVERYTHING is parked.
 - network primitives (parameterized — compose/call these, don't write raw sockets):
   net_scan {{"subnet":"192.168.86","ports":[80,443,6668]}} · tcp_probe {{"ip":"...","port":80}} ·
   http_probe {{"ip":"...","port":80}} · udp_listen {{"port":6667}} (finds Tuya broadcasts)

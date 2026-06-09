@@ -370,9 +370,11 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
     # (its "do not reply with only a thought" tail contradicts "reply to Boss").
     if boss_waiting:
         loop_detected = False
-    # High tension at the decision point (only when Boss isn't already pulling priority).
-    elif tension >= 25:
-        boss_prefix = _tension_note(tension) + "\n\n"
+    # Park pressure at the decision point: `tension` is now the ACTIVE objective's frustration (0..FRUST_PARK).
+    # Near the cap, warn that the gate is about to rotate — pivot or park it yourself NOW.
+    elif tension >= 6:
+        boss_prefix = (f"⚠ This focus is almost out of patience ({tension}/8): make REAL progress THIS tick "
+                       f"or park it (objective_block) and move on — the gate will rotate you otherwise.\n\n")
 
     urgency_note = ""
     if max_ticks > 0:
@@ -382,8 +384,16 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
         elif remaining <= 2:
             urgency_note = f" — {remaining} tick{'s' if remaining != 1 else ''} remaining: wrap up and call goal_complete if ready"
 
-    focus = _current_focus(config)
-    subtask_line = f"Current focus: {focus}" if focus else "Focus on your mission directly."
+    try:
+        import objectives
+        _ao = objectives.get_active(config)
+    except Exception:  # noqa: BLE001
+        _ao = None
+    if _ao:
+        subtask_line = f"Current focus: {_ao['title']} (because: {_ao['why']})"
+    else:
+        focus = _current_focus(config)
+        subtask_line = f"Current focus: {focus}" if focus else "Focus on your mission directly."
 
     if loop_detected:
         return boss_prefix + TICK_PROMPT_LOOP_DETECTED.format(
@@ -588,6 +598,100 @@ def _current_focus(config: Config) -> str:
     return " — ".join(parts)
 
 
+def _plan_next_step(config: Config) -> str:
+    for line in (read_plan(config) or "").splitlines():
+        s = line.strip()
+        if s and not s.startswith("#"):
+            return s.lstrip("0123456789.-)[] x").strip()
+    return ""
+
+
+def _frust_bar(frust: int, cap: int) -> str:
+    filled = max(0, min(cap, frust))
+    return "▓" * filled + "░" * (cap - filled)
+
+
+def _objective_focus_block(config: Config) -> str:
+    """High-salience focus: the ACTIVE objective + its WHY (so the mechanic never eclipses the goal)
+    + the plan's next concrete step + a frustration gauge that names the automatic park. Falls back to
+    the legacy single-focus line when the backlog is empty."""
+    try:
+        import objectives
+        o = objectives.get_active(config)
+    except Exception:  # noqa: BLE001
+        o = None
+    if not o:
+        focus = _current_focus(config)
+        return ("## Current focus (your single objective — advance THIS)\n" + focus) if focus else ""
+    step = _plan_next_step(config)
+    cap = getattr(__import__("objectives"), "FRUST_PARK", 8)
+    lines = ["## Current focus (advance THIS; the gate moves you on automatically if it stalls)",
+             f"▶ {o['title']}",
+             f"   WHY: {o['why']}"]
+    if step:
+        lines.append(f"   next step: {step}")
+    fr = o.get("frustration", 0)
+    if fr >= 3:
+        lines.append(f"   frustration {_frust_bar(fr, cap)} {fr}/{cap} — at {cap} this is PARKED and "
+                     f"you are rotated to other useful work automatically. Make REAL progress or park it yourself.")
+    return "\n".join(lines)
+
+
+def _rotation_banner(config: Config) -> str:
+    """Shown exactly once, right after the gate rotates focus — explains the park and the new target so
+    the pivot is legible (and so it doesn't crawl back to the parked task)."""
+    try:
+        import objectives
+        rot = objectives.take_rotation(config)
+    except Exception:  # noqa: BLE001
+        rot = None
+    if not rot:
+        return ""
+    wake = f" Do NOT return to it until: {rot['wake']}." if rot.get("wake") else \
+           " Leave it parked — come back only if you learn something that changes it."
+    return ("## Focus changed — you were rotated off a stall\n"
+            f"You stopped making progress on \"{rot['from_title']}\" (parked: {rot['park_reason']}).{wake}\n"
+            f"You are now on: {rot['to_title']} — BECAUSE: {rot['to_why']}.")
+
+
+def _backlog_panel(config: Config) -> str:
+    """Compact view of all open commitments — so it always knows there is other worthwhile work."""
+    try:
+        import objectives
+        objs = objectives.list_objectives(config)
+        active_id = objectives._load(config).get("active_id")
+    except Exception:  # noqa: BLE001
+        objs = []
+        active_id = None
+    if not objs:
+        return ""
+    glyph = {"active": "▶", "blocked": "⏸", "done": "✓", "dead": "✗"}
+    rows = []
+    for o in sorted(objs, key=lambda x: (-x["priority"])):
+        if o["state"] == "done":
+            continue  # keep the panel about what's still LIVE
+        mark = "»" if o["id"] == active_id else " "
+        g = glyph.get(o["state"], "·")
+        tail = ""
+        if o["state"] == "blocked":
+            tail = f" — parked: {o.get('blocked_reason') or 'blocked'}"
+            if o.get("wake_condition"):
+                tail += f" (resumes when {o['wake_condition']})"
+        rows.append(f"{mark}{g} {o['title']}{tail}")
+    if not rows:
+        return ""
+    return ("## Your open commitments (rotate among these — never grind one to the detriment of the rest)\n"
+            + "\n".join(rows))
+
+
+def _escalation_note(config: Config) -> str:
+    try:
+        import objectives
+        return objectives.take_escalation(config) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _build_presence(config: Config, tick_number: int, goal_start_time: float) -> str:
     """A 'you are here' header — time, your state, what you're on — for presence."""
     import time, json
@@ -713,19 +817,24 @@ def _assemble_briefing(
     #     invalidated the whole message's KV. (doc: stable cached prefix + delta prompting.) ---
     durable = []
 
-    # The ONE objective, high salience (replaces the 4 conflicting sources); also named in the tick prompt.
-    focus = _current_focus(config)
-    if focus:
-        durable.append("## Current focus (your single objective — advance THIS)\n" + focus)
-
-    # Goal-tension: rising pressure when ticks pass without real progress (glue signal, not a plea).
-    # When stalling, ALSO surface a concrete menu of other directions so it can actually pivot.
-    tnote = _tension_note(tension)
-    if tnote:
-        durable.append("## Progress check\n" + tnote)
-        durable.append("## Other directions you could pursue right now (you can do FAR more than one "
-                       "device — if your focus is blocked or stalling, switch to one of these)\n"
-                       + _breadth_menu(config))
+    # Ventral Striatum / Action Gate: the ACTIVE objective (+ its WHY), the open-commitments backlog,
+    # and — once, right after a rotation — a "focus changed" banner. This replaces the single drifting
+    # focus line and the global tension banner: pivoting is now GOVERNED by the gate, not pleaded for.
+    rot = _rotation_banner(config)        # consumed once; highest salience when present
+    if rot:
+        durable.append(rot)
+    esc = _escalation_note(config)        # one-shot "whole backlog stuck — ask Boss" (rare)
+    if esc:
+        durable.append("## Backlog is fully blocked\n" + esc)
+    focus_block = _objective_focus_block(config)
+    if focus_block:
+        durable.append(focus_block)
+    backlog = _backlog_panel(config)
+    if backlog:
+        durable.append(backlog)
+    # Fallback breadth menu only when the backlog can't carry the pivot (empty/all parked).
+    if not backlog and _tension_note(tension):
+        durable.append("## Other directions you could pursue right now\n" + _breadth_menu(config))
 
     # Self-guide — Boss's standing behavioral directives, high salience (just under presence).
     if getattr(config, "self_guide_enabled", True):
