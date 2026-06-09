@@ -141,13 +141,27 @@ def _write_chat_reply(config: Config, tick_number: int, reply_text: str):
         f.write(entry + "\n")
 
 
+def _first_sentences(text: str, max_sentences: int = 2, max_chars: int = 200) -> str:
+    """The opening 1-2 sentences of a reply — what we voice. TTS here runs ~4x slower than realtime
+    (Chatterbox is GPU-starved by the house model), so speaking a paragraph would lag badly. The spoken
+    opener + readable text body is the right split on this hardware."""
+    import re as _re
+    parts = _re.split(r"(?<=[.!?])\s+", (text or "").strip())
+    out = ""
+    for p in parts[:max_sentences]:
+        if out and len(out) + len(p) > max_chars:
+            break
+        out = (out + " " + p).strip()
+    return out[:max_chars]
+
+
 def _auto_speak(config: Config, text: str) -> None:
     """Voice an outgoing chat reply through the dashboard so Boss HEARS every response — the voice is
-    first-class, not opt-in. Best-effort and short-only (long replies stay text; the GPU is shared, so a
-    paragraph of TTS would lag). Also the backstop: if the model hedges with text instead of calling
-    `speak`, this speaks it anyway."""
-    t = (text or "").strip()
-    if not t or len(t) > 320:
+    first-class, not opt-in. We speak only the opening 1-2 sentences (TTS is ~4x slower than realtime on
+    this GPU, so a paragraph would lag); the full text stays readable in chat. Also the backstop: if the
+    model hedges with text instead of calling `speak`, this speaks the opener anyway."""
+    t = _first_sentences(text)
+    if not t:
         return
     try:
         import urllib.request as _u
