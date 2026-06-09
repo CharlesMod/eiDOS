@@ -17,7 +17,7 @@ from tools import (
     tool_bg_run, tool_bg_check, tool_http_get,
     tool_remember, tool_update_plan, tool_memorize, tool_recall,
     tool_goal_complete, tool_ask_supervisor, tool_plan_goal,
-    refresh_jobs, _read_jobs, _write_jobs,
+    refresh_jobs, _read_jobs, _write_jobs, ToolResult,
 )
 
 
@@ -487,6 +487,115 @@ class TestTools(unittest.TestCase):
         with patch("llm.planning_complete", return_value="- [ ] Step 1"):
             result = execute_tool(call, self.config)
         self.assertTrue(result.success)
+
+
+class TestSkillWatchdog(unittest.TestCase):
+    """Tick 342 reproduction: a self-authored skill that makes a blocking network call with no timeout
+    must NOT freeze the tick loop. execute_tool runs skills under a wall-clock watchdog; built-in tools
+    are left bounded/trusted. 'Ghost-in-the-machine' style — we register a skill the exact way
+    skills._activate does (a non-built-in name in the live TOOLS dict) and drive execute_tool."""
+
+    def setUp(self):
+        import threading
+        from tools import TOOLS, _BUILTIN_TOOL_NAMES
+        self.threading = threading
+        self.TOOLS = TOOLS
+        self.builtins = _BUILTIN_TOOL_NAMES
+        self.config = Config()
+        self.config.skill_watchdog_s = 0.5  # tight so the test is fast; real default is 30s
+        self._added = []
+        self._sockets = []
+
+    def tearDown(self):
+        for n in self._added:
+            self.TOOLS.pop(n, None)
+        for s in self._sockets:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+    def _register_skill(self, name, fn):
+        """Mimic skills._build_runner/_activate: runner named skill_<name>, added to live TOOLS."""
+        fn.__name__ = f"skill_{name}"
+        self.assertNotIn(name, self.builtins)  # must look like a skill, not a built-in
+        self.TOOLS[name] = fn
+        self._added.append(name)
+
+    def test_sleeping_skill_does_not_freeze_loop(self):
+        """A skill that blocks (sleep) returns promptly via the watchdog, not after the full sleep."""
+        def tool_sleeper(args, config):
+            time.sleep(10)
+            return ToolResult(output="done", full_output_path=None, success=True, duration_s=10)
+        self._register_skill("sleeper", tool_sleeper)
+        t = time.monotonic()
+        result = execute_tool(ToolCall(tool="sleeper", args={}, raw=""), self.config)
+        elapsed = time.monotonic() - t
+        self.assertLess(elapsed, 5.0, "watchdog did not free the loop — it blocked on the skill")
+        self.assertFalse(result.success)
+        self.assertIn("WATCHDOG", result.output)
+
+    def test_held_socket_skill_does_not_freeze_loop(self):
+        """Exact tick-342 shape: a tarpit accepts the TCP connection but never replies (like the camera
+        at .63), and the skill does a timeout-less recv(). The loop must still be freed by the watchdog."""
+        import socket
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        self._sockets.append(srv)
+        host, port = srv.getsockname()
+
+        def _tarpit():
+            try:
+                conn, _ = srv.accept()
+                self._sockets.append(conn)  # hold it open, never send a byte
+            except OSError:
+                pass
+        self.threading.Thread(target=_tarpit, daemon=True).start()
+
+        def tool_camera_snapshot(args, config):
+            import socket as _s
+            c = _s.create_connection((host, port))  # NO timeout — the original bug
+            data = c.recv(1024)                       # blocks forever; peer never replies
+            return ToolResult(output=data.decode(), full_output_path=None, success=True, duration_s=0)
+        self._register_skill("camera_snapshot", tool_camera_snapshot)
+
+        t = time.monotonic()
+        result = execute_tool(ToolCall(tool="camera_snapshot", args={}, raw=""), self.config)
+        elapsed = time.monotonic() - t
+        self.assertLess(elapsed, 5.0, "watchdog did not free the loop on a held connection")
+        self.assertFalse(result.success)
+        self.assertIn("WATCHDOG", result.output)
+
+    def test_fast_skill_passes_through_unharmed(self):
+        """A well-behaved skill returns its real result; the watchdog adds no penalty."""
+        def tool_quick(args, config):
+            return ToolResult(output="ok-quick", full_output_path=None, success=True, duration_s=0.01)
+        self._register_skill("quick", tool_quick)
+        result = execute_tool(ToolCall(tool="quick", args={}, raw=""), self.config)
+        self.assertTrue(result.success)
+        self.assertIn("ok-quick", result.output)
+
+    def test_skill_exception_surfaces_as_failed_result(self):
+        """A skill that raises is converted to a failed ToolResult (loop never crashes)."""
+        def tool_boom(args, config):
+            raise ValueError("kaboom")
+        self._register_skill("boom", tool_boom)
+        result = execute_tool(ToolCall(tool="boom", args={}, raw=""), self.config)
+        self.assertFalse(result.success)
+        self.assertIn("kaboom", result.output)
+
+    def test_builtin_tools_bypass_watchdog(self):
+        """Built-ins are bounded/trusted and must take the direct (non-threaded) path. A built-in whose
+        own runtime exceeds the tiny watchdog window must still complete normally."""
+        self.config.skill_watchdog_s = 0.01  # would kill anything that went through the watchdog
+        # goal_complete is a pure, instant built-in; it must NOT be watchdogged (it's in the snapshot).
+        self.assertIn("goal_complete", self.builtins)
+        result = execute_tool(
+            ToolCall(tool="goal_complete", args={"summary": "s", "evidence": "e"}, raw=""), self.config)
+        self.assertTrue(result.success)
+        self.assertIn("GOAL_COMPLETE", result.output)
 
 
 if __name__ == "__main__":
