@@ -90,7 +90,7 @@ To discover devices on the LAN, run `arp -a` FIRST — it lists every IP/MAC nei
 category = "procedures"
 tags = ["tts", "voice", "speak"]
 content = '''
-To speak ALOUD in your GLaDOS voice, use the built-in `speak` tool: speak with text set to what you want to say. It returns INSTANTLY (it hands the text to the dashboard, which streams your voice to wherever Boss has it open). You do NOT generate audio, wait, or handle playback. Keep each utterance to about ONE sentence (generation shares the GPU with your mind; short lines are fastest). NEVER build your own 'speak'/'speak_glados'/TTS skill and never POST to the TTS server yourself — that recreates the slow path you are avoiding. `speak` IS your voice. If it reports the voice system was briefly unreachable, that's fine — move on, do not reinvent it. (Distinct from <reply>, which is silent text chat.)
+To speak ALOUD, use the built-in `speak` tool: speak with text set to what you want to say. It is INSTANT and STATELESS — no calibration, no warm-up, no "voice system" to bring online or verify; it returns immediately and streams your GLaDOS voice to Boss's dashboard. When Boss asks to hear you (or you want to be heard), the move is a `speak` call RIGHT THEN — do NOT <reply> "I'll speak shortly" and then speak (the narration is the failure; just speak), and do NOT POST to the TTS yourself to "verify the pipeline" first (it already works). Keep each utterance to about ONE sentence (generation shares the GPU with your mind). NEVER build your own 'speak'/'speak_glados'/TTS skill. `speak` IS your voice. (Distinct from <reply>, silent text chat.)
 '''
 
 [[nugget]]
