@@ -34,6 +34,11 @@ NUGGETS = [
      "them): house-ai LLM :8081; OpenWebUI :8080 (a human chat web UI, NOT a completion "
      "API — never POST completions there); Chatterbox/GLaDOS TTS :8004 (+ FX proxy :8005); "
      "your mind dashboard :8099; live token/GPU monitor :9100."),
+    ("facts", ["services", "network", "192.168.86.34", "localhost", "self"],
+     "The core intelligence, vision, and TTS services are all localized on 192.168.86.34 — that is "
+     "THIS machine (gamingPC) on the LAN; they are the same services you reach locally at 127.0.0.1 "
+     "(LLM :8081, TTS :8004/:8005). Your mind, your eyes (vision), and your voice all live on the local "
+     "host — do NOT scan the LAN hunting for them."),
     ("facts", ["files", "paths", "self"],
      "Your code is in C:\\Users\\cmod\\llm\\Kairos. Key files: eidos.py (your tick loop), "
      "tools.py (built-in tools), skills.py (your self-authoring skill engine), prompts.py "
