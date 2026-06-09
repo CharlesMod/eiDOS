@@ -1593,6 +1593,13 @@ def tool_speak(args: dict, config: Config) -> ToolResult:
             old.unlink()
     except Exception:  # noqa: BLE001
         pass
+    try:  # INTERRUPT the dashboard so it plays instantly over SSE (best-effort; no polling delay)
+        nreq = urllib.request.Request("http://127.0.0.1:8099/api/speech/notify",
+                                      data=_json.dumps({"id": sid}).encode("utf-8"),
+                                      headers={"Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(nreq, timeout=2).read()
+    except Exception:  # noqa: BLE001
+        pass
     return ToolResult(output=f"🔊 Spoke aloud ({len(text)} chars, {len(wav)//1024}KB) — playing on the "
                       f"dashboard now (if Boss has voice enabled there).",
                       full_output_path=str(path), success=True, duration_s=time.monotonic() - start)

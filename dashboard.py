@@ -147,6 +147,39 @@ def latest_speech_id(config: Config) -> str:
     return max(ids, key=int) if ids else ""
 
 
+# --- Speech push bus: eiDOS notifies the dashboard the instant it speaks; the dashboard pushes an
+#     SSE event to every open browser, which plays immediately. No polling, no arbitrary delay. ---
+import threading as _sp_threading
+import queue as _sp_queue
+
+_speech_subs: set = set()
+_speech_subs_lock = _sp_threading.Lock()
+
+
+def speech_publish(sid: str) -> int:
+    """Push a new speech-clip id to all connected browsers. Returns how many got it."""
+    with _speech_subs_lock:
+        subs = list(_speech_subs)
+    for q in subs:
+        try:
+            q.put_nowait(sid)
+        except Exception:  # noqa: BLE001 - full/closed queue; client will catch up on next event
+            pass
+    return len(subs)
+
+
+def speech_subscribe():
+    q = _sp_queue.Queue(maxsize=16)
+    with _speech_subs_lock:
+        _speech_subs.add(q)
+    return q
+
+
+def speech_unsubscribe(q) -> None:
+    with _speech_subs_lock:
+        _speech_subs.discard(q)
+
+
 def build_dream_list(config: Config) -> dict:
     """Read last 10 memory snapshots (dream records)."""
     snap_dir = config.workspace / "snapshots"
@@ -1131,27 +1164,20 @@ async function nxStatus(){
   }catch(e){}
 }
 setInterval(nxStatus,2000);nxStatus();
-// --- Voice: play eiDOS's spoken audio through THIS browser (wherever the dashboard is open) ---
-let nxVoiceOn=false, nxLastSpeech=null;
-async function nxInitVoice(){ try{const r=await fetch('/api/speech/latest');const d=await r.json();nxLastSpeech=d.id;}catch(e){} }
-function toggleVoice(){
+// --- Voice: eiDOS PUSHES each utterance over SSE; we play it instantly through THIS browser.
+//     No polling — zero arbitrary delay. Each SSE event is a fresh utterance, so just play it. ---
+let nxVoiceOn=false, nxES=null;
+function nxPlay(id){ const a=document.getElementById('nx-audio'); a.src='/api/speech/file?id='+id; a.play().catch(()=>{}); }
+function nxConnectSSE(){
+  if(nxES) return;
+  nxES = new EventSource('/api/speech/events');   // browser auto-reconnects on drop
+  nxES.onmessage = (e)=>{ if(!nxVoiceOn) return; try{const d=JSON.parse(e.data); if(d.id) nxPlay(d.id);}catch(_){} };
+}
+async function toggleVoice(){
   nxVoiceOn=!nxVoiceOn;
   document.getElementById('nx-voice').innerHTML = nxVoiceOn ? '&#128266; Voice: on' : '&#128263; Voice: off';
-  const a=document.getElementById('nx-audio');
-  if(nxVoiceOn){ a.muted=false; a.play().catch(()=>{}); }  // this click unlocks browser autoplay
+  if(nxVoiceOn){ const a=document.getElementById('nx-audio'); a.muted=false; try{await a.play();}catch(_){}; nxConnectSSE(); }
 }
-async function nxPollSpeech(){
-  if(!nxVoiceOn) return;
-  try{
-    const r=await fetch('/api/speech/latest'); const d=await r.json();
-    if(d.id && d.id!==nxLastSpeech){
-      nxLastSpeech=d.id;
-      const a=document.getElementById('nx-audio');
-      a.src='/api/speech/file?id='+d.id; a.play().catch(()=>{});
-    }
-  }catch(e){}
-}
-setInterval(nxPollSpeech,1500); nxInitVoice();
 </script>
 <div class="container">
     <div class="header">
@@ -2251,6 +2277,34 @@ def _make_handler(config: Config):
                 data = build_dream_list(config)
                 self._respond(200, "application/json", json.dumps(data))
 
+            elif self.path == "/api/speech/events":
+                # SSE: push the id of each new speech clip the instant eiDOS speaks (no polling).
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "keep-alive")
+                    self.send_header("X-Accel-Buffering", "no")
+                    self.end_headers()
+                    self.wfile.write(b": connected\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    return
+                q = speech_subscribe()
+                try:
+                    while True:
+                        try:
+                            sid = q.get(timeout=15)
+                            self.wfile.write(("data: " + json.dumps({"id": sid}) + "\n\n").encode("utf-8"))
+                        except _sp_queue.Empty:
+                            self.wfile.write(b": ping\n\n")  # heartbeat — also detects disconnects
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                finally:
+                    speech_unsubscribe(q)
+                return
+
             elif self.path == "/api/speech/latest":
                 self._respond(200, "application/json",
                               json.dumps({"id": latest_speech_id(config) or None}))
@@ -2346,6 +2400,15 @@ def _make_handler(config: Config):
                 self._respond(200, "application/json", json.dumps(_ctrl_resume(config)))
             elif self.path == "/api/control/pause":
                 self._respond(200, "application/json", json.dumps(_ctrl_pause(config)))
+            elif self.path == "/api/speech/notify":
+                # eiDOS calls this the instant it saves a speech clip -> push to all browsers now.
+                try:
+                    length = int(self.headers.get("Content-Length", 0) or 0)
+                    sid = json.loads(self.rfile.read(length) or b"{}").get("id") if length else None
+                except Exception:  # noqa: BLE001
+                    sid = None
+                n = speech_publish(str(sid)) if sid else 0
+                self._respond(200, "application/json", json.dumps({"ok": bool(sid), "delivered": n}))
             elif self.path == "/api/chat_hold":
                 # Listening hold — focusing the chat box quiets the loop. Best-effort,
                 # never 500s; token-gated if a token is configured.
