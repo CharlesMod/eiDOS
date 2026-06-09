@@ -12,3 +12,8 @@ venv/
 workspace/*
 !workspace/goal.md
 workspace.pi-backup/
+
+# stray TTS test artifacts (repo root)
+say.wav
+speak_output.wav
+tts_output_*.mp3
