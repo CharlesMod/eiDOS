@@ -66,9 +66,6 @@ protected_patterns = [
     "llama[-_]?cli",
 ]
 
-[session]
-grace_period_s = 60
-
 [self_healing]
 restart_cmd = ""                # empty -> no systemd hot-swap / no llm restart (correct on Windows)
 local_only = false

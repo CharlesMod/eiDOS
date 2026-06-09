@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
 from config import Config
-from eidos import write_wal, read_wal, clear_wal, attempt_llm_restart, recover
+from eidos import write_wal, read_wal, clear_wal, recover
 from memory import write_memory, append_observation, read_goal
 
 
@@ -108,37 +108,6 @@ class TestRecoverWithWAL(unittest.TestCase):
         recover(self.config)
         self.assertEqual(self.config.memory_path.read_text(), "important memory content")
 
-
-class TestSelfHealing(unittest.TestCase):
-
-    def setUp(self):
-        self.config = Config()
-
-    def test_no_restart_cmd_returns_false(self):
-        self.config.llm_restart_cmd = ""
-        self.assertFalse(attempt_llm_restart(self.config))
-
-    @patch("eidos.subprocess.run")
-    def test_restart_success(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
-        self.config.llm_restart_cmd = "systemctl restart llama-server"
-        with patch("eidos.time.sleep"):  # skip the 10s wait
-            result = attempt_llm_restart(self.config)
-        self.assertTrue(result)
-        mock_run.assert_called_once()
-
-    @patch("eidos.subprocess.run")
-    def test_restart_failure_nonzero_exit(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=1, stderr="unit not found")
-        self.config.llm_restart_cmd = "systemctl restart llama-server"
-        result = attempt_llm_restart(self.config)
-        self.assertFalse(result)
-
-    @patch("eidos.subprocess.run", side_effect=TimeoutError)
-    def test_restart_timeout(self, mock_run):
-        self.config.llm_restart_cmd = "hang-forever"
-        result = attempt_llm_restart(self.config)
-        self.assertFalse(result)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""eiDOS — autonomous LLM supervisor for Raspberry Pi.
+"""eiDOS — the always-on house AI (Windows host gamingPC).
 
-Entry point: crash recovery, tick loop, signal handling, session detection.
+Entry point: crash recovery, tick loop, signal handling.
 """
 
 import argparse
@@ -47,7 +47,6 @@ from persona import (
 )
 from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rotate_metrics, cleanup_old_snapshots
 from safety import check_ram, get_cpu_temp, kill_child_processes, check_disk_space
-from session import human_present, take_workspace_snapshot, workspace_diff
 from telemetry import write_heartbeat, append_metrics, write_activity, get_cpu_pct
 from tools import execute_tool, refresh_jobs, collect_finished_jobs, reap_jobs
 
@@ -295,30 +294,6 @@ def clear_wal(config: Config):
         pass
 
 
-def attempt_llm_restart(config: Config) -> bool:
-    """Try to restart the local LLM process. Returns True on success."""
-    cmd = config.llm_restart_cmd
-    if not cmd:
-        logger.warning("No llm_restart_cmd configured — cannot self-heal")
-        return False
-    logger.info("Attempting LLM restart: %s", cmd)
-    try:
-        result = subprocess.run(
-            cmd, shell=True, timeout=60, capture_output=True, text=True)
-        if result.returncode == 0:
-            logger.info("LLM restart succeeded")
-            time.sleep(10)  # give the model time to load
-            return True
-        logger.error("LLM restart failed (rc=%d): %s", result.returncode, result.stderr[:500])
-        return False
-    except subprocess.TimeoutExpired:
-        logger.error("LLM restart timed out after 60s")
-        return False
-    except Exception as e:
-        logger.error("LLM restart error: %s", e)
-        return False
-
-
 def recover(config: Config) -> dict:
     """Crash recovery: validate state, fix corruption, log restart.
     Returns WAL state dict (may be empty on fresh start).
@@ -439,7 +414,7 @@ def _extract_thought(response: str) -> str:
 
 
 def run_loop(config: Config, persona=None, wal=None):
-    """Main tick loop with session detection and compaction."""
+    """Main tick loop with compaction."""
     global _shutdown_requested
 
     # Restore state from WAL or start fresh
@@ -451,8 +426,6 @@ def run_loop(config: Config, persona=None, wal=None):
     reasoning_exhaustions = wal.get("reasoning_exhaustions", 0)
     current_max_tokens = wal.get("current_max_tokens", 0) or config.llm_max_tokens
     recent_hashes: collections.deque = collections.deque(maxlen=config.loop_detect_window)
-    standby = False
-    standby_snapshot = None
     goal_complete = False
     last_tick_failed = False
     ticks_since_goal_complete = None  # None = never
@@ -502,40 +475,6 @@ def run_loop(config: Config, persona=None, wal=None):
             time.sleep(5)
 
     while not _shutdown_requested and not goal_complete:
-        # --- Session detection (skip in mock mode) ---
-        if not config.mock_mode:
-            if human_present():
-                if not standby:
-                    print(f"{pfx} Human detected — entering standby")
-                    standby_snapshot = take_workspace_snapshot(config)
-                    append_observation(config, {
-                        "tick": tick_number,
-                        "tool": "system",
-                        "success": True,
-                        "output": "Human SSH session detected. Entering standby.",
-                    })
-                    standby = True
-                time.sleep(30)  # Check every 30s while in standby
-                continue
-            elif standby:
-                # Human left — resume after grace period
-                print(f"{pfx} Human gone — resuming in {config.grace_period_s}s")
-                time.sleep(config.grace_period_s)
-                standby = False
-
-                # Generate workspace diff
-                if standby_snapshot:
-                    diff = workspace_diff(config, standby_snapshot)
-                    if diff:
-                        append_observation(config, {
-                            "tick": tick_number,
-                            "tool": "system",
-                            "success": True,
-                            "output": diff,
-                        })
-                        print(f"{pfx} Workspace changes detected on resume")
-                    standby_snapshot = None
-
         # --- Operator pause check ---
         pause_path = config.workspace / "paused"
         if pause_path.exists():
@@ -834,19 +773,12 @@ def run_loop(config: Config, persona=None, wal=None):
                 "output": f"LLM call failed ({consecutive_failures}x): {e}",
             })
 
-            # Self-healing: restart LLM after too many consecutive failures
+            # The model is an nssm service owned outside eidos (HouseAI-Llama); eidos cannot
+            # restart it. After repeated failures, note it loudly — the operator/watchdog owns
+            # recovery. (v2 phase 4 turns this into a typed event to the supervisor.)
             if consecutive_failures >= config.llm_max_consecutive_failures:
-                print(f"{pfx} Too many consecutive LLM failures — attempting restart")
-                if attempt_llm_restart(config):
-                    consecutive_failures = 0
-                    append_observation(config, {
-                        "tick": tick_number,
-                        "tool": "system",
-                        "success": True,
-                        "output": "LLM process restarted after repeated failures.",
-                    })
-                    if persona and config.persona_enabled:
-                        record_error_recovery(persona)
+                print(f"{pfx} LLM unreachable after {consecutive_failures} consecutive failures "
+                      f"— it is an external service; waiting for it to return")
 
             write_wal(config, tick_number, ticks_since_compaction,
                       goal_start_time, consecutive_failures,

@@ -35,7 +35,6 @@ from prompts import SYSTEM_PROMPT, TICK_PROMPT
 from env_snapshot import generate as generate_env_snapshot
 from context import assemble_context
 from compaction import should_compact, compact
-from session import human_present, take_workspace_snapshot
 
 
 class ValidationResult:
@@ -416,27 +415,6 @@ def stage_interventions(config: Config) -> ValidationResult:
     return r
 
 
-def stage_session_detection(config: Config) -> ValidationResult:
-    """Stage 9: Verify session detection functions work."""
-    r = ValidationResult("Stage 9: Session Detection")
-    start = time.monotonic()
-
-    try:
-        present = human_present()
-        snapshot = take_workspace_snapshot(config)
-
-        r.duration = time.monotonic() - start
-        r.passed = True
-        r.details["human_present"] = present
-        r.details["snapshot_keys"] = list(snapshot.keys())
-        r.details["note"] = "standby/resume requires manual test"
-    except Exception as e:
-        r.duration = time.monotonic() - start
-        r.error = str(e)
-
-    return r
-
-
 def stage_cleanup(config: Config) -> ValidationResult:
     """Stage 10: Clean up test artifacts."""
     r = ValidationResult("Stage 10: Cleanup")
@@ -492,7 +470,6 @@ def run_validation(llm_url: str, llm_model: str):
         stage_safety,
         stage_loop_detection,
         stage_interventions,
-        stage_session_detection,
         stage_cleanup,
     ]
 

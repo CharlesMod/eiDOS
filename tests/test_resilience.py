@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
 from config import Config
-from eidos import write_wal, read_wal, clear_wal, recover, run_loop, attempt_llm_restart
+from eidos import write_wal, read_wal, clear_wal, recover, run_loop
 from memory import (
     write_memory,
     read_memory,
@@ -354,33 +354,6 @@ class TestLLMCrashMidRequest(unittest.TestCase):
 
         # Agent didn't hang — it ran at least one tick
         self.assertGreater(tick_count[0], 0)
-
-    def test_consecutive_failures_trigger_restart(self):
-        """After N consecutive LLM failures, attempt_llm_restart is called."""
-        from llm import LLMError
-
-        self.config.goal_path.write_text("Test goal")
-        write_memory(self.config, "Test memory")
-        self.config.llm_max_consecutive_failures = 3
-        self.config.llm_restart_cmd = "systemctl restart llama-server"
-
-        failure_count = [0]
-
-        def fail_then_shutdown(*a, **kw):
-            failure_count[0] += 1
-            if failure_count[0] > 4:
-                import eidos
-                eidos._shutdown_requested = True
-            raise LLMError("Connection refused")
-
-        with patch("eidos.complete", side_effect=fail_then_shutdown):
-            with patch("eidos.time.sleep"):
-                with patch("eidos.attempt_llm_restart", return_value=True) as mock_restart:
-                    run_loop(self.config, persona=None)
-
-        # Should have attempted restart after 3 consecutive failures
-        self.assertTrue(mock_restart.called,
-                        "LLM restart not attempted after consecutive failures")
 
     def test_reasoning_exhausted_bumps_tokens(self):
         """ReasoningExhausted → next tick gets higher max_tokens budget."""

@@ -66,9 +66,6 @@ class Config:
         r"dd\s+.*of=/dev/",
     ])
 
-    # Session
-    grace_period_s: int = 60
-
     # Self-healing
     llm_restart_cmd: str = ""       # e.g. "systemctl restart llama-server"
     llm_local_only: bool = False     # production: True — restart always means local llama-server
@@ -274,9 +271,6 @@ def load_config(path: str = "config.toml") -> Config:
         config.bg_output_max_bytes = safety.get("bg_output_max_bytes", config.bg_output_max_bytes)
         if "protected_patterns" in safety:
             config.protected_patterns = safety["protected_patterns"]
-
-        sess = data.get("session", {})
-        config.grace_period_s = sess.get("grace_period_s", config.grace_period_s)
 
         healing = data.get("self_healing", {})
         config.llm_restart_cmd = healing.get("restart_cmd", config.llm_restart_cmd)
