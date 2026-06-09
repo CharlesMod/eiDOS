@@ -83,9 +83,11 @@ NUGGETS = [
      "`Test-NetConnection <ip> -Port 80`. Map devices once with `memorize`, then build skills to "
      "control them."),
     ("procedures", ["tts", "voice", "speak"],
-     "To speak aloud, send text to the TTS service at http://127.0.0.1:8004 (or the GLaDOS "
-     "FX proxy :8005). Capture this as a reusable 'speak' skill instead of re-deriving the "
-     "request each time."),
+     "To speak aloud (GLaDOS voice): POST to http://127.0.0.1:8005/v1/audio/speech (the FX proxy) with "
+     "JSON body whose model is chatterbox, input is your text, voice is glados.wav, and response_format "
+     "is wav — it returns audio/wav bytes. The path MUST be /v1/audio/speech (root gives 405); voice MUST "
+     "be glados.wav not glados (else 404); format MUST be wav not mp3 (else 500). Call manual with topic "
+     "tts for the full recipe, and capture it as a reusable 'speak' skill (with a 30s timeout)."),
     ("procedures", ["gpu", "monitor", "check"],
      "To check GPU load/VRAM/temp, run: nvidia-smi --query-gpu=utilization.gpu,memory.used,"
      "memory.total,temperature.gpu,power.draw --format=csv,noheader . Utilization near 0 "
