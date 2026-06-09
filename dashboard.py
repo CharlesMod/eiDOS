@@ -192,11 +192,14 @@ _GLADOS_FFMPEG = _sp_os.environ.get(
     r"C:\Users\cmod\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0.1-full_build\bin\ffmpeg.exe")
 if not _sp_os.path.isfile(_GLADOS_FFMPEG):
     _GLADOS_FFMPEG = "ffmpeg"
-# Chain B "buzzy robot" — same FX as glados_proxy.py (keep in sync).
+# Chain B "buzzy robot" — same FX as glados_proxy.py (keep in sync). The trailing afade kills the
+# onset "bzzrrt": the aecho/chorus delay lines fill from silence and burst at sample 0, so a 70ms
+# fade-in on the final output masks that transient (and any first-chunk click from the stream).
 _GLADOS_FX = ("highpass=f=100,lowpass=f=7000,vibrato=f=6:d=0.12,"
               "chorus=0.6:0.9:55|65:0.5|0.4:0.3|0.45:2.2|1.5,"
               "tremolo=f=72:d=0.18,aecho=0.8:0.75:18:0.22,"
-              "equalizer=f=2200:t=q:w=1.2:g=5,alimiter=limit=0.95")
+              "equalizer=f=2200:t=q:w=1.2:g=5,alimiter=limit=0.95,"
+              "afade=t=in:st=0:d=0.07")
 
 _speech_texts: dict = {}            # id -> text (ephemeral, capped)
 _speech_texts_lock = _sp_threading.Lock()
