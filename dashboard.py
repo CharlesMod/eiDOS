@@ -2674,6 +2674,13 @@ def _make_handler(config: Config):
                 self._respond(404, "text/plain", "not found")
 
         def do_POST(self):
+            # Uniform auth (phase 8.1): when a token is configured, EVERY state-changing POST
+            # requires it — including /api/control/* (the kill-switch), /api/chat (the agent's
+            # input channel), and /api/speech/* — which were previously ungated even with a
+            # token set. Default empty token = open (accident-safety, trusted-LAN/Tailscale).
+            if not _token_ok(self.headers, self.path, config):
+                self._respond(401, "application/json", '{"error":"unauthorized"}')
+                return
             if self.path == "/api/chat":
                 length = int(self.headers.get("Content-Length", 0))
                 if length > 10_000:
@@ -2839,7 +2846,8 @@ def _token_ok(headers, path, config) -> bool:
             given = parse_qs(urlparse(path).query).get("token", [""])[0]
         except Exception:  # noqa: BLE001
             given = ""
-    return given == tok
+    import hmac
+    return hmac.compare_digest(given, tok)   # constant-time; never short-circuits on prefix
 
 
 def build_self_guide(config) -> dict:
