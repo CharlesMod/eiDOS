@@ -39,7 +39,7 @@ DECISIONS (resolved 2026-06-09): voice=C (A first), voice=separate service,
 embeddings=COMMIT+WIRE (do NOT delete embedding.py), persona=cosmetics-only,
 auth=0.0.0.0+uniform token, branch=bless main.
 
-## Phase 1 — typed failures + typed events (code complete, pending final gate + commit)
+## Phase 1 — typed failures + typed events (COMPLETE — 7efe060 + aaca51a, suite green 596 passed/0 failed)
 
 - ToolResult.fail_kind taxonomy (args/blocked/timeout/network/exec/parse/llm/crash/
   no_such_tool/error); execute_tool guarantees every failure leaves typed.
