@@ -36,10 +36,8 @@ from persona import (
     save_persona,
     record_tick,
     record_compaction,
-    record_goal_complete,
     record_error_recovery,
     compute_traits,
-    compute_mood,
     check_titles,
     format_prefix,
     format_status_line,
@@ -428,9 +426,7 @@ def run_loop(config: Config, persona=None, wal=None):
     reasoning_exhaustions = wal.get("reasoning_exhaustions", 0)
     current_max_tokens = wal.get("current_max_tokens", 0) or config.llm_max_tokens
     recent_hashes: collections.deque = collections.deque(maxlen=config.loop_detect_window)
-    goal_complete = False
     last_tick_failed = False
-    ticks_since_goal_complete = None  # None = never
     idle_since = None  # timestamp when goal went missing
     operator_paused = False
     listening_since = None  # set while the chat-focus "listening" hold is engaged
@@ -476,7 +472,7 @@ def run_loop(config: Config, persona=None, wal=None):
                 print(f"{pfx} Still waiting for LLM server... ({_health_wait}s)")
             time.sleep(5)
 
-    while not _shutdown_requested and not goal_complete:
+    while not _shutdown_requested:
         # --- Operator pause check ---
         pause_path = config.workspace / "paused"
         if pause_path.exists():
@@ -870,34 +866,6 @@ def run_loop(config: Config, persona=None, wal=None):
                 ).hexdigest()
             recent_hashes.append(call_hash)
 
-            # --- Goal complete check ---
-            if call.tool == "goal_complete" and result.success:
-                summary = call.args.get('summary', '')
-                if persona and config.persona_enabled:
-                    old_level = persona["level"]
-                    record_goal_complete(persona, summary)
-                    compute_traits(persona)
-                    new_titles = check_titles(persona)
-                    ticks_since_goal_complete = 0
-                    compute_mood(persona, ticks_since_goal=0)
-                    pfx = _pfx(persona, config)
-                    lvl_msg = ""
-                    if persona["level"] > old_level:
-                        lvl_msg = f", now Lv.{persona['level']}!"
-                    print(f"{pfx} Goal achieved! \"{summary}\" — XP +100{lvl_msg}")
-                    for t in new_titles:
-                        print(f"{pfx} Earned title: {t}")
-                    save_persona(config.workspace, persona)
-                else:
-                    print(f"[eidos] Goal declared complete: {summary}")
-                append_observation(config, {
-                    "tick": tick_number,
-                    "tool": "system",
-                    "success": True,
-                    "output": "Goal completion declared. Awaiting human confirmation.",
-                })
-                goal_complete = True
-
         # --- Log rotation check (every 50 ticks) ---
         if tick_number % 50 == 0:
             rotated = rotate_if_needed(config)
@@ -920,11 +888,6 @@ def run_loop(config: Config, persona=None, wal=None):
             check_titles(persona)
             persona["uptime_total_s"] = persona.get("uptime_total_s", 0) + int(time.monotonic() - loop_start)
             save_persona(config.workspace, persona)
-
-        # --- Mood update ---
-        if persona and config.persona_enabled:
-            if ticks_since_goal_complete is not None:
-                ticks_since_goal_complete += 1
 
         # --- Telemetry ---
         _disk_ok, _disk_free = check_disk_space(min_gb=0)
@@ -1003,7 +966,7 @@ def run_loop(config: Config, persona=None, wal=None):
                   reasoning_exhaustions, current_max_tokens,
                   last_progress_tick)
 
-        if not goal_complete and not _shutdown_requested:
+        if not _shutdown_requested:
             interval = _adaptive_tick_interval(config, tick_tool_name)
             write_activity(config, "sleeping", detail=f"next tick in {interval:.1f}s")
             _interruptible_sleep(config, interval)

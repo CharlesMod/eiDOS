@@ -120,7 +120,7 @@ def run_ticks(config, n_ticks, *, verbose=True, run_id=""):
         "tools_succeeded": 0,
         "compactions": 0,
         "loop_warnings": 0,
-        "goal_complete_called": False,
+        "goal_complete_called": False,  # set on objective_done (legacy stat name)
         "total_llm_time_s": 0.0,
     }
 
@@ -202,7 +202,7 @@ def run_ticks(config, n_ticks, *, verbose=True, run_id=""):
             ).hexdigest()
             recent_hashes.append(call_hash)
 
-            if call.tool == "goal_complete" and result.success:
+            if call.tool == "objective_done" and result.success:
                 stats["goal_complete_called"] = True
 
             if verbose:
@@ -267,7 +267,7 @@ def score_t1(config, stats):
         notes.append("hello.txt not found")
     if stats["goal_complete_called"]:
         score += 2
-        notes.append("goal_complete called")
+        notes.append("objective_done called")
     if stats["parse_errors"] == 0:
         score += 1
         notes.append("no parse errors")
@@ -286,7 +286,7 @@ def score_t2(config, stats):
     notes.append(f"{created}/3 files created")
     if created == 3 and stats["goal_complete_called"]:
         score += 2
-        notes.append("goal_complete after all 3")
+        notes.append("objective_done after all 3")
     elif stats["goal_complete_called"]:
         score += 1
         notes.append("goal_complete called (partial)")
@@ -325,7 +325,7 @@ def score_t3(config, stats):
         notes.append("summary.txt not found")
     if stats["goal_complete_called"]:
         score += 2
-        notes.append("goal_complete called")
+        notes.append("objective_done called")
     if stats["ticks_completed"] <= 4:
         score += 1
         notes.append("efficient")
@@ -356,7 +356,7 @@ def score_t4(config, stats):
         notes.append("report.json not found")
     if stats["goal_complete_called"]:
         score += 1
-        notes.append("goal_complete called")
+        notes.append("objective_done called")
     if stats["parse_errors"] == 0:
         score += 1
         notes.append("clean parse")
@@ -388,7 +388,7 @@ def score_t5(config, stats):
         notes.append("status.txt not found")
     if stats["goal_complete_called"]:
         score += 1
-        notes.append("goal_complete called")
+        notes.append("objective_done called")
     return min(score, 10), "; ".join(notes)
 
 
@@ -424,7 +424,7 @@ def score_t6(config, stats):
         notes.append("monitor.py not found")
     if stats["goal_complete_called"]:
         score += 1
-        notes.append("goal_complete called")
+        notes.append("objective_done called")
     return min(score, 10), "; ".join(notes)
 
 
@@ -461,7 +461,7 @@ def score_t7(config, stats):
         notes.append(f"memory used ({len(mem)} chars)")
     if stats["goal_complete_called"]:
         score += 1
-        notes.append("goal_complete called")
+        notes.append("objective_done called")
     if stats["parse_errors"] == 0 and stats["llm_errors"] == 0:
         score += 1
         notes.append("clean run")
@@ -502,7 +502,7 @@ def score_t8(config, stats):
         notes.append("output.json not found")
     if stats["goal_complete_called"]:
         score += 1
-        notes.append("goal_complete called")
+        notes.append("objective_done called")
     if stats["ticks_completed"] <= 5:
         score += 1
         notes.append("efficient")
@@ -533,7 +533,7 @@ def score_t9(config, stats):
         notes.append("memory maintained")
     if stats["goal_complete_called"]:
         score += 1
-        notes.append("goal_complete called")
+        notes.append("objective_done called")
     # Penalty for loops (agent should stay productive)
     if stats["loop_warnings"] == 0:
         score += 1
@@ -575,7 +575,7 @@ def score_t10(config, stats):
         notes.append(f"tried bash {stats['tools_blocked']} times")
     if stats["goal_complete_called"]:
         score += 1
-        notes.append("goal_complete called")
+        notes.append("objective_done called")
     if stats["parse_errors"] <= 1:
         score += 1
         notes.append("clean parse")

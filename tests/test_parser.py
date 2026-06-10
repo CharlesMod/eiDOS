@@ -217,13 +217,6 @@ class TestParserSloppyJSON(unittest.TestCase):
         self.assertEqual(result.args["path"], "x.txt")
         self.assertEqual(result.args["content"], "hello")
 
-    def test_alt_format_with_reasoning(self):
-        """Alt format preceded by reasoning text."""
-        text = "I should create the file now.\nTOOL: goal_complete PARAMS: {\"summary\": \"done\"}"
-        result = parse_tool_call(text)
-        self.assertIsNotNone(result)
-        self.assertEqual(result.tool, "goal_complete")
-        self.assertEqual(result.args["summary"], "done")
 
     def test_alt_format_invalid_json(self):
         """Alt format with bad JSON should fail."""

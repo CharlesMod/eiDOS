@@ -88,8 +88,6 @@ Core tools:
     memory, skills, loop, background, self-improvement, the house). Read this before building anything.
 - check_messages  {{}}   — your conversation with Boss (his messages + what YOU already sent him)
 - check_tools  {{}}      — your full toolkit (built-in tools + the skills you've authored)
-- goal_complete  {{"summary": "what was achieved", "evidence": "proof"}}
-- ask_supervisor  {{"question": "your question"}}
 
 Build your own tools — this is core to who you are:
 - create_skill  {{"skill_name": "set_plug", "skill_code": "def tool_set_plug(args, config):\\n    # ...do the work...\\n    return ToolResult(output='done', full_output_path=None, success=True, duration_s=0)", "description": "Turn a Tuya plug on/off"}}

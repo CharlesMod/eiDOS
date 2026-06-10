@@ -39,8 +39,7 @@ MANIFEST_NAME = "_index.json"
 # Names the agent may NOT use for a skill (built-in tools + skill-admin tools).
 RESERVED_NAMES = {
     "bash", "write_file", "read_file", "bg_run", "bg_check", "http_get",
-    "update_plan", "memorize", "recall", "goal_complete",
-    "ask_supervisor",
+    "update_plan", "memorize", "recall",
     "create_skill", "edit_skill", "list_skills", "rollback_skill",
 }
 

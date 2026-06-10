@@ -593,16 +593,6 @@ def build_chat(config: Config) -> dict:
             "status": "delivered",
         })
 
-    # LLM → Operator: pending questions (proactive, via ask_supervisor)
-    questions = _tail_jsonl(config.workspace / "pending_questions.jsonl", 50)
-    for q in questions:
-        messages.append({
-            "direction": "incoming",
-            "ts": q.get("ts", ""),
-            "text": q.get("question", ""),
-            "status": q.get("status", "pending"),
-        })
-
     messages.sort(key=lambda m: m.get("ts", ""))
     return {"messages": messages}
 
@@ -629,10 +619,6 @@ def _tool_preview(name: str, args) -> str:
         return "starting: " + (args.get("cmd", "") or "")[:80]
     if name == "bg_check":
         return "checking on " + (args.get("name", "") or "")
-    if name == "goal_complete":
-        return (args.get("summary", "") or "")[:100] or "done!"
-    if name == "ask_supervisor":
-        return (args.get("question", "") or "")[:100] or "asking..."
     if name == "update_plan":
         return (args.get("note", "") or "")[:100] or "updating plan"
     return name
@@ -1674,7 +1660,7 @@ function renderFeedEntry(o) {
         summary = escapeHtml(args.note.substring(0, 120));
     } else if (tool === 'memorize' && args.fact) {
         summary = escapeHtml(args.fact.substring(0, 120));
-    } else if (tool === 'goal_complete' && args.summary) {
+    } else if (tool === 'objective_done' && args.summary) {
         summary = escapeHtml(args.summary.substring(0, 120));
     } else {
         summary = escapeHtml((o.output || '').substring(0, 150));

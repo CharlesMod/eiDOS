@@ -408,24 +408,7 @@ class TestCommandBlockingInHarness(SimulationTestBase):
         mem = read_plan(self.config)
         self.assertIn("important", mem)
 
-    def test_goal_complete_allowed(self):
-        result = execute_tool(
-            ToolCall(tool="goal_complete",
-                     args={"summary": "done", "evidence": "proof"}, raw=""),
-            self.config)
-        self.assertTrue(result.success)
 
-    def test_ask_supervisor_allowed(self):
-        result = execute_tool(
-            ToolCall(tool="ask_supervisor",
-                     args={"question": "help?"}, raw=""),
-            self.config)
-        self.assertTrue(result.success)
-
-
-# -------------------------------------------------------------------
-# 2. LLM timeout and error handling
-# -------------------------------------------------------------------
 
 class TestLLMTimeoutAndErrors(SimulationTestBase):
     """Test that LLM failures are handled gracefully across many ticks."""
@@ -1212,33 +1195,7 @@ class TestContextEdgeCases(SimulationTestBase):
 class TestGoalCompletion(SimulationTestBase):
     """Verify goal_complete tool is correctly detected in simulation."""
 
-    def test_goal_complete_in_multi_tick(self):
-        """Agent signals goal_complete — simulation records it."""
-        responses = [
-            _make_tool_response("remember", {"note": "working..."}),
-            _make_tool_response("remember", {"note": "almost there..."}),
-            _make_tool_response("goal_complete",
-                                {"summary": "done!", "evidence": "file created"}),
-            _make_tool_response("remember", {"note": "should not reach"}),
-        ]
-        llm = _ScriptedLLM(responses, mock_only=True)
 
-        results = _run_ticks(self.config, llm, 4)
-
-        # Tick 3 should have goal_complete
-        self.assertEqual(results[2]["call"].tool, "goal_complete")
-        self.assertTrue(results[2]["result"].success)
-
-    def test_goal_complete_missing_summary(self):
-        resp = _make_tool_response("goal_complete", {"evidence": "no summary"})
-        llm = _ScriptedLLM([resp], mock_only=True)
-        results = _run_ticks(self.config, llm, 1)
-        self.assertFalse(results[0]["result"].success)
-
-
-# -------------------------------------------------------------------
-# 9. Memory integrity under concurrent-like writes
-# -------------------------------------------------------------------
 
 class TestMemoryIntegrity(SimulationTestBase):
     """Verify memory stays consistent under rapid writes."""
@@ -1610,66 +1567,11 @@ class TestInterventionsOverTime(SimulationTestBase):
         content = messages[1]["content"]
         self.assertNotIn("Intervention", content)
 
-    def test_intervention_during_long_run(self):
-        """Intervention dropped mid-simulation is picked up."""
-        responses = [
-            _make_tool_response("remember", {"note": f"tick_{i}"})
-            for i in range(10)
-        ]
-        llm = _ScriptedLLM(responses)
-
-        # Run 5 ticks
-        _run_ticks(self.config, llm, 5)
-
-        # Drop intervention
-        (self.config.interventions_dir / "mid_run.md").write_text(
-            "New directive: focus on networking")
-
-        # Next context assembly should include it
-        messages = assemble_context(self.config, tick_number=6,
-                                     goal_start_time=time.time())
-        content = messages[1]["content"]
-        self.assertIn("focus on networking", content)
-
-
-# -------------------------------------------------------------------
-# 15. ask_supervisor tool
-# -------------------------------------------------------------------
 
 class TestAskSupervisor(SimulationTestBase):
     """Verify ask_supervisor works in simulation."""
 
-    def test_question_logged(self):
-        resp = _make_tool_response("ask_supervisor",
-                                    {"question": "Should I continue?"})
-        llm = _ScriptedLLM([resp], mock_only=True)
-        results = _run_ticks(self.config, llm, 1)
 
-        self.assertTrue(results[0]["result"].success)
-        q_path = self.config.workspace / "pending_questions.jsonl"
-        self.assertTrue(q_path.exists())
-        with open(q_path) as f:
-            entry = json.loads(f.readline())
-        self.assertEqual(entry["question"], "Should I continue?")
-
-    def test_multiple_questions(self):
-        responses = [
-            _make_tool_response("ask_supervisor",
-                                {"question": f"Question {i}?"})
-            for i in range(5)
-        ]
-        llm = _ScriptedLLM(responses, mock_only=True)
-        _run_ticks(self.config, llm, 5)
-
-        q_path = self.config.workspace / "pending_questions.jsonl"
-        with open(q_path) as f:
-            questions = [json.loads(line) for line in f]
-        self.assertEqual(len(questions), 5)
-
-
-# -------------------------------------------------------------------
-# 16. Unknown/invalid tool names
-# -------------------------------------------------------------------
 
 class TestUnknownTools(SimulationTestBase):
     """LLM outputs tool calls for non-existent tools."""

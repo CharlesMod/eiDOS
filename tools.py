@@ -787,43 +787,6 @@ def tool_recall(args: dict, config: Config) -> ToolResult:
         )
 
 
-def tool_goal_complete(args: dict, config: Config) -> ToolResult:
-    """Signal that the current goal has been achieved."""
-    summary = args.get("summary", "")
-    evidence = args.get("evidence", "")
-    if not summary:
-        return ToolResult(output="Error: 'summary' required", full_output_path=None, success=False, duration_s=0)
-
-    return ToolResult(
-        output=f"GOAL_COMPLETE: {summary}\nEvidence: {evidence}",
-        full_output_path=None,
-        success=True,
-        duration_s=0,
-    )
-
-
-def tool_ask_supervisor(args: dict, config: Config) -> ToolResult:
-    """Post a question for the remote supervisor or human."""
-    question = args.get("question", "")
-    if not question:
-        return ToolResult(output="Error: 'question' required", full_output_path=None, success=False, duration_s=0)
-
-    questions_path = config.workspace / "pending_questions.jsonl"
-    entry = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "question": question,
-        "status": "pending",
-    }
-    with open(questions_path, "a") as f:
-        f.write(json.dumps(entry) + "\n")
-
-    return ToolResult(
-        output=f"Question posted for supervisor: {question}",
-        full_output_path=None,
-        success=True,
-        duration_s=0,
-    )
-
 
 
 def _pid_alive(pid: int) -> bool:
@@ -1610,8 +1573,6 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "propose_self_edit": tool_propose_self_edit,
     "list_self_edits": tool_list_self_edits,
     "recall": tool_recall,
-    "goal_complete": tool_goal_complete,
-    "ask_supervisor": tool_ask_supervisor,
     "create_skill": tool_create_skill,
     "edit_skill": tool_edit_skill,
     "list_skills": tool_list_skills,

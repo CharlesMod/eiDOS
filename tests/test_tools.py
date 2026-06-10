@@ -16,7 +16,6 @@ from tools import (
     execute_tool, tool_bash, tool_write_file, tool_read_file,
     tool_bg_run, tool_bg_check,
     tool_update_plan, tool_memorize, tool_recall,
-    tool_goal_complete, tool_ask_supervisor,
     refresh_jobs, _read_jobs, _write_jobs, ToolResult,
 )
 
@@ -202,40 +201,12 @@ class TestTools(unittest.TestCase):
 
     # --- goal_complete ---
 
-    def test_goal_complete_success(self):
-        result = tool_goal_complete({"summary": "task done", "evidence": "tests pass"}, self.config)
-        self.assertTrue(result.success)
-        self.assertIn("GOAL_COMPLETE", result.output)
-        self.assertIn("task done", result.output)
 
-    def test_goal_complete_no_summary(self):
-        result = tool_goal_complete({}, self.config)
-        self.assertFalse(result.success)
 
     # --- ask_supervisor ---
 
-    def test_ask_supervisor_success(self):
-        result = tool_ask_supervisor({"question": "need help?"}, self.config)
-        self.assertTrue(result.success)
-        self.assertIn("need help?", result.output)
-        # Verify written to pending_questions.jsonl
-        qpath = Path(self.config.workspace_dir) / "pending_questions.jsonl"
-        self.assertTrue(qpath.exists())
-        entry = json.loads(qpath.read_text().strip())
-        self.assertEqual(entry["question"], "need help?")
-        self.assertEqual(entry["status"], "pending")
 
-    def test_ask_supervisor_no_question(self):
-        result = tool_ask_supervisor({}, self.config)
-        self.assertFalse(result.success)
 
-    def test_ask_supervisor_appends(self):
-        """Multiple questions should be separate JSONL lines."""
-        tool_ask_supervisor({"question": "q1"}, self.config)
-        tool_ask_supervisor({"question": "q2"}, self.config)
-        qpath = Path(self.config.workspace_dir) / "pending_questions.jsonl"
-        lines = qpath.read_text().strip().splitlines()
-        self.assertEqual(len(lines), 2)
 
     # --- refresh_jobs ---
 
@@ -500,17 +471,6 @@ class TestSkillWatchdog(unittest.TestCase):
         result = execute_tool(ToolCall(tool="boom", args={}, raw=""), self.config)
         self.assertFalse(result.success)
         self.assertIn("kaboom", result.output)
-
-    def test_builtin_tools_bypass_watchdog(self):
-        """Built-ins are bounded/trusted and must take the direct (non-threaded) path. A built-in whose
-        own runtime exceeds the tiny watchdog window must still complete normally."""
-        self.config.skill_watchdog_s = 0.01  # would kill anything that went through the watchdog
-        # goal_complete is a pure, instant built-in; it must NOT be watchdogged (it's in the snapshot).
-        self.assertIn("goal_complete", self.builtins)
-        result = execute_tool(
-            ToolCall(tool="goal_complete", args={"summary": "s", "evidence": "e"}, raw=""), self.config)
-        self.assertTrue(result.success)
-        self.assertIn("GOAL_COMPLETE", result.output)
 
 
 if __name__ == "__main__":

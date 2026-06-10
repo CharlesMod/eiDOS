@@ -314,13 +314,3 @@ def read_interventions(config: Config) -> list[dict]:
     return results
 
 
-def read_pending_questions(config: Config) -> list[dict]:
-    """Read pending questions from workspace/pending_questions.jsonl."""
-    questions_path = config.workspace / "pending_questions.jsonl"
-    if not questions_path.exists():
-        return []
-    try:
-        with open(questions_path) as f:
-            return [json.loads(line) for line in f if line.strip()]
-    except (OSError, json.JSONDecodeError):
-        return []

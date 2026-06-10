@@ -25,7 +25,6 @@ TOOL_PATTERN_NO_ARGS = re.compile(
 
 # Tools that can meaningfully run with empty/default args
 _NO_ARG_DEFAULTS = {
-    "goal_complete": {"summary": "(auto-completed)", "evidence": "(none provided)"},
 }
 
 # Fallback: alternate formats the model might produce when confused
@@ -39,7 +38,7 @@ TOOL_ALT_FORMAT = re.compile(
 # e.g. <bash>{"cmd": "..."}</bash> instead of <tool>bash</tool><args>...</args>.
 _KNOWN_TOOL_TAGS = {
     "bash", "read_file", "write_file", "update_plan",
-    "memorize", "recall", "goal_complete", "ask_supervisor",
+    "memorize", "recall",
     "bg_run", "bg_check", "create_skill", "edit_skill", "list_skills", "rollback_skill",
 }
 

@@ -204,9 +204,9 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
     if max_ticks > 0:
         remaining = max_ticks - tick_number
         if remaining <= 0:
-            urgency_note = " — FINAL TICK: call goal_complete now or the run ends"
+            urgency_note = " — FINAL TICK: state your result and mark the objective done (objective_done) now"
         elif remaining <= 2:
-            urgency_note = f" — {remaining} tick{'s' if remaining != 1 else ''} remaining: wrap up and call goal_complete if ready"
+            urgency_note = f" — {remaining} tick{'s' if remaining != 1 else ''} remaining: wrap up and call objective_done if ready"
 
     try:
         import objectives
