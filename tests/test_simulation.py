@@ -1136,35 +1136,31 @@ class TestContextEdgeCases(SimulationTestBase):
         self.assertIn("API moved to port 8080", content)
 
     def test_context_ceiling_enforced_when_sections_exceed_total(self):
-        """Hard ceiling trims assembled context when per-section budgets
-        sum to more than context_max_total_chars.  Exercises the safety net
-        that prevents HTTP 400 'Context size exceeded' from LM Studio."""
-        # Give each section a generous per-section budget but impose a
-        # tight total ceiling so the limits conflict.
+        """Hard ceiling trims assembled context when per-section budgets sum to more
+        than context_max_total_chars. The system prompt and trailing tick prompt are
+        preserved (the model must read them to act); the durable blob and history are
+        trimmed. Ceiling set above the system-prompt floor (realistic — production is
+        120k; the v2 briefing system prompt alone is ~12k, bigger than the old Pi total)."""
         self.config.context_memory_max_chars = 8000
         self.config.context_obs_max_chars = 8000
         self.config.context_goal_max_chars = 4000
-        self.config.context_max_total_chars = 10000  # ceiling < sum of sections
 
-        # Fill memory and observations to their per-section maxima.
         write_plan(self.config, "M" * 8000)
         for i in range(100):
             append_observation(self.config, {
-                "tick": i, "tool": "bash", "success": True,
-                "output": "O" * 100,
+                "tick": i, "tool": "bash", "args": {"cmd": f"c{i}"},
+                "success": True, "output": "O" * 100,
             })
 
+        base = assemble_context(self.config, tick_number=1, goal_start_time=time.time())
+        ceiling = len(base[0]["content"]) + 1500
+        self.config.context_max_total_chars = ceiling
         messages = assemble_context(self.config, tick_number=1,
                                      goal_start_time=time.time())
         total = sum(len(m["content"]) for m in messages)
-        # Allow small overage from the trim-notice suffix (≤ 100 chars)
-        # KNOWN GAP (audit; v2 blueprint phase 5): _enforce_ceiling assumes the legacy
-        # 3-message shape, so the system prompt + history thread are untrimmable in
-        # briefing mode. Until the context compiler lands, pin only sane growth.
-        self.assertLessEqual(
-            total, 120_000,
-            f"Context exploded: {total} chars",
-        )
+        self.assertLessEqual(total, ceiling + 100, f"Context ceiling violated: {total} chars")
+        self.assertEqual(messages[0]["role"], "system")           # system preserved
+        self.assertNotIn("M" * 2000, messages[1]["content"])       # the 8k plan trimmed
 
 
 class TestGoalCompletion(SimulationTestBase):

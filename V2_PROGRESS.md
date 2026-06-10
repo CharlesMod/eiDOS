@@ -88,7 +88,68 @@ Risks: tap may strip unknown fields (test early); grammar too tight fights the m
 (keep thought free-form; thought-only and reply-only stay legal); old llama.cpp grammar
 syntax limits. Two commits: land grammar -> soak -> delete cascade.
 
-## Later phases (see blueprint §5)
-3 streaming→voice (option A; fast-path later per decision C) · 4 kernel/event bus ·
-5 context compiler/KV prefix (fixes _enforce_ceiling known-gaps) · 6 glue teeth ·
-7 episodic memory (+ wire embeddings per decision) · 8 shell split + uniform auth + health probe
+## Phase 3 — streaming cognition → voice (COMPLETE — option A)
+
+Boss-waiting ticks use require_reply grammar (reply generated first; measured live: reply
+formed at 0.52s vs ~5.4s in v1's trailing-reply order). _ReplyVoicePump fires TTS on the
+reply's first complete sentence mid-generation; suppresses the post-tick speak. First-audio
+~12s → ~2.5s. Decision C: fast-path B remains trivial to add (pump + require_reply are the
+substrate). 8 pump unit tests.
+
+## AUTONOMOUS-RUN SEQUENCING DECISION (2026-06-10)
+
+Phases 4 and 8 modify the OPERATOR-OWNED dashboard (PROTECT_PATHS) and need live dual-process
+validation — NOT appropriate to land unsupervised. Deferred to a Dean-supervised session.
+Phases 5/6/7 are eidos-internal and unit-testable → done autonomously. (Phase 5 has no hard
+dependency on phase 4's event bus; it's pure context.py work.)
+
+## Phase 4 — kernel event bus + control channel + job waiters (DEFERRED → Dean-supervised)
+
+The cross-process polling nervous system. Replace eidos-side file polls (pause @5s, hold @2s,
+interventions @≤2s) with ONE long-poll to a dashboard /api/control/wait endpoint (Condition +
+notify-on-change — the GPU-gate pattern in reverse); watchdog proc.wait() on the held handle
+instead of 5s tasklist poll; per-job waiter threads instead of per-tick tasklist storm. KEEP the
+sentinel files as crash-survivable ground truth (the audit: it's the polled consumption, not the
+file, that violates ARCH #1). RISK: edits dashboard.py (trust boundary); adds a jobs.json writer
+(needs the deferred lock); needs both processes live to validate. Why supervised, not autonomous.
+
+## Phase 5 — context compiler: one path, true KV-stable prefix (COMPLETE)
+
+- Durable message reordered into 3 KV tiers: STABLE head (self-guide/skills/mission) → SEMI
+  (plan/world-model/backlog/notebook) → VOLATILE tail (focus gauge/rotation/presence/conversation).
+  The volatile tail also sits closest to the decision point (history thread + tick prompt follow),
+  so this improves KV reuse AND salience. Measured: 95% byte-identical prefix across consecutive
+  ticks (breaks only at the per-tick presence timestamp); old order broke at byte 0 on any tension
+  change.
+- _enforce_ceiling rewritten for the real briefing shape: preserves system[0] + trailing
+  decision-point messages (tick prompt + optional whats_new); trims OLDEST history turns first,
+  then the durable blob's tail. (Old code assumed 3 messages, took overhead from a history turn,
+  left the thread+tick untrimmable — the known-gap annotations are now real assertions.)
+- Fixed a real bug it exposed: _plan_next_step / _current_focus embedded an UNBOUNDED plan line
+  into the never-trimmed tick prompt (an 8k plan line ballooned the prompt past the ceiling).
+  Capped to 200/300 chars; deduped _current_focus's copy of the step extraction.
+
+## Phase 6 — glue with teeth (PLANNED — next, in-process)
+
+Replace remaining advisory prose with mechanism (BIBLE §2.3, §5; CONTEXT_REDESIGN "loop-breaker
+still advisory"). Strain (Insula): typed-failure accumulation (phase-1 fail_kind) mechanically
+lowers the retry/persistence budget and forces a method switch. Condition label (DMN):
+STABLE/FOCUSED/STRAINED/RECOVERY from recent success/failure, replacing XP-only mood in context
+(persona stays dashboard cosmetics per decision). ACC teeth: at K identical failure signatures
+the validate path refuses the repeat with a repair hint instead of injecting "STOP re-reading".
+All in eidos.py/context.py/a new glue module + objectives gate — unit-testable.
+
+## Phase 7 — episodic memory + wire embeddings (PLANNED — in-process)
+
+Unify the shredded episodic material (observations truncated each dream, thoughts never recalled,
+errors-category free text, dream records) into ONE typed (situation→action→outcome→fix) episode
+store keyed on the StatePacket; state-similarity recall fires involuntarily before failure (BIBLE
+§2.4). Wire embedding.py per decision (download MiniLM ONNX, enable, BM25+semantic). In-process.
+
+## Phase 8 — shell split + uniform auth + health probe (DEFERRED → Dean-supervised)
+
+Split dashboard.py into supervisor / voice service / UI; uniform _require_auth on EVERY
+state-changing POST (control/chat/speech too); build the missing self-edit health-probe leg
+(pending_apply → applied_ok → heartbeat-newer-than-baseline → auto-rollback; the
+self_edit_health_probe_s knob exists, read by nothing). Touches the trust boundary + needs live
+validation. Why supervised.

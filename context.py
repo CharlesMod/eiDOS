@@ -238,21 +238,52 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
 
 
 def _enforce_ceiling(config, messages, tick_number):
-    """Hard-enforce total context ceiling by trimming the user message."""
-    total_chars = sum(len(m["content"]) for m in messages)
-    if total_chars > config.context_max_total_chars:
-        _log_overrun(config, tick_number, "TOTAL", total_chars, config.context_max_total_chars)
-        overhead = sum(len(m["content"]) for m in (messages[0], messages[2]))  # sys + tick
-        user_budget = config.context_max_total_chars - overhead
-        user_content = messages[1]["content"]
-        if len(user_content) > user_budget:
-            lines = user_content.splitlines(keepends=True)
-            while lines and len("".join(lines)) > user_budget:
-                lines.pop()
-            user_content = "".join(lines) + "\n... [context trimmed to fit budget]"
-            messages[1] = {"role": "user", "content": user_content}
-        total_chars = sum(len(m["content"]) for m in messages)
-    return total_chars
+    """Hard-enforce the total context ceiling, briefing-message-shape aware.
+
+    The briefing shape is: [system, durable, *history_turns, whats_new?, tick_prompt].
+    The system prompt and the trailing decision-point messages (the tick prompt and an
+    optional "New since last tick" salience block) are NEVER trimmed — that is exactly
+    what the model must read to act. We free space by dropping the OLDEST history turns
+    first, then, only if still over, trimming the durable blob's tail lines. (The old
+    code assumed a fixed 3-message shape: it took overhead from messages[2] — a history
+    turn, not the tick prompt — and trimmed messages[1] alone, so the history thread and
+    tick prompt were untrimmable and the math was wrong.)"""
+    total = sum(len(m["content"]) for m in messages)
+    if total <= config.context_max_total_chars or len(messages) < 2:
+        return total
+    _log_overrun(config, tick_number, "TOTAL", total, config.context_max_total_chars)
+    budget = config.context_max_total_chars
+
+    # Protected trailing block: the tick prompt (last) + an optional whats_new salience
+    # message immediately before it.
+    n_tail = 1
+    if len(messages) >= 3 and messages[-2]["content"].startswith("## New since last tick"):
+        n_tail = 2
+    head = messages[0]
+    tail = messages[-n_tail:]
+    middle = messages[1:-n_tail]                      # durable blob + history turns
+    durable = middle[0] if middle else None
+    history = middle[1:] if len(middle) > 1 else []
+
+    fixed = len(head["content"]) + sum(len(m["content"]) for m in tail)
+    avail = budget - fixed
+
+    def middle_len():
+        return (len(durable["content"]) if durable else 0) + sum(len(m["content"]) for m in history)
+
+    # 1) drop oldest history turns first (the durable blob is more load-bearing than old turns)
+    while history and middle_len() > avail:
+        history.pop(0)
+    # 2) still over → trim the durable blob's tail lines (the volatile tail goes first)
+    if durable and middle_len() > avail:
+        db = max(0, avail - sum(len(m["content"]) for m in history))
+        lines = durable["content"].splitlines(keepends=True)
+        while lines and len("".join(lines)) > db:
+            lines.pop()
+        durable = {"role": "user", "content": "".join(lines) + "\n... [context trimmed to fit budget]"}
+
+    messages[:] = [head] + ([durable] if durable else []) + history + list(tail)
+    return sum(len(m["content"]) for m in messages)
 
 
 # ---------------------------------------------------------------------------
@@ -298,21 +329,19 @@ def _current_focus(config: Config) -> str:
                     break
                 focus = (focus + " " + c.strip("*_").strip()).strip()
             break
-    step = ""
-    for line in (read_plan(config) or "").splitlines():
-        s = line.strip()
-        if s and not s.startswith("#"):
-            step = s.lstrip("0123456789.-)[] x").strip()
-            break
+    focus = focus[:300]
+    step = _plan_next_step(config)   # capped; this string lands in the never-trimmed tick prompt
     parts = [p for p in (focus, (f"next step: {step}" if step else "")) if p]
     return " — ".join(parts)
 
 
 def _plan_next_step(config: Config) -> str:
+    # Capped: this line is embedded in the (never-trimmed) tick prompt and the focus block,
+    # so an over-long plan line must not be able to balloon the prompt past the ceiling.
     for line in (read_plan(config) or "").splitlines():
         s = line.strip()
         if s and not s.startswith("#"):
-            return s.lstrip("0123456789.-)[] x").strip()
+            return s.lstrip("0123456789.-)[] x").strip()[:200]
     return ""
 
 
@@ -521,29 +550,19 @@ def _assemble_briefing(
     system = SYSTEM_PROMPT_BRIEFING.format(workspace=str(config.workspace))
     messages.append({"role": "system", "content": system})
 
-    # --- Durable context, ordered STABLE → VOLATILE so the llama.cpp prefix cache (cache_prompt)
-    #     reuses the KV of the unchanging top across ticks. Presence (the per-tick timestamp/jobs)
-    #     now goes to the VOLATILE TAIL below — having it at position 0 changed every tick and
-    #     invalidated the whole message's KV. (doc: stable cached prefix + delta prompting.) ---
+    # --- Durable context in THREE KV tiers (BIBLE §2.11: stable cached prefix + delta prompting).
+    #     The llama.cpp prefix cache reuses the KV up to the first byte that changes. So the order is
+    #     load-bearing: a STABLE head (self-guide / skills / mission — change only on a Dean edit, a new
+    #     skill, or a goal change) sits right after the system prompt and is reused across ticks; the
+    #     SEMI tier (plan / world-model / backlog — change every few ticks) follows; the VOLATILE tail
+    #     (focus gauge / one-shot banners / presence / conversation — change most ticks) goes LAST,
+    #     which also places the most action-relevant content closest to the decision point (the history
+    #     thread + salience + tick prompt that follow this message). Earlier this block led with the
+    #     rotation banner + frustration gauge, so any tension change invalidated the KV of everything
+    #     below — exactly when ticks are most frequent. ---
     durable = []
 
-    # Ventral Striatum / Action Gate: the ACTIVE objective (+ its WHY), the open-commitments backlog,
-    # and — once, right after a rotation — a "focus changed" banner. This replaces the single drifting
-    # focus line and the global tension banner: pivoting is now GOVERNED by the gate, not pleaded for.
-    rot = _rotation_banner(config)        # consumed once; highest salience when present
-    if rot:
-        durable.append(rot)
-    esc = _escalation_note(config)        # one-shot "whole backlog stuck — ask Boss" (rare)
-    if esc:
-        durable.append("## Backlog is fully blocked\n" + esc)
-    focus_block = _objective_focus_block(config)
-    if focus_block:
-        durable.append(focus_block)
-    backlog = _backlog_panel(config)
-    if backlog:
-        durable.append(backlog)
-
-    # Self-guide — Boss's standing behavioral directives, high salience (just under presence).
+    # ===== STABLE HEAD (byte-identical across most ticks → the cached prefix extends through here) =====
     if getattr(config, "self_guide_enabled", True):
         guide = read_self_guide(config)
         if guide:
@@ -570,12 +589,10 @@ def _assemble_briefing(
     else:
         durable.append("## Mission\n(No goal set.)")
 
+    # ===== SEMI tier (changes every few ticks) =====
     plan = read_plan(config)
     if plan:
         durable.append(f"## Plan\n{_truncate(plan, config.context_plan_max_chars, 'plan')}")
-
-    # (## Subgoals removed — auto-decomposition drifted into platform-contradicting goals. The single
-    #  objective is the "## Current focus" block above; the agent keeps its next step via update_plan.)
 
     # World model (deterministic): the facts eidos has LEARNED — always visible so memory is
     # readable, not write-only. Then a small step-keyed relevance recall, deduped against it.
@@ -593,6 +610,10 @@ def _assemble_briefing(
     if relevant:
         durable.append("## Possibly relevant from memory\n" + relevant)
 
+    backlog = _backlog_panel(config)
+    if backlog:
+        durable.append(backlog)
+
     # Open notebook — your working notes for the current task (third memory tier). Always shown so
     # you build on them instead of re-memorizing the same fact or writing hidden JSON.
     try:
@@ -604,13 +625,27 @@ def _assemble_briefing(
     except Exception:  # noqa: BLE001
         pass
 
-    # Presence (time / tick / still-running jobs / alerts) — VOLATILE, placed late so the per-tick
-    # timestamp doesn't invalidate the cached stable prefix above.
+    # ===== VOLATILE TAIL (changes most ticks; sits closest to the decision point) =====
+    # Ventral Striatum / Action Gate: the ACTIVE objective (+ WHY + next step + frustration gauge),
+    # and — once, right after a rotation — a "focus changed" banner. The gate GOVERNS pivoting; this
+    # is how the model perceives it. The gauge re-renders as frustration climbs, so it lives here in
+    # the volatile tail rather than poisoning the cached prefix above.
+    rot = _rotation_banner(config)        # consumed once; highest salience when present
+    if rot:
+        durable.append(rot)
+    esc = _escalation_note(config)        # one-shot "whole backlog stuck — ask Boss" (rare)
+    if esc:
+        durable.append("## Backlog is fully blocked\n" + esc)
+    focus_block = _objective_focus_block(config)
+    if focus_block:
+        durable.append(focus_block)
+
+    # Presence (time / tick / still-running jobs / alerts) — changes EVERY tick.
     durable.append(_build_presence(config, tick_number, goal_start_time))
 
-    # Boss's messages + the messages YOU already sent him — highest priority. Surfacing your
-    # own standing messages stops the "ask Boss for the MQTT creds again" re-ping loop: if you
-    # already asked and he hasn't answered, he's just away — do NOT re-ask, go do other work.
+    # Boss's messages + the messages YOU already sent him. Surfacing your own standing messages stops
+    # the "ask Boss for the MQTT creds again" re-ping loop: if you already asked and he hasn't
+    # answered, he's just away — do NOT re-ask, go do other work.
     interventions = read_interventions(config)
     recent_replies = _read_recent_replies(config, n=6)
     chat_parts = []

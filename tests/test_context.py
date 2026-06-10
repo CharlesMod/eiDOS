@@ -127,35 +127,31 @@ class TestBriefingModel(unittest.TestCase):
         self.assertGreater(len(messages), 3)  # durable + thread turns + tick prompt
 
     def test_plan_budget_enforced(self):
-        # high total ceiling: this test pins the per-SECTION budget, and the legacy
-        # _enforce_ceiling math wipes the durable blob in briefing shape (phase-5 fix)
         write_plan(self.config, "X" * 5000)
-        messages = self._assemble(context_plan_max_chars=200,
-                                  context_max_total_chars=200_000)
+        messages = self._assemble(context_plan_max_chars=200)
         content = messages[1]["content"]
         plan_section = content.split("## Plan\n")[1].split("\n\n##")[0]
         self.assertIn("truncated", plan_section)
         self.assertLess(len(plan_section), 5000)
 
     def test_total_budget_bounded(self):
+        # A huge plan + many observations; the ceiling must trim them while preserving
+        # the system prompt and the trailing tick prompt. Ceiling set above the system
+        # prompt floor (realistic — production is 120k) so trimming is observable.
         self.config.goal_path.write_text("G" * 3000)
-        write_plan(self.config, "P" * 3000)
-        for i in range(20):
+        write_plan(self.config, "P" * 8000)
+        for i in range(40):
             append_observation(self.config, {
-                "tick": i, "tool": "bash", "success": True,
-                "output": "O" * 500,
+                "tick": i, "tool": "bash", "args": {"cmd": f"c{i}"},
+                "success": True, "output": "O" * 500,
             })
-        messages = self._assemble(
-            context_goal_max_chars=500,
-            context_plan_max_chars=300,
-            context_obs_max_chars=500,
-            context_max_total_chars=3000,
-        )
+        base = self._assemble()  # measure the system prompt size for this build
+        ceiling = len(base[0]["content"]) + 1500
+        messages = self._assemble(context_max_total_chars=ceiling)
         total = sum(len(m["content"]) for m in messages)
-        # KNOWN GAP (audit, v2 blueprint phase 5): _enforce_ceiling still assumes the
-        # legacy 3-message shape, so the briefing thread + system prompt are untrimmable.
-        # Until the context compiler lands, pin only that assembly does not explode.
-        self.assertLessEqual(total, 120_000)
+        self.assertLessEqual(total, ceiling + 100)            # ceiling enforced
+        self.assertEqual(messages[0]["role"], "system")        # system preserved
+        self.assertNotIn("P" * 2000, messages[1]["content"])   # the 8k plan was trimmed
 
     def test_no_plan_no_section(self):
         """When neither plan.md nor memory.md exists, no Plan section appears."""
