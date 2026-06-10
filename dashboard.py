@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""eiDOS dashboard — single-file HTTP server for monitoring via Tailscale.
+"""eiDOS dashboard — operator shell: web UI + supervisor/watchdog + voice pipeline.
 
-Serves:
-  GET /          → HTML dashboard (auto-refreshing)
-  GET /api/status → full JSON status blob
-  GET /api/ping   → tiny health-check JSON (<500 bytes)
+Four responsibilities (v2 phase 8 splits them into separate processes):
+  UI         — HTML dashboard + /api/status,/api/ping,/api/activity read models
+  SUPERVISOR — watchdog (spawn/respawn/crash-loop auto-rollback), /api/control/*,
+               git safety, self-edit apply, self-guide apply (the trust boundary)
+  VOICE      — GLaDOS TTS streaming (/api/speech/say + /api/speech/stream + SSE)
+  GPU GATE   — /api/gpu/wait liveness-bounded speech arbitration
 
-All data is read-only from workspace files. eiDOS is the sole writer.
-Stdlib only — no frameworks, no dependencies.
+Writes: paused/should_run/pid sentinels, chat_hold.json, interventions/,
+self_guide.md, watchdog crash notes, and the source tree via git restore /
+self-edit apply. Stdlib only — no frameworks, no dependencies.
 """
 
 import argparse
 import json
+import logging
 import sys
 import time
 from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -19,6 +23,8 @@ from pathlib import Path
 
 # Add project root for imports
 sys.path.insert(0, str(Path(__file__).parent))
+
+logger = logging.getLogger("dashboard")
 
 from config import load_config, Config
 from ascii_art import get_creature
@@ -96,13 +102,10 @@ def _compute_narration(heartbeat: dict, persona: dict, goal: str, flavor: dict) 
     tick = heartbeat.get("tick", 0)
     uptime = heartbeat.get("uptime_s", 0)
     mood = persona.get("mood", "curious")
-    temp = heartbeat.get("cpu_temp_c")
     streak = persona.get("current_streak", 0)
 
     if failures >= 3:
         return "Struggling... something isn't working. Might need a different approach."
-    if temp and temp > 100:
-        return f"Getting warm in here ({temp:.0f}\u00b0C). Might need to slow down."
     if not goal.strip():
         return "No goal set. Waiting for instructions."
     if tick <= 1:
@@ -135,16 +138,6 @@ def build_knowledge_list(config: Config) -> dict:
     entries.sort(key=lambda e: e.get("created", ""), reverse=True)
     return {"entries": entries[:25]}
 
-
-def latest_speech_id(config: Config) -> str:
-    """Newest queued speech clip id (epoch-ms string) from workspace/speech/, or '' if none.
-    eiDOS's `speak` tool drops speech_<id>.wav here; the dashboard browser polls + plays new ones."""
-    sdir = config.workspace / "speech"
-    if not sdir.exists():
-        return ""
-    ids = [p.stem.replace("speech_", "") for p in sdir.glob("speech_*.wav")]
-    ids = [s for s in ids if s.isdigit()]
-    return max(ids, key=int) if ids else ""
 
 
 # --- Speech push bus: eiDOS notifies the dashboard the instant it speaks; the dashboard pushes an
@@ -480,6 +473,15 @@ def build_dream_list(config: Config) -> dict:
     return {"dreams": dreams}
 
 
+def _disk_total_gb() -> float:
+    """Total size of the drive the dashboard runs from (for the disk gauge scale)."""
+    try:
+        import shutil
+        return round(shutil.disk_usage(__file__).total / (1024 ** 3), 1)
+    except OSError:
+        return 0.0
+
+
 def build_status(config: Config) -> dict:
     """Assemble full status from workspace files."""
     heartbeat = _read_json(config.workspace / "heartbeat.json")
@@ -504,8 +506,6 @@ def build_status(config: Config) -> dict:
     cf = heartbeat.get("consecutive_failures", 0)
     if cf >= 5:
         special = "dead"
-    elif heartbeat.get("cpu_temp_c") and heartbeat["cpu_temp_c"] > 100:
-        special = "thermal"
     elif not goal.strip():
         special = "sleeping"
 
@@ -532,6 +532,7 @@ def build_status(config: Config) -> dict:
         "narration": narration,
         "flavor": flavor,
         "paused": paused,
+        "disk_total_gb": _disk_total_gb(),
         "activity": activity,
         "wal": {
             "tick": wal.get("tick_number", 0),
@@ -551,8 +552,7 @@ def build_ping(config: Config) -> dict:
         "mood": hb.get("mood", "unknown"),
         "ok": hb.get("consecutive_failures", 0) < 5,
         "failures": hb.get("consecutive_failures", 0),
-        "temp_c": hb.get("cpu_temp_c"),
-        "disk_pct": round(100 - (hb.get("disk_free_gb", 0) / max(hb.get("disk_free_gb", 1), 0.01)) * 100, 1) if hb else None,
+        "disk_free_gb": hb.get("disk_free_gb"),
         "ram_pct": hb.get("ram_pct"),
         "uptime_s": hb.get("uptime_s", 0),
     }
@@ -725,7 +725,6 @@ def build_metrics(config: Config, limit: int = 60) -> dict:
             "tick": e.get("tick", 0),
             "cpu_pct": e.get("cpu_pct", 0),
             "ram_pct": e.get("ram_pct", 0),
-            "cpu_temp_c": e.get("cpu_temp_c"),
             "llm_elapsed_s": e.get("llm_elapsed_s", 0),
         })
     return {"metrics": pts}
@@ -1480,7 +1479,6 @@ function toggleVoice(){
     <div class="panel">
         <div class="panel-title">Health</div>
         <div id="gauges">
-            <div class="gauge"><span class="gauge-label">CPU Temp</span><span class="gauge-bar" id="g-temp"></span><span class="gauge-val" id="v-temp"></span></div>
             <div class="gauge"><span class="gauge-label">RAM</span><span class="gauge-bar" id="g-ram"></span><span class="gauge-val" id="v-ram"></span></div>
             <div class="gauge"><span class="gauge-label">Disk Free</span><span class="gauge-bar" id="g-disk"></span><span class="gauge-val" id="v-disk"></span></div>
             <div class="gauge"><span class="gauge-label">LLM Latency</span><span class="gauge-bar" id="g-llm"></span><span class="gauge-val" id="v-llm"></span></div>
@@ -1773,6 +1771,7 @@ function _renderChecklist(text, heading) {
 }
 
 function updatePauseState(paused) {
+    _pausedNow = !!paused;
     let btn = document.getElementById('pause-btn');
     let status = document.getElementById('pause-status');
     if (btn) {
@@ -1918,13 +1917,12 @@ setInterval(function() {
     }
 }, 2000);
 
+let _pausedNow = false;
 async function togglePause() {
     try {
-        let resp = await fetch('/api/pause', { method: 'POST' });
-        if (resp.ok) {
-            let data = await resp.json();
-            updatePauseState(data.paused);
-        }
+        let ep = _pausedNow ? '/api/control/resume' : '/api/control/pause';
+        let resp = await fetch(ep, { method: 'POST' });
+        if (resp.ok) { updatePauseState(!_pausedNow); }
     } catch(e) {}
 }
 
@@ -2130,13 +2128,6 @@ function update(data) {
     titlesEl.innerHTML = (p.titles || []).map(t => '<span class="title-badge">⚡' + t + '</span>').join('');
 
     // Gauges
-    let temp = hb.cpu_temp_c;
-    let tempPct = temp != null ? Math.min(100, (temp / 105) * 100) : 0;
-    document.getElementById('g-temp').textContent = temp != null ? makeBar(tempPct) : '[  n/a   ]';
-    let tempEl = document.getElementById('v-temp');
-    tempEl.textContent = temp != null ? temp + '°C' : 'n/a';
-    tempEl.className = temp != null ? gaugeClass(temp, 85, 100) : 'gauge-val';
-
     let ram = hb.ram_pct || 0;
     document.getElementById('g-ram').textContent = makeBar(ram);
     let ramEl = document.getElementById('v-ram');
@@ -2144,7 +2135,8 @@ function update(data) {
     ramEl.className = gaugeClass(ram, 70, 85);
 
     let disk = hb.disk_free_gb || 0;
-    let diskPct = Math.min(100, (disk / 64) * 100);
+    let diskTotal = data.disk_total_gb || 0;
+    let diskPct = diskTotal > 0 ? Math.min(100, (disk / diskTotal) * 100) : 0;
     document.getElementById('g-disk').textContent = makeBar(diskPct);
     let diskEl = document.getElementById('v-disk');
     diskEl.textContent = disk.toFixed(1) + ' GB';
@@ -2551,19 +2543,6 @@ def _make_handler(config: Config):
                     speech_unsubscribe(q)
                 return
 
-            elif self.path == "/api/speech/latest":
-                self._respond(200, "application/json",
-                              json.dumps({"id": latest_speech_id(config) or None}))
-
-            elif self.path.startswith("/api/speech/file"):
-                from urllib.parse import urlparse, parse_qs
-                sid = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
-                fp = config.workspace / "speech" / ("speech_" + sid + ".wav")
-                if sid.isdigit() and fp.exists():
-                    self._respond(200, "audio/wav", fp.read_bytes())
-                else:
-                    self._respond(404, "text/plain", "no such clip")
-
             elif self.path.startswith("/api/speech/stream"):
                 from urllib.parse import urlparse, parse_qs
                 sid = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
@@ -2605,10 +2584,6 @@ def _make_handler(config: Config):
             elif self.path == "/api/metrics":
                 data = build_metrics(config)
                 self._respond(200, "application/json", json.dumps(data))
-
-            elif self.path == "/api/pause":
-                paused = (config.workspace / "paused").exists()
-                self._respond(200, "application/json", json.dumps({"paused": paused}))
 
             elif self.path == "/api/control/status":
                 self._respond(200, "application/json", json.dumps(_ctrl_status(config)))
@@ -2664,14 +2639,6 @@ def _make_handler(config: Config):
                     fpath = idir / fname
                 fpath.write_text(message)
                 self._respond(200, "application/json", json.dumps({"ok": True, "filename": fname}))
-            elif self.path == "/api/pause":
-                pause_path = config.workspace / "paused"
-                if pause_path.exists():
-                    pause_path.unlink()
-                    self._respond(200, "application/json", json.dumps({"paused": False}))
-                else:
-                    pause_path.write_text("paused by operator")
-                    self._respond(200, "application/json", json.dumps({"paused": True}))
             elif self.path == "/api/control/start":
                 self._respond(200, "application/json", json.dumps(_ctrl_start(config)))
             elif self.path == "/api/control/stop":
@@ -2680,15 +2647,6 @@ def _make_handler(config: Config):
                 self._respond(200, "application/json", json.dumps(_ctrl_resume(config)))
             elif self.path == "/api/control/pause":
                 self._respond(200, "application/json", json.dumps(_ctrl_pause(config)))
-            elif self.path == "/api/speech/notify":
-                # eiDOS calls this the instant it saves a speech clip -> push to all browsers now.
-                try:
-                    length = int(self.headers.get("Content-Length", 0) or 0)
-                    sid = json.loads(self.rfile.read(length) or b"{}").get("id") if length else None
-                except Exception:  # noqa: BLE001
-                    sid = None
-                n = speech_publish(str(sid)) if sid else 0
-                self._respond(200, "application/json", json.dumps({"ok": bool(sid), "delivered": n}))
             elif self.path == "/api/speech/say":
                 # eiDOS submits TEXT to speak (instant). We remember it + push the id; the browser pulls
                 # /api/speech/stream which generates the streaming GLaDOS audio on demand.

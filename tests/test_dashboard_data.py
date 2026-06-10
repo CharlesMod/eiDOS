@@ -39,7 +39,7 @@ class TestBuildStatus(unittest.TestCase):
 
     def test_build_status_with_heartbeat(self):
         hb = {"ts": 1712000000, "tick": 42, "level": 3, "mood": "focused",
-               "consecutive_failures": 0, "cpu_temp_c": 55}
+               "consecutive_failures": 0}
         (Path(self.tmp) / "heartbeat.json").write_text(json.dumps(hb))
         status = build_status(self.config)
         self.assertEqual(status["heartbeat"]["tick"], 42)
@@ -103,7 +103,7 @@ class TestBuildPing(unittest.TestCase):
 
     def test_build_ping_with_heartbeat(self):
         hb = {"ts": 1712000000, "tick": 10, "level": 2, "mood": "focused",
-               "consecutive_failures": 0, "cpu_temp_c": 50, "ram_pct": 45.0,
+               "consecutive_failures": 0, "ram_pct": 45.0,
                "disk_free_gb": 10, "uptime_s": 3600}
         (Path(self.tmp) / "heartbeat.json").write_text(json.dumps(hb))
         ping = build_ping(self.config)
