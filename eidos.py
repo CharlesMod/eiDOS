@@ -152,23 +152,75 @@ def _first_sentences(text: str, max_sentences: int = 2, max_chars: int = 200) ->
     return out[:max_chars]
 
 
-def _auto_speak(config: Config, text: str) -> None:
-    """Voice an outgoing chat reply through the dashboard so Boss HEARS every response — the voice is
-    first-class, not opt-in. We speak only the opening 1-2 sentences (TTS is ~1.5x slower than realtime,
-    so a long paragraph would lag); the full text stays readable in chat. Also the backstop: if the
-    model hedges with text instead of calling `speak`, this speaks the opener anyway."""
-    t = _first_sentences(text)
-    if not t:
-        return
+def _post_speech(config: Config, text: str) -> bool:
+    """POST one utterance to the dashboard's instant-return TTS. Best-effort; True on success."""
+    if not text:
+        return False
     try:
         import urllib.request as _u
+        port = getattr(config, "dashboard_port", 8099)
         sid = str(int(time.time() * 1000))
-        req = _u.Request("http://127.0.0.1:8099/api/speech/say",
-                         data=json.dumps({"id": sid, "text": t}).encode("utf-8"),
+        req = _u.Request(f"http://127.0.0.1:{port}/api/speech/say",
+                         data=json.dumps({"id": sid, "text": text}).encode("utf-8"),
                          headers={"Content-Type": "application/json"}, method="POST")
         _u.urlopen(req, timeout=4).read()
+        return True
     except Exception:  # noqa: BLE001 - voice is best-effort; never disturb the tick
-        pass
+        return False
+
+
+def _auto_speak(config: Config, text: str) -> None:
+    """Voice an outgoing chat reply so Boss HEARS every response — voice is first-class, not opt-in.
+    We speak only the opening 1-2 sentences; the full text stays readable in chat. Backstop for when
+    the model replies with text instead of calling `speak`. Phase 3 fires this EARLY via the streaming
+    pump when possible; this is the post-tick fallback for replies the pump didn't already voice."""
+    _post_speech(config, _first_sentences(text))
+
+
+_REPLY_OPEN_RE = re.compile(r"<reply>(.*?)(?:</reply>|$)", re.DOTALL)
+
+
+class _ReplyVoicePump:
+    """Streaming reply→TTS pump (phase 3, BIBLE realtime). Fed the accumulating partial text
+    during generation; the instant the reply's opening 1-2 sentences are complete it fires ONE
+    speech POST — overlapping TTS synthesis with the rest of the tick's generation instead of
+    waiting for the whole response. With reply-first grammar (Boss waiting), the reply is among
+    the first tokens, so first-audio drops from ~12s to ~2.5s. Idempotent: fires at most once;
+    records what it spoke so the post-tick _auto_speak doesn't repeat it."""
+
+    def __init__(self, config):
+        self.config = config
+        self.fired = False
+        self.spoken_from = ""   # the reply text the early POST was derived from
+
+    def feed(self, partial_text: str) -> None:
+        if self.fired or not partial_text:
+            return
+        m = _REPLY_OPEN_RE.search(partial_text)
+        if not m:
+            return
+        reply_so_far = m.group(1)
+        closed = "</reply>" in partial_text
+        # Fire only when there is something definitively complete to speak: the reply tag
+        # closed, or a sentence terminator is followed by whitespace (the first sentence
+        # ended and the next began). Never speak a half-formed fragment.
+        if not (closed or re.search(r"[.!?]\s", reply_so_far)):
+            return
+        if closed:
+            speakable = reply_so_far
+        else:
+            last = max(reply_so_far.rfind("."), reply_so_far.rfind("!"), reply_so_far.rfind("?"))
+            speakable = reply_so_far[: last + 1]
+        opener = _first_sentences(speakable)
+        if opener and _post_speech(self.config, opener):
+            self.fired = True
+            self.spoken_from = speakable
+
+    def already_spoke(self, final_reply: str) -> bool:
+        """True if the pump already voiced this reply's opener — suppress the post-tick speak so
+        the opener isn't spoken twice. (The pump only ever voices the opener; the full text stays
+        readable in chat, so 'fired at all' is the right suppression signal.)"""
+        return self.fired
 
 
 def _has_pending_interventions(config: Config) -> bool:
@@ -653,9 +705,15 @@ def run_loop(config: Config, persona=None, wal=None):
         tick_tool_duration = 0.0
         write_activity(config, "thinking", detail=f"tick {tick_number}")
 
+        # Streaming reply→voice (phase 3): when Boss is waiting, the reply streams first and the
+        # pump fires TTS on its opening sentence mid-generation — first-audio ~2.5s, not ~12s.
+        boss_waiting = _has_pending_interventions(config)
+        voice_pump = _ReplyVoicePump(config)
+
         def _on_token(partial_text):
             write_activity(config, "thinking", detail=f"tick {tick_number}",
                            partial=partial_text)
+            voice_pump.feed(partial_text)
 
         # GPU speech-gate (ARCHITECTURE_PRINCIPLES.md #1): if the dashboard is mid-TTS, yield the
         # GPU and resume the instant synthesis finishes (event-driven, bounded). Speech preempts the
@@ -667,7 +725,9 @@ def run_loop(config: Config, persona=None, wal=None):
             try:
                 from grammar import tick_grammar_cached
                 from tools import TOOLS as _live_tools
-                tick_grammar = tick_grammar_cached(_live_tools.keys())
+                # Boss waiting → require_reply so the reply is generated FIRST and streams to
+                # TTS while the rest of the tick (tool call) is still decoding.
+                tick_grammar = tick_grammar_cached(_live_tools.keys(), require_reply=boss_waiting)
             except Exception as _ge:  # noqa: BLE001 - grammar is an enhancement, never a blocker
                 logger.warning("tick grammar build failed (running unconstrained): %s", _ge)
 
@@ -786,8 +846,10 @@ def run_loop(config: Config, persona=None, wal=None):
         # --- Parse tool call ---
         call = parse_tool_call(response)
         # Auto-speak: voice the reply so Boss HEARS every response (first-class voice + backstop for when
-        # the model hedges with text instead of calling `speak`). Skip if it already spoke this tick.
-        if reply_text and not (call and getattr(call, "tool", "") == "speak"):
+        # the model hedges with text instead of calling `speak`). Skip if the model called `speak`
+        # itself, or if the streaming pump already voiced this reply's opener mid-generation (phase 3).
+        if (reply_text and not (call and getattr(call, "tool", "") == "speak")
+                and not voice_pump.already_spoke(reply_text)):
             _auto_speak(config, reply_text)
         if not call:
             if reply_text:
