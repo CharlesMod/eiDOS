@@ -145,7 +145,7 @@ def store_entry(
     # (7+ "MQTT broker at .25" restatements). If a near-identical entry exists, return it unchanged so
     # the knowledge count only rises on GENUINELY new facts — which is also the goal-tension signal.
     sim, sid = most_similar(config, content)
-    if sid and sim >= float(getattr(config, "knowledge_dedup_threshold", 0.65)):
+    if sid and sim >= float(config.knowledge_dedup_threshold):
         return sid
 
     entry_id = _make_id(content, category)

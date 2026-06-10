@@ -80,6 +80,8 @@ class Config:
     llm_log_max_bytes: int = 5_000_000   # 5MB then rotate
     llm_log_archive_count: int = 3       # keep last N archives
     metrics_max_bytes: int = 2_000_000   # 2MB then rotate
+    thoughts_max_bytes: int = 2_000_000  # thoughts.jsonl rotation threshold
+    thoughts_archive_count: int = 2
     metrics_archive_count: int = 3       # keep last N metrics archives
     snapshot_max_count: int = 20         # keep last N memory snapshots
 
@@ -115,6 +117,7 @@ class Config:
 
     # Knowledge store
     knowledge_enabled: bool = True
+    knowledge_dedup_threshold: float = 0.65      # store-time near-dup overlap threshold
     knowledge_recall_top_k: int = 3         # entries auto-surfaced per tick
     knowledge_recall_max_chars: int = 1200  # budget for Intelligence section
     knowledge_embedding_enabled: bool = False   # Phase 5: semantic search
@@ -128,12 +131,13 @@ class Config:
 
     # --- Self-improvement subsystem (self-guide, listening hold, git safety, self-edit) ---
     self_guide_enabled: bool = True
+    world_state_max_items: int = 12              # world-model panel entries shown per tick
+    context_notebook_max_chars: int = 1200       # open-notebook panel budget
     context_self_guide_max_chars: int = 1200   # budget injected into context each tick
     self_guide_max_bytes: int = 6000           # cap on the self_guide.md file itself
     chat_hold_ttl_s: float = 60.0              # listening hold freshness (cooperative client)
     chat_hold_max_continuous_s: float = 300.0  # hard ceiling so a stuck hold can't pin the loop
     git_safety_enabled: bool = True
-    git_self_branch: str = "eidos-self"        # self-edit commits land here, never pushed
     git_checkpoint_keep: int = 30              # prune to last N eidos-good-* tags
     self_edit_enabled: bool = False            # gated self-code-editing (opt-in)
     self_edit_max_proposal_bytes: int = 200000
@@ -274,6 +278,8 @@ def load_config(path: str = "config.toml") -> Config:
         config.llm_log_max_bytes = rot.get("llm_log_max_bytes", config.llm_log_max_bytes)
         config.llm_log_archive_count = rot.get("llm_log_archive_count", config.llm_log_archive_count)
         config.metrics_max_bytes = rot.get("metrics_max_bytes", config.metrics_max_bytes)
+        config.thoughts_max_bytes = rot.get("thoughts_max_bytes", config.thoughts_max_bytes)
+        config.thoughts_archive_count = rot.get("thoughts_archive_count", config.thoughts_archive_count)
         config.metrics_archive_count = rot.get("metrics_archive_count", config.metrics_archive_count)
         config.snapshot_max_count = rot.get("snapshot_max_count", config.snapshot_max_count)
 
@@ -306,11 +312,12 @@ def load_config(path: str = "config.toml") -> Config:
         si = data.get("self_improvement", {})
         config.self_guide_enabled = si.get("self_guide_enabled", config.self_guide_enabled)
         config.context_self_guide_max_chars = si.get("self_guide_max_chars_ctx", config.context_self_guide_max_chars)
+        config.world_state_max_items = ctx.get("world_state_max_items", config.world_state_max_items)
+        config.context_notebook_max_chars = ctx.get("notebook_max_chars", config.context_notebook_max_chars)
         config.self_guide_max_bytes = si.get("self_guide_max_bytes", config.self_guide_max_bytes)
         config.chat_hold_ttl_s = si.get("chat_hold_ttl_s", config.chat_hold_ttl_s)
         config.chat_hold_max_continuous_s = si.get("chat_hold_max_continuous_s", config.chat_hold_max_continuous_s)
         config.git_safety_enabled = si.get("git_safety_enabled", config.git_safety_enabled)
-        config.git_self_branch = si.get("git_self_branch", config.git_self_branch)
         config.git_checkpoint_keep = si.get("git_checkpoint_keep", config.git_checkpoint_keep)
         config.self_edit_enabled = si.get("self_edit_enabled", config.self_edit_enabled)
         config.self_edit_max_proposal_bytes = si.get("self_edit_max_proposal_bytes", config.self_edit_max_proposal_bytes)

@@ -133,7 +133,7 @@ def load_model(config: Config) -> bool:
     try:
         sess_opts = ort.SessionOptions()
         sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_opts.intra_op_num_threads = 2  # RPi 4 has 4 cores, leave 2 free
+        sess_opts.intra_op_num_threads = 2  # leave cores free for the agent
         _model_session = ort.InferenceSession(str(onnx_path), sess_opts)
         _model_path = str(onnx_path)
         logger.info("embedding: loaded model from %s", onnx_path)

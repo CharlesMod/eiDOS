@@ -581,7 +581,7 @@ def _assemble_briefing(
     # readable, not write-only. Then a small step-keyed relevance recall, deduped against it.
     try:
         from knowledge import recent_learned, format_recalled
-        learned = recent_learned(config, limit=getattr(config, "world_state_max_items", 12))
+        learned = recent_learned(config, limit=config.world_state_max_items)
     except Exception:  # noqa: BLE001
         learned = []
     if learned:
@@ -597,7 +597,7 @@ def _assemble_briefing(
     # you build on them instead of re-memorizing the same fact or writing hidden JSON.
     try:
         from notes import read_active
-        nb_name, nb_text = read_active(config, max_chars=getattr(config, "context_notebook_max_chars", 1200))
+        nb_name, nb_text = read_active(config, max_chars=config.context_notebook_max_chars)
         if nb_text.strip():
             durable.append(f"## Open notebook: {nb_name} (your working notes — append with note_append)\n"
                            + nb_text.strip())

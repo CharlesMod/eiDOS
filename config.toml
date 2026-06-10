@@ -80,11 +80,12 @@ archive_days = 14
 llm_log_max_bytes = 5000000
 llm_log_archive_count = 3
 metrics_max_bytes = 2000000
+thoughts_max_bytes = 2000000
 metrics_archive_count = 3
 snapshot_max_count = 20
 
 [context]
-# Budgets opened up for the 128k-ctx house mind (Pi defaults were ~6500 total chars).
+# Budgets sized for the 128k-ctx house mind.
 obs_max_chars = 30000
 obs_max_count = 30
 goal_max_chars = 3000
@@ -96,6 +97,9 @@ interventions_max_chars = 6000     # chat history room
 max_total_chars = 120000           # ~30k tokens — open it up; we have a 128k window, not a Pi
 chars_per_token = 4.0              # Gemma tokenizer
 dream_combined = true
+
+world_state_max_items = 12
+notebook_max_chars = 1200
 
 [persona]
 enabled = true
@@ -117,7 +121,6 @@ chat_hold_ttl_s = 60
 chat_hold_max_continuous_s = 300
 # Git safety net: checkpoints + restore + watchdog crash-loop auto-rollback.
 git_safety_enabled = true
-git_self_branch = "eidos-self"
 git_checkpoint_keep = 30
 # Gated self-code-editing (eiDOS proposes -> you approve -> dashboard applies + restarts).
 # Enabled: eiDOS may PROPOSE source edits (harmless staging); applying still requires Dean's
@@ -129,6 +132,7 @@ self_edit_health_probe_s = 90
 [knowledge]
 enabled = true
 recall_top_k = 4
+dedup_threshold = 0.65
 recall_max_chars = 3000
 embedding_enabled = false
 embedding_cohost = false

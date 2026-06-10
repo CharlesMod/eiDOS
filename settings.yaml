@@ -1,6 +1,0 @@
-# Database Connection Settings
-host: localhost
-port: 5432
-database: production_user
-username: admin
-password: secure_pass_123

@@ -42,7 +42,7 @@ from persona import (
     format_prefix,
     format_status_line,
 )
-from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rotate_metrics, cleanup_old_snapshots
+from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rotate_metrics, rotate_thoughts, cleanup_old_snapshots
 from safety import check_ram, check_disk_space
 from telemetry import write_heartbeat, append_metrics, write_activity, get_cpu_pct
 from tools import execute_tool, refresh_jobs, collect_finished_jobs, reap_jobs
@@ -872,6 +872,7 @@ def run_loop(config: Config, persona=None, wal=None):
             rotated = rotate_if_needed(config)
             rotate_llm_log(config)
             rotate_metrics(config)
+            rotate_thoughts(config)
             cleanup_old_snapshots(config)
             if rotated:
                 append_observation(config, {

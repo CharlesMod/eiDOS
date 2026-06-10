@@ -1,8 +1,0 @@
-# Default Configuration Values
-# Plain Text Format
-HOST=localhost
-PORT=8080
-DEBUG=false
-DB_HOST=localhost
-DB_PORT=5432
-MAX_CONNECTIONS=100
