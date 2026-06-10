@@ -38,7 +38,6 @@ Core tools:
 - write_file  {{"path": "...", "content": "..."}}
 - bg_run  {{"cmd": "...", "name": "job_name"}}
 - bg_check  {{"name": "job_name"}}
-- http_get  {{"url": "..."}}
 - update_plan  {{"note": "update your plan/checklist"}}
 - THREE memory tiers — use the right one:
   - note_append  {{"name": "tuya_hunt", "text": "..."}}  — a NOTEBOOK for LOTS of working notes about the

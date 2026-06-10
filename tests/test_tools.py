@@ -14,7 +14,7 @@ from config import Config
 from parser import ToolCall
 from tools import (
     execute_tool, tool_bash, tool_write_file, tool_read_file,
-    tool_bg_run, tool_bg_check, tool_http_get,
+    tool_bg_run, tool_bg_check,
     tool_update_plan, tool_memorize, tool_recall,
     tool_goal_complete, tool_ask_supervisor,
     refresh_jobs, _read_jobs, _write_jobs, ToolResult,
@@ -191,41 +191,9 @@ class TestTools(unittest.TestCase):
     # --- http_get ---
 
     @patch("urllib.request.urlopen")
-    def test_http_get_success(self, mock_urlopen):
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = b"Hello, World!"
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
 
-        result = tool_http_get({"url": "http://example.com"}, self.config)
-        self.assertTrue(result.success)
-        self.assertIn("Hello, World!", result.output)
 
-    @patch("urllib.request.urlopen")
-    def test_http_get_error(self, mock_urlopen):
-        import urllib.error
-        mock_urlopen.side_effect = urllib.error.URLError("connection refused")
-        result = tool_http_get({"url": "http://bad.host"}, self.config)
-        self.assertFalse(result.success)
-        self.assertIn("HTTP error", result.output)
 
-    def test_http_get_no_url(self):
-        result = tool_http_get({}, self.config)
-        self.assertFalse(result.success)
-
-    @patch("urllib.request.urlopen")
-    def test_http_get_truncation(self, mock_urlopen):
-        self.config.output_truncation_chars = 50
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = b"x" * 200
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-
-        result = tool_http_get({"url": "http://example.com"}, self.config)
-        self.assertTrue(result.success)
-        self.assertIn("[truncated", result.output)
 
     # --- remember ---
 

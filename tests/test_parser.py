@@ -193,11 +193,6 @@ class TestParserSloppyJSON(unittest.TestCase):
         self.assertEqual(result.tool, "bash")
         self.assertEqual(result.args, {"cmd": "NOT JSON AT ALL"})
 
-    def test_truly_broken_json_for_unknown_tool_fails(self):
-        """Unrecoverable garbage for a non-text-arg tool should return None."""
-        text = '<tool>http_get</tool>\n<args>NOT JSON AT ALL</args>'
-        result = parse_tool_call(text)
-        self.assertIsNone(result)
 
     def test_truncated_json_still_fails(self):
         """Incomplete JSON (model hit token limit mid-output)."""

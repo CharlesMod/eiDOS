@@ -1,4 +1,4 @@
-"""Self-authored skills: let Nexus write, validate, hot-load, version, and reuse its own tools.
+"""Self-authored skills: let eiDOS write, validate, hot-load, version, and reuse its own tools.
 
 A *skill* is a Python tool function with the same contract as a built-in tool:
 

@@ -138,9 +138,9 @@ def compute_traits(persona: dict) -> List[str]:
     if streak > 100:
         candidates.append(("persistent", streak / 500))
 
-    # curious: http_get used > 50
-    if tools.get("http_get", 0) > 50:
-        candidates.append(("curious", tools["http_get"] / 200))
+    # curious: http_request used > 50
+    if tools.get("http_request", 0) > 50:
+        candidates.append(("curious", tools["http_request"] / 200))
 
     # introspective: remember used > 100
     if tools.get("remember", 0) > 100:

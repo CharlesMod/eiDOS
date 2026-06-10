@@ -623,7 +623,7 @@ def _tool_preview(name: str, args) -> str:
         return (args.get("note", "") or "")[:100] or "noting something"
     if name == "recall":
         return "recalling: " + (args.get("query", "") or "")[:80]
-    if name == "http_get":
+    if name == "http_request":
         return "fetching " + (args.get("url", "") or "")[:80]
     if name == "bg_run":
         return "starting: " + (args.get("cmd", "") or "")[:80]
@@ -2884,7 +2884,7 @@ def _write_chat_hold(config, held: bool) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-# --- Nexus consciousness process control (start paused / go / pause / stop) ---
+# --- eiDOS process control (start paused / go / pause / stop) ---
 
 def _ctrl_paths(config):
     from pathlib import Path

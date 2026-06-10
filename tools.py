@@ -4,7 +4,6 @@ import dataclasses
 import json
 import os
 import re
-import signal
 import subprocess
 import threading
 import time
@@ -60,27 +59,6 @@ def _normalize_workspace_path(path: str, config: Config) -> Path:
         p = Path(config.workspace_dir) / p
     return p
 
-
-def _looks_like_powershell(cmd: str) -> bool:
-    """Heuristic: does this command want PowerShell rather than cmd.exe?"""
-    import re
-    c = cmd.strip()
-    low = c.lower()
-    if low.startswith(("powershell", "pwsh")):
-        return False  # already explicit PowerShell
-    verbs = ("Get|Set|New|Remove|Start|Stop|Restart|Test|Select|Where|ForEach|Write|Read|Out|"
-             "Import|Export|Invoke|Add|Clear|Copy|Move|Rename|Measure|Sort|Group|Format|Convert|"
-             "ConvertTo|ConvertFrom|Resolve|Enable|Disable|Update|Install|Uninstall|Find|Wait|"
-             "Receive|Send|Compare|Join|Split|Tee")
-    if re.search(r'(?:^|[\s|;(&])(?:' + verbs + r')-[A-Za-z]\w*', c, re.IGNORECASE):
-        return True
-    if "$_" in c or "-computername" in low:
-        return True
-    for tok in ("| where-object", "| foreach-object", "| select-object",
-                "| measure-object", "| sort-object", "write-host", "write-output"):
-        if tok in low:
-            return True
-    return False
 
 
 def _kill_proc_tree(proc):
@@ -579,32 +557,6 @@ def tool_bg_check(args: dict, config: Config) -> ToolResult:
         success=True,
         duration_s=0,
     )
-
-
-def tool_http_get(args: dict, config: Config) -> ToolResult:
-    """Fetch a URL via HTTP GET."""
-    import urllib.request
-    import urllib.error
-
-    url = args.get("url", "")
-    if not url:
-        return ToolResult(output="Error: 'url' required", full_output_path=None, success=False, duration_s=0)
-
-    start = time.monotonic()
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "eiDOS/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-
-        tick_id = time.strftime("%Y%m%d_%H%M%S")
-        full_path = None
-        if len(body) > config.output_truncation_chars:
-            full_path = _save_full_output(config, tick_id, "http", body)
-        output = _truncate(body, config.output_truncation_chars, full_path)
-
-        return ToolResult(output=output, full_output_path=full_path, success=True, duration_s=time.monotonic() - start)
-    except (urllib.error.URLError, OSError, ValueError) as e:
-        return ToolResult(output=f"HTTP error: {e}", full_output_path=None, success=False, duration_s=time.monotonic() - start)
 
 
 
@@ -1649,7 +1601,6 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "read_file": tool_read_file,
     "bg_run": tool_bg_run,
     "bg_check": tool_bg_check,
-    "http_get": tool_http_get,
     "http_request": tool_http_request,   # first-class HTTP client (any method/JSON/headers, no `requests` dep)
     "fetch": tool_http_request,          # alias
     "http": tool_http_request,           # alias
