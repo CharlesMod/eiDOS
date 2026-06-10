@@ -22,7 +22,7 @@ from atomicio import replace_with_retry
 from context import assemble_context, _norm_cmd
 from compaction import should_compact, compact_briefing, emit_flavor
 from llm import complete, LLMError, ReasoningExhausted
-from gpu_gate import yield_to_speech
+from gpu_gate import yield_to_speech, control_wait
 from memory import (
     append_observation,
     append_thought,
@@ -268,23 +268,61 @@ def _chat_hold_active(config: Config) -> bool:
         return False
 
 
+# Control-channel seq cursor (phase 4). -1 = unsynced; the first wait syncs it.
+_ctl_cursor = -1
+
+
+def _control_wait_change(config: Config, max_s: float) -> bool:
+    """Block until the dashboard's control state CHANGES (pause/resume/hold/chat) or `max_s`
+    elapses — the event-driven replacement for the gates' fixed sleeps (ARCH #1). Returns True
+    if the channel delivered (event or timeout), False if it's down (caller already slept via
+    the fallback nap inside). The sentinel files remain ground truth; callers re-check them."""
+    global _ctl_cursor
+    res = control_wait(config, _ctl_cursor, max_s=min(max_s, 25.0))
+    if res is None:
+        time.sleep(min(max_s, 5.0))   # channel down: bounded nap (the old behavior)
+        return False
+    seq = res.get("seq", 0)
+    if seq < _ctl_cursor:
+        logger.info("control channel reset (dashboard restarted) — resyncing")
+    _ctl_cursor = seq
+    return True
+
+
 def _interruptible_sleep(config: Config, interval: float = None):
-    """Sleep for `interval` (default tick_interval_s), waking early on shutdown."""
+    """Sleep up to `interval` (default tick_interval_s), waking EARLY on shutdown, a new Boss
+    message, a listening hold, or a pause — via ONE server-side event wait on the dashboard's
+    control channel (ARCH #1: notify, not nap-polls). Falls back to the bounded nap-poll when
+    the channel is down, so the loop never depends on the dashboard to keep ticking."""
+    global _ctl_cursor
     target = config.tick_interval_s if interval is None else float(interval)
-    elapsed = 0.0
-    poll = min(2.0, max(0.1, target))
-    while elapsed < target:
-        remaining = target - elapsed
-        nap = min(poll, remaining)
-        time.sleep(nap)
-        elapsed += nap
-        if _shutdown_requested:
+    deadline = time.monotonic() + target
+    while not _shutdown_requested:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             break
-        if _has_pending_interventions(config):
-            logger.info("Early wake: pending intervention detected")
+        res = control_wait(config, _ctl_cursor, max_s=min(remaining, 25.0))
+        if res is None:
+            # Channel down — the old nap-poll, bounded; re-check files like v1 did.
+            time.sleep(min(2.0, max(0.1, remaining)))
+            if _shutdown_requested:
+                break
+            if _has_pending_interventions(config):
+                logger.info("Early wake: pending intervention detected")
+                break
+            if _chat_hold_active(config):
+                break  # reach the listening gate promptly
+            continue
+        _ctl_cursor = res.get("seq", _ctl_cursor)
+        # The snapshot rode back with the event — no extra file reads on the happy path.
+        if res.get("interventions"):
+            logger.info("Early wake: pending intervention (event)")
             break
-        if _chat_hold_active(config):
+        if res.get("held") and _chat_hold_active(config):   # validate TTL/ceiling rules
             break  # reach the listening gate promptly
+        if res.get("paused"):
+            break  # reach the pause gate promptly
+        # else: long-poll timeout or an already-cleared change — keep waiting out the interval
 
 
 def _adaptive_tick_interval(config: Config, tick_tool_name: str) -> float:
@@ -538,7 +576,9 @@ def run_loop(config: Config, persona=None, wal=None):
                 })
                 operator_paused = True
             listening_since = None  # operator pause supersedes a soft listening hold
-            time.sleep(5)
+            # Event-driven: held server-side until the operator resumes (or a bounded timeout);
+            # the pause file above stays the crash-survivable ground truth we re-check each pass.
+            _control_wait_change(config, max_s=25.0)
             continue
         elif operator_paused:
             print(f"{pfx} Resuming from operator pause")
@@ -559,7 +599,9 @@ def run_loop(config: Config, persona=None, wal=None):
                 logger.info("Listening hold engaged (Dean focused chat) — quieting the loop")
             held_s = int(time.time() - listening_since)
             write_activity(config, "listening", detail=f"listening to Dean ({held_s}s)")
-            time.sleep(2.0)
+            # Event-driven: wakes the instant the hold releases (blur/send) or chat arrives;
+            # the short bound keeps the "listening Ns" display fresh and re-applies TTL rules.
+            _control_wait_change(config, max_s=5.0)
             continue
         elif listening_since is not None:
             logger.info("Listening hold released — resuming autonomous loop")
@@ -795,7 +837,8 @@ def run_loop(config: Config, persona=None, wal=None):
                       goal_start_time, consecutive_failures,
                       reasoning_exhaustions, current_max_tokens,
                       last_progress_tick)
-            time.sleep(config.tick_interval_s)
+            # Interruptible (ARCH #1): during a failure storm a Boss message still wakes the loop.
+            _interruptible_sleep(config)
             tick_number += 1
             ticks_since_compaction += 1
             continue
@@ -824,7 +867,8 @@ def run_loop(config: Config, persona=None, wal=None):
                       goal_start_time, consecutive_failures,
                       reasoning_exhaustions, current_max_tokens,
                       last_progress_tick)
-            time.sleep(config.tick_interval_s)
+            # Interruptible (ARCH #1): during a failure storm a Boss message still wakes the loop.
+            _interruptible_sleep(config)
             tick_number += 1
             ticks_since_compaction += 1
             continue

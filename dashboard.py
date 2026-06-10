@@ -258,6 +258,53 @@ def gpu_tts_end() -> None:
             _gpu_cond.notify_all()  # wake any waiting tick the moment the GPU is free
 
 
+# --- Control-change channel (event-driven; ARCHITECTURE_PRINCIPLES.md #1) -----------------
+# The reverse of the GPU gate: the dashboard is the PRODUCER of control state (pause/resume,
+# listening hold, chat arrival) and eidos is the consumer. v1 made eidos poll three sentinel
+# files on timers (pause @5s, hold @2s, interventions @<=2s) — delay-based guessing. Now every
+# control mutation bumps a sequence counter and notifies; eidos makes ONE long-poll to
+# /api/control/wait that returns the instant anything changes (or at its bounded timeout).
+# The sentinel files REMAIN the crash-survivable ground truth — eidos re-reads them on wake and
+# falls back to nap-polling if this channel is down. It's the polled consumption that violated
+# the principle, not the files.
+_ctl_cond = _sp_threading.Condition()
+_ctl_seq = 0          # bumped on every control-state change; guarded by _ctl_cond
+
+
+def control_notify(reason: str = "") -> None:
+    """Producer hook: call after ANY control-state mutation (pause/resume/hold/chat)."""
+    global _ctl_seq
+    with _ctl_cond:
+        _ctl_seq += 1
+        _ctl_cond.notify_all()
+
+
+def control_wait(config, since: int, max_s: float = 25.0) -> dict:
+    """Block until the control seq passes `since` (event) or `max_s` elapses (bounded long-poll).
+    Returns the new seq + a state snapshot so the consumer never needs a second request."""
+    start = _gpu_time.monotonic()
+    max_s = max(0.0, min(float(max_s), 60.0))
+    with _ctl_cond:
+        while _ctl_seq <= since:
+            remaining = max_s - (_gpu_time.monotonic() - start)
+            if remaining <= 0:
+                break
+            _ctl_cond.wait(timeout=remaining)
+        seq = _ctl_seq
+    snap = {"seq": seq, "paused": False, "held": False, "interventions": 0}
+    try:
+        snap["paused"] = (config.workspace / "paused").exists()
+        snap["held"] = config.chat_hold_path.exists()
+        idir = config.interventions_dir
+        if idir.exists():
+            snap["interventions"] = sum(
+                1 for p in idir.iterdir()
+                if not p.name.startswith(".") and p.suffix != ".done")
+    except OSError:
+        pass
+    return snap
+
+
 def gpu_wait_idle(stall_s: float = _GPU_STALL_S, max_s: float = _GPU_MAX_S,
                   startup_s: float = _GPU_STARTUP_S) -> dict:
     """Yield the GPU until TTS synthesis finishes. Holds while audio streams; releases on completion
@@ -2577,6 +2624,22 @@ def _make_handler(config: Config):
                 startup = _qf("startup", _GPU_STARTUP_S, 1.0, 60.0)
                 self._respond(200, "application/json", json.dumps(gpu_wait_idle(stall, mx, startup)))
 
+            elif self.path.startswith("/api/control/wait"):
+                # eidos's event-driven control channel: blocks until pause/hold/chat state
+                # changes past ?since= (or ?max_s= elapses), then returns seq + snapshot.
+                from urllib.parse import urlparse, parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                try:
+                    since = int((q.get("since") or ["-1"])[0])
+                except (TypeError, ValueError):
+                    since = -1
+                try:
+                    max_s = float((q.get("max_s") or ["25"])[0])
+                except (TypeError, ValueError):
+                    max_s = 25.0
+                self._respond(200, "application/json",
+                              json.dumps(control_wait(config, since, max_s)))
+
             elif self.path == "/api/thoughts":
                 data = build_thoughts(config)
                 self._respond(200, "application/json", json.dumps(data))
@@ -2638,6 +2701,7 @@ def _make_handler(config: Config):
                     fname = f"dash_{ts}_{n}.md"
                     fpath = idir / fname
                 fpath.write_text(message)
+                control_notify("chat")   # wake eidos instantly — a Boss message is the top event
                 self._respond(200, "application/json", json.dumps({"ok": True, "filename": fname}))
             elif self.path == "/api/control/start":
                 self._respond(200, "application/json", json.dumps(_ctrl_start(config)))
@@ -2808,6 +2872,7 @@ def _write_chat_hold(config, held: bool) -> dict:
                 path.unlink()
             except FileNotFoundError:
                 pass
+            control_notify("hold_release")   # the loop resumes the instant Dean unfocuses/sends
             return {"ok": True, "held": False}
         config.state_dir.mkdir(parents=True, exist_ok=True)
         now = time.time()
@@ -2822,6 +2887,7 @@ def _write_chat_hold(config, held: bool) -> dict:
         tmp.write_text(_json.dumps({"held": True, "ts": now, "first_held_ts": first,
                                     "source": "chat_focus"}), encoding="utf-8")
         replace_with_retry(str(tmp), str(path))
+        control_notify("hold")
         return {"ok": True, "held": True}
     except OSError as e:
         return {"ok": False, "error": str(e)}
@@ -2952,12 +3018,14 @@ def _ctrl_resume(config):
         pausefile.unlink()
     except OSError:
         pass
+    control_notify("resume")   # wake eidos's control channel the instant the operator resumes
     return {"ok": True, "message": "resumed - consciousness running", **_ctrl_status(config)}
 
 
 def _ctrl_pause(config):
     _, pausefile, _ = _ctrl_paths(config)
     pausefile.write_text("paused by operator")
+    control_notify("pause")
     return {"ok": True, "message": "paused", **_ctrl_status(config)}
 
 

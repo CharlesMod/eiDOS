@@ -30,3 +30,31 @@ def yield_to_speech(config, stall_s: float = GPU_STALL_S, max_s: float = GPU_MAX
             return json.loads(r.read().decode("utf-8"))
     except Exception:  # noqa: BLE001 - dashboard down / standalone / network: never block the tick
         return {"idle": True, "reason": "error", "active": 0, "error": True}
+
+
+# --- Control-change channel client (phase 4; ARCHITECTURE_PRINCIPLES.md #1) ----------------
+# The reverse direction: the dashboard produces control state (pause/resume, listening hold,
+# chat arrival) and notifies a seq counter; eidos makes ONE long-poll here instead of nap-polling
+# three sentinel files on timers. Fail-open: any error -> None, and the caller falls back to the
+# old bounded nap so a dashboard outage never strands the loop. After a failure we skip attempts
+# for a cooldown so offline runs (tests, standalone) don't hammer connection-refused.
+
+_CTRL_FAIL_COOLDOWN_S = 30.0
+_ctrl_down_until = 0.0
+
+
+def control_wait(config, since: int, max_s: float = 25.0):
+    """Block (server-side) until control state changes past `since` or `max_s` elapses.
+    Returns {"seq", "paused", "held", "interventions"} — or None if the channel is down."""
+    global _ctrl_down_until
+    import time as _t
+    if _t.monotonic() < _ctrl_down_until:
+        return None
+    port = getattr(config, "dashboard_port", 8099)
+    url = f"http://127.0.0.1:{port}/api/control/wait?since={int(since)}&max_s={float(max_s)}"
+    try:
+        with urllib.request.urlopen(url, timeout=float(max_s) + 5.0) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 - dashboard down / standalone: fall back to nap-polling
+        _ctrl_down_until = _t.monotonic() + _CTRL_FAIL_COOLDOWN_S
+        return None
