@@ -156,10 +156,22 @@ errors-category free text, dream records) into ONE typed (situation→action→o
 store keyed on the StatePacket; state-similarity recall fires involuntarily before failure (BIBLE
 §2.4). Wire embedding.py per decision (download MiniLM ONNX, enable, BM25+semantic). In-process.
 
-## Phase 8 — shell split + uniform auth + health probe (DEFERRED → Dean-supervised)
+## Phase 8 — health probe + uniform auth DONE; shell split remaining (Dean-supervised)
 
-Split dashboard.py into supervisor / voice service / UI; uniform _require_auth on EVERY
-state-changing POST (control/chat/speech too); build the missing self-edit health-probe leg
-(pending_apply → applied_ok → heartbeat-newer-than-baseline → auto-rollback; the
-self_edit_health_probe_s knob exists, read by nothing). Touches the trust boundary + needs live
-validation. Why supervised.
+- 8.2 (health-probe leg, DONE): the missing self-edit safety. apply arms a pending_apply marker;
+  the booting eidos drops an applied_ok breadcrumb (a paused eidos never ticks, so heartbeat
+  alone can't prove a healthy boot); the watchdog's alive-branch _selfedit_probe resolves
+  (booted AND paused/ticking-past-baseline) or rolls back to prev_sha at the deadline; the
+  crash-loop path clears the marker; main() boot-reconciles a stranded one. Closes the hole where
+  a self-edit that boots-but-hangs or wedges-alive was invisible (watchdog was PID-exists only).
+  11 unit tests + boot smoke. The self_edit_health_probe_s knob is finally read.
+- 8.1 (uniform auth, DONE): one _token_ok at the top of do_POST gates EVERY state-changing POST
+  (control/chat/speech were ungated even with a token set); hmac.compare_digest. Default empty
+  token stays open (Dean's posture). Live smoke: control/chat/speech 401 without token.
+- 8.3 (shell split, REMAINING — large, mostly mechanical, operationally risky): split dashboard.py
+  (4 programs in one 3.3k-line file) into supervisor / voice+GPU-gate service / UI. The voice
+  service becomes its own nssm service (a TTS bug can't wound the watchdog); the 1.75k-line inline
+  HTML becomes static files + a thin status API. Keep supervisor+apply+watchdog co-located (the
+  rollback is the apply path's safety net). Defer to a dedicated session — it changes the deploy
+  topology (new nssm service) and is the least urgent (cosmetic/structural, not a correctness or
+  safety gap). Recommend doing it last, or only if the monolith becomes a maintenance problem.
