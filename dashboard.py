@@ -3032,7 +3032,7 @@ def _watchdog_note(config, msg):
     """Record a crash/recovery note where eiDOS will see it: observation + durable knowledge."""
     import json, time
     try:
-        obs = {"tick": 0, "tool": "watchdog", "success": False,
+        obs = {"tick": 0, "tool": "watchdog", "fail_kind": "crash", "success": False,
                "output": msg[:1500],
                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         with open(config.workspace / "observations.jsonl", "a", encoding="utf-8") as f:

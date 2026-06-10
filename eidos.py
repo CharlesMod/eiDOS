@@ -588,7 +588,14 @@ def run_loop(config: Config, persona=None, wal=None):
         try:
             for fin in collect_finished_jobs(config):
                 status = fin.get("status")
-                ok = "OK" if status == "completed" else ("TIMED OUT" if status == "timed_out" else "FAILED")
+                if status == "completed":
+                    ok, f_kind = "OK", ""
+                elif status == "timed_out":
+                    ok, f_kind = "TIMED OUT", "timeout"
+                else:
+                    ec = fin.get("exit_code")
+                    ok = f"FAILED (exit {ec})" if ec is not None else "FAILED"
+                    f_kind = "exec"
                 cmd_s = (fin.get("cmd") or "")[:70]
                 body = (fin.get("tail") or "").strip() or "(no output)"
                 intent = fin.get("intent")
@@ -597,6 +604,7 @@ def run_loop(config: Config, persona=None, wal=None):
                     "tick": tick_number,
                     "tool": "async_result",
                     "args": {"job": fin.get("name")},
+                    "fail_kind": f_kind,
                     "success": status == "completed",
                     "output": f"[↩ job {fin.get('name')} · {cmd_s} · {ok}]{intent_s}\n{body}",
                 })
@@ -687,6 +695,7 @@ def run_loop(config: Config, persona=None, wal=None):
             append_observation(config, {
                 "tick": tick_number,
                 "tool": "system",
+                "fail_kind": "llm",
                 "success": False,
                 "output": (
                     f"Token budget exhausted by reasoning "
@@ -728,6 +737,7 @@ def run_loop(config: Config, persona=None, wal=None):
             append_observation(config, {
                 "tick": tick_number,
                 "tool": "llm_error",
+                "fail_kind": "llm",
                 "success": False,
                 "output": f"LLM call failed ({consecutive_failures}x): {e}",
             })
@@ -814,6 +824,7 @@ def run_loop(config: Config, persona=None, wal=None):
                 append_observation(config, {
                     "tick": tick_number,
                     "tool": "parse_error",
+                    "fail_kind": "parse",
                     "success": False,
                     "output": feedback,
                 })
@@ -837,6 +848,7 @@ def run_loop(config: Config, persona=None, wal=None):
                 "tick": tick_number,
                 "tool": call.tool,
                 "args": call.args,
+                "fail_kind": result.fail_kind,
                 "success": result.success,
                 "output": result.output,
                 "duration_s": result.duration_s,

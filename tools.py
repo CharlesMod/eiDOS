@@ -17,10 +17,20 @@ from safety import is_command_blocked, check_disk_space
 
 @dataclasses.dataclass
 class ToolResult:
+    """Outcome of one tool call.
+
+    fail_kind — the failure taxonomy (BIBLE section 5: type every failure so it can be
+    aggregated and drive recovery playbooks instead of living as prose). Empty on
+    success. One of: args (bad/missing arguments), blocked (safety/linter refused),
+    timeout (watchdog/ceiling), network, exec (nonzero exit), parse, llm, crash
+    (tool raised), no_such_tool, error (untyped failure — the backstop default).
+    execute_tool guarantees fail_kind is non-empty whenever success is False.
+    """
     output: str
     full_output_path: Optional[str]
     success: bool
     duration_s: float
+    fail_kind: str = ""
 
 
 def _save_full_output(config: Config, tick_id: str, stream: str, content: str) -> str:
@@ -201,7 +211,7 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
     """Run a shell command; fast commands return inline, slow ones auto-background."""
     cmd = args.get("cmd", "") or args.get("command", "")
     if not cmd:
-        return ToolResult(output="Error: no 'cmd' argument provided", full_output_path=None, success=False, duration_s=0)
+        return ToolResult(output="Error: no 'cmd' argument provided", full_output_path=None, success=False, duration_s=0, fail_kind="args")
 
     # Safety check
     blocked = is_command_blocked(cmd, config.protected_patterns)
@@ -211,6 +221,7 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
             full_output_path=None,
             success=False,
             duration_s=0,
+            fail_kind="blocked",
         )
 
     # Disk space check for write-like commands
@@ -223,6 +234,7 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                 full_output_path=None,
                 success=False,
                 duration_s=0,
+                fail_kind="blocked",
             )
 
     # Pre-flight (quote-aware, never lies). Auto-correct the fixable cases and RUN; only hard-block
@@ -235,7 +247,7 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
             if verdict[0] == "block":
                 return ToolResult(
                     output=f"NOT RUN — this can't run as written:\n{verdict[1]}",
-                    full_output_path=None, success=False, duration_s=0,
+                    full_output_path=None, success=False, duration_s=0, fail_kind="blocked",
                 )
             if verdict[0] == "rewrite":
                 cmd = verdict[1]
@@ -260,6 +272,20 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
         # handed to the background ledger mid-run WITHOUT losing its output or killing it.
         config.outputs_dir.mkdir(parents=True, exist_ok=True)
         out_path = config.outputs_dir / f"fg_{time.strftime('%Y%m%d_%H%M%S')}_{proc_seq()}.out"
+        exit_path = str(out_path) + ".exit"
+        # List-form PowerShell scripts get an exit-code epilogue: it records the real
+        # exit code to a sidecar file (readable after the Popen handle is gone — async
+        # jobs) and re-raises it via `exit` so proc.returncode stays truthful (sync).
+        # Commands that exit the script explicitly skip the epilogue: sidecar absent =
+        # exit code unknown (old behavior), never wrong.
+        if not use_shell and isinstance(popen_arg, list):
+            _ep = exit_path.replace("'", "''")
+            popen_arg = popen_arg[:-1] + [
+                popen_arg[-1]
+                + "\n$__eidos_ec = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }"
+                + "\n[System.IO.File]::WriteAllText('" + "{}".format(_ep) + "', [string]$__eidos_ec)"
+                + "\nexit $__eidos_ec"
+            ]
         out_file = open(out_path, "w", encoding="utf-8", errors="replace")
         try:
             proc = subprocess.Popen(
@@ -290,6 +316,7 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                         "status": "running",
                         "kind": "async",
                         "output_path": str(out_path),
+                        "exit_path": exit_path,
                         "notified": False,
                     })
                     _write_jobs(config, jobs)
@@ -323,6 +350,7 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                         "status": "running",
                         "kind": "auto",
                         "output_path": str(out_path),
+                        "exit_path": exit_path,
                         "notified": False,
                     })
                     _write_jobs(config, jobs)
@@ -361,6 +389,7 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
             full_output_path=full_path,
             success=(proc.returncode == 0),
             duration_s=duration,
+            fail_kind="" if proc.returncode == 0 else "exec",
         )
 
     except Exception as e:  # noqa: BLE001
@@ -374,6 +403,7 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
             full_output_path=None,
             success=False,
             duration_s=time.monotonic() - start,
+            fail_kind="crash",
         )
 
 
@@ -841,6 +871,24 @@ def _prune_jobs(jobs: list[dict], keep_delivered: int = 15) -> list[dict]:
     return live + done[-keep_delivered:]
 
 
+def _finish_dead_job(job: dict) -> None:
+    """Mark a no-longer-running job finished, consulting its exit-code sidecar.
+
+    Sidecar present: 0 = completed, nonzero = failed (+exit_code recorded).
+    Sidecar absent (explicit `exit` in the script, cmd.exe route, pre-v2 jobs):
+    exit code unknown -> completed, the pre-typed-failure behavior.
+    """
+    ec = None
+    try:
+        raw = Path(job.get("exit_path") or "").read_text(encoding="ascii", errors="ignore").strip()
+        if raw:
+            ec = int(raw)
+    except (OSError, ValueError):
+        ec = None
+    job["exit_code"] = ec
+    job["status"] = "completed" if (ec is None or ec == 0) else "failed"
+
+
 def refresh_jobs(config: Config) -> list[dict]:
     """Check all tracked jobs, update statuses, return current list."""
     jobs = _read_jobs(config)
@@ -849,7 +897,7 @@ def refresh_jobs(config: Config) -> list[dict]:
         if job["status"] != "running":
             continue
         if not _pid_alive(job.get("pid", 0)):
-            job["status"] = "completed"
+            _finish_dead_job(job)
             changed = True
     if changed:
         _write_jobs(config, jobs)
@@ -871,7 +919,7 @@ def reap_jobs(config: Config, kill_all: bool = False) -> int:
             continue
         pid = j.get("pid", 0)
         if not _pid_alive(pid):
-            j["status"] = "completed"
+            _finish_dead_job(j)
             changed = True
             continue
         if kill_all:
@@ -927,11 +975,11 @@ def collect_finished_jobs(config: Config) -> list[dict]:
                 else:
                     continue  # still running — not finished yet
             else:
-                j["status"] = "completed"
+                _finish_dead_job(j)
                 changed = True
         # Deliver finished async/auto jobs exactly once.
         if (j.get("kind") in ("async", "auto")
-                and j.get("status") in ("completed", "timed_out")
+                and j.get("status") in ("completed", "failed", "timed_out")
                 and not j.get("notified")):
             finished.append({**j, "tail": _read_job_tail(j.get("output_path", ""))})
             j["notified"] = True
@@ -1357,7 +1405,8 @@ def tool_http_request(args: dict, config: Config) -> ToolResult:
         ctype = e.headers.get("Content-Type", "") if e.headers else ""
     except (urllib.error.URLError, OSError, ValueError) as e:
         return ToolResult(output=f"HTTP {method} {url} failed: {type(e).__name__}: {e}",
-                          full_output_path=None, success=False, duration_s=time.monotonic() - start)
+                          full_output_path=None, success=False, duration_s=time.monotonic() - start,
+                          fail_kind="network")
     dur = time.monotonic() - start
     ok = 200 <= status < 300
     ct = ctype.lower()
@@ -1626,7 +1675,8 @@ def _run_skill_under_watchdog(call: ToolCall, handler: Callable, config: Config,
         except Exception as e:  # noqa: BLE001 - mirror execute_tool's last-resort guard
             box["res"] = ToolResult(
                 output=f"Tool '{call.tool}' raised {type(e).__name__}: {e}",
-                full_output_path=None, success=False, duration_s=time.monotonic() - t)
+                full_output_path=None, success=False, duration_s=time.monotonic() - t,
+                fail_kind="crash")
 
     th = threading.Thread(target=_target, name=f"skill-{call.tool}", daemon=True)
     start = time.monotonic()
@@ -1643,11 +1693,13 @@ def _run_skill_under_watchdog(call: ToolCall, handler: Callable, config: Config,
                 f"socket.create_connection(addr, timeout=5), subprocess.run(..., timeout=10) — or compose "
                 f"the built-in bounded primitives (tcp_probe / http_probe / net_scan / udp_listen). For "
                 f"genuinely long work, dispatch it with bash/bg_run instead of doing it inline."),
-            full_output_path=None, success=False, duration_s=time.monotonic() - start)
+            full_output_path=None, success=False, duration_s=time.monotonic() - start,
+            fail_kind="timeout")
     res = box.get("res")
     if not isinstance(res, ToolResult):
         return ToolResult(output=f"Tool '{call.tool}' produced no result.",
-                          full_output_path=None, success=False, duration_s=time.monotonic() - start)
+                          full_output_path=None, success=False, duration_s=time.monotonic() - start,
+                          fail_kind="crash")
     return res
 
 
@@ -1662,6 +1714,7 @@ def execute_tool(call: ToolCall, config: Config) -> ToolResult:
             full_output_path=None,
             success=False,
             duration_s=0,
+            fail_kind="no_such_tool",
         )
     try:
         # Self-authored skills are time-bounded: they run in the tick with no internal cap, so a hung
@@ -1670,12 +1723,19 @@ def execute_tool(call: ToolCall, config: Config) -> ToolResult:
         if call.tool not in _BUILTIN_TOOL_NAMES:
             timeout_s = float(getattr(config, "skill_watchdog_s", _SKILL_WATCHDOG_DEFAULT_S)
                               or _SKILL_WATCHDOG_DEFAULT_S)
-            return _run_skill_under_watchdog(call, handler, config, timeout_s)
-        return handler(call.args, config)
+            result = _run_skill_under_watchdog(call, handler, config, timeout_s)
+        else:
+            result = handler(call.args, config)
+        # Invariant: every failure leaves typed. Tools that haven't set a specific
+        # fail_kind yet get the generic backstop.
+        if isinstance(result, ToolResult) and not result.success and not result.fail_kind:
+            result.fail_kind = "error"
+        return result
     except Exception as e:  # noqa: BLE001 - last-resort guard around all tools/skills
         return ToolResult(
             output=f"Tool '{call.tool}' raised {type(e).__name__}: {e}",
             full_output_path=None,
             success=False,
             duration_s=0,
+            fail_kind="crash",
         )
