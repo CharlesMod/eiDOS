@@ -1,10 +1,8 @@
 """Context assembly — builds the messages list for each tick.
 
-Supports two modes:
-  - Legacy (default): original section layout with full env snapshot every tick.
-  - Briefing model (config.briefing_model = True): compressed system prompt,
-    Mission/Intelligence/Situation sections, inverted-pyramid observations,
-    alert-only environment, and passive knowledge recall.
+One assembly path (the briefing structure): compressed standing orders, the durable
+state blob (focus/backlog/self-guide/mission/plan/world-model/notebook/presence/chat),
+the recent history thread as real turns, a salience block, then the tick prompt.
 
 Includes per-section budget enforcement, truncation, and overrun logging
 so we can tune limits based on real usage without blowing the context window.
@@ -18,10 +16,10 @@ from collections import Counter
 from pathlib import Path
 
 from config import Config
-from memory import read_goal, read_memory, read_plan, read_recent_observations, read_interventions, read_recent_thoughts, read_self_guide
+from memory import read_goal, read_plan, read_recent_observations, read_interventions, read_recent_thoughts, read_self_guide
 from env_snapshot import generate as generate_env_snapshot
 from env_snapshot import generate_alerts as generate_env_alerts
-from prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_BRIEFING, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED
+from prompts import SYSTEM_PROMPT_BRIEFING, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED
 
 logger = logging.getLogger("eidos.context")
 
@@ -113,140 +111,6 @@ def _obs_sig(o: dict):
     if a:
         return (tool, str(a))
     return (tool, (o.get("output", "") or "")[:80])
-
-
-def _render_observations_pyramid(observations: list[dict], full_budget: int = 2000) -> str:
-    """Render observations newest-first, collapsing repeats and flagging loops.
-
-    Wider than before (up to ~12) so it can SEE its own recent history, but kept
-    compact: consecutive identical actions collapse to one line with a ×N count,
-    and if the window is dominated by 1-2 repeated actions (including A-B-A-B
-    alternation, which has no consecutive duplicates) a salient loop warning is
-    prepended so the model can notice it is stuck and break out.
-    """
-    if not observations:
-        return ""
-
-    # Loop warning across the whole window (catches alternation).
-    _skip = {"system", "watchdog", "thought", "dream"}
-    action_sigs = [_obs_sig(o) for o in observations if o.get("tool") not in _skip]
-    loop_note = ""
-    if len(action_sigs) >= 4:
-        counts = Counter(action_sigs)
-        _top_sig, top_n = counts.most_common(1)[0]
-        # Fire on EITHER the whole window being 1-2 distinct actions, OR any single (normalized)
-        # action recurring ≥4× even when interleaved with others — the retry-with-tweaks spiral.
-        if (1 <= len(set(action_sigs)) <= 2) or top_n >= 4:
-            names = " and ".join(sorted({str(s[0]) for s in action_sigs}))
-            loop_note = (f"⚠ STUCK: you keep repeating the same kind of action ({names}) — {top_n} "
-                         f"near-identical attempts with no new result. STOP retrying tiny variations "
-                         f"(different ports/quotes/versions of the same command). Either (a) a result "
-                         f"you already have answers this — use it, or (b) the whole approach is wrong "
-                         f"— change METHOD entirely (e.g. a different tool/command) or ask Boss. Do "
-                         f"NOT re-issue another tweaked version of this command.\n\n")
-
-    # Collapse consecutive identical entries.
-    collapsed = []
-    for o in observations:
-        s = _obs_sig(o)
-        if collapsed and collapsed[-1][0] == s:
-            collapsed[-1][1] += 1
-        else:
-            collapsed.append([s, 1, o])
-
-    lines = []
-    for i, (_s, count, obs) in enumerate(collapsed):
-        if i > 11:
-            break
-        tick = obs.get("tick", "?")
-        tool = obs.get("tool", "?")
-        success = "OK" if obs.get("success", False) else "FAIL"
-        output = obs.get("output", "") or ""
-        rep = f" ×{count} (repeated — no new result)" if count > 1 else ""
-        if i == 0:
-            truncated = output[:full_budget]
-            lines.append(f"[tick {tick} | {tool} | {success}]{rep}\n{truncated}")
-        elif i <= 3:
-            first_line = output.split("\n")[0][:120] if output else ""
-            lines.append(f"[tick {tick} | {tool} | {success}]{rep} {first_line}")
-        else:
-            lines.append(f"[tick {tick} | {tool} | {success}]{rep}")
-
-    return loop_note + "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Passive knowledge recall (briefing model)
-# ---------------------------------------------------------------------------
-
-def _build_intelligence_section(config: Config, goal: str, plan: str) -> str:
-    """Auto-recall knowledge relevant to the current goal + plan.
-
-    Merges BM25 results with any pre-cached semantic results from
-    recall_cache.md (written by dream_prefetch in Phase 5).
-
-    Returns the formatted Intelligence section body, or empty string.
-    """
-    if not config.knowledge_enabled:
-        return ""
-
-    try:
-        from knowledge import search_bm25, format_recalled
-    except ImportError:
-        return ""
-
-    # Build a query from goal + the first ~200 chars of plan (next-action focus)
-    query_parts = []
-    if goal:
-        query_parts.append(goal[:200])
-    if plan:
-        # Take the first non-empty line that looks like a next step
-        for line in plan.splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                query_parts.append(line[:200])
-                break
-
-    query = " ".join(query_parts)
-
-    # BM25 recall
-    bm25_results = []
-    if query.strip():
-        bm25_results = search_bm25(config, query, top_k=config.knowledge_recall_top_k)
-
-    # Merge with semantic recall cache (Phase 5)
-    cache_text = _read_recall_cache(config)
-
-    # Combine: BM25 formatted text + cache, deduplicating by ID
-    bm25_ids = {r["id"] for r in bm25_results}
-    parts = []
-
-    if bm25_results:
-        parts.append(format_recalled(bm25_results, max_chars=config.context_intelligence_max_chars))
-
-    if cache_text:
-        # Append cache lines not already covered by BM25
-        for line in cache_text.splitlines():
-            # Skip lines whose entry ID appears in BM25 results
-            # Cache lines look like: [FACT] (tag1, tag2) content
-            # We can't easily extract IDs, so include all cache content
-            # when there's budget remaining
-            parts.append(line)
-
-    combined = "\n".join(parts)
-    if not combined.strip():
-        return ""
-
-    return combined[:config.context_intelligence_max_chars]
-
-
-def _read_recall_cache(config: Config) -> str:
-    """Read the semantic recall pre-cache file, if it exists."""
-    cache_path = config.workspace / "recall_cache.md"
-    try:
-        return cache_path.read_text().strip()
-    except OSError:
-        return ""
 
 
 def _build_relevant_recall(config: Config, exclude_ids: set) -> str:
@@ -344,14 +208,10 @@ def assemble_context(
     Returns a list of {"role": ..., "content": ...} dicts ready for llm.complete().
     Each variable section is budget-capped; overruns are logged to ctx_overruns.jsonl.
 
-    When config.briefing_model is True, uses the compressed context structure:
-    Standing Orders → Mission → Intelligence → Situation → Tick prompt.
+    Briefing structure: Standing Orders → durable blob → history thread → salience → tick prompt.
     """
-    if config.briefing_model:
-        return _assemble_briefing(config, tick_number, goal_start_time,
-                                  loop_detected, repeat_count, max_ticks, tension)
-    return _assemble_legacy(config, tick_number, goal_start_time,
-                            loop_detected, repeat_count, max_ticks)
+    return _assemble_briefing(config, tick_number, goal_start_time,
+                              loop_detected, repeat_count, max_ticks, tension)
 
 
 # ---------------------------------------------------------------------------
@@ -442,112 +302,6 @@ def _enforce_ceiling(config, messages, tick_number):
             messages[1] = {"role": "user", "content": user_content}
         total_chars = sum(len(m["content"]) for m in messages)
     return total_chars
-
-
-# ---------------------------------------------------------------------------
-# Legacy context assembly (original layout)
-# ---------------------------------------------------------------------------
-
-def _assemble_legacy(
-    config: Config,
-    tick_number: int,
-    goal_start_time: float,
-    loop_detected: bool = False,
-    repeat_count: int = 0,
-    max_ticks: int = 0,
-) -> list[dict]:
-    """Original context layout: System → Goal/Memory/Env/Interventions/Obs → Tick."""
-    messages = []
-
-    # 1. System prompt (fixed — not truncated)
-    system = SYSTEM_PROMPT.format(workspace=str(config.workspace))
-    messages.append({"role": "system", "content": system})
-
-    # 2-6 are assembled as a single user message with budgeted sections
-    sections = []
-
-    # 2. Goal — budget-capped
-    goal = read_goal(config)
-    if goal:
-        if len(goal) > config.context_goal_max_chars:
-            _log_overrun(config, tick_number, "goal", len(goal), config.context_goal_max_chars)
-            goal = _truncate(goal, config.context_goal_max_chars, "goal")
-        sections.append(f"## Goal\n{goal}")
-    else:
-        sections.append("## Goal\n(No goal set. Waiting for goal.md to be created.)")
-
-    # 3. Memory — budget-capped
-    memory = read_memory(config)
-    mem_len = len(memory) if memory else 0
-    if memory:
-        if mem_len > config.context_memory_max_chars:
-            _log_overrun(config, tick_number, "memory", mem_len, config.context_memory_max_chars)
-            memory = _truncate(memory, config.context_memory_max_chars, "memory")
-            mem_len = config.context_memory_max_chars
-        sections.append(f"## Working Memory\n{memory}")
-
-    # 4. Environment snapshot — budget-capped
-    env = generate_env_snapshot(config)
-    if len(env) > config.context_env_max_chars:
-        _log_overrun(config, tick_number, "env", len(env), config.context_env_max_chars)
-        env = _truncate(env, config.context_env_max_chars, "env")
-    sections.append(f"## Environment\n{env}")
-
-    # 5. Pending interventions — budget-capped
-    interventions = read_interventions(config)
-    recent_replies = _read_recent_replies(config, n=3)
-    chat_parts = []
-    if recent_replies:
-        for r in recent_replies:
-            chat_parts.append(f"[your reply @ {r.get('ts', '?')}]\n{r.get('text', '')}")
-    if interventions:
-        for i in interventions:
-            chat_parts.append(f"[operator @ {i['filename']}]\n{i['content']}")
-    if chat_parts:
-        intervention_text = "\n\n".join(chat_parts)
-        if len(intervention_text) > config.context_interventions_max_chars:
-            _log_overrun(config, tick_number, "interventions",
-                         len(intervention_text), config.context_interventions_max_chars)
-            intervention_text = _truncate(intervention_text,
-                                          config.context_interventions_max_chars, "interventions")
-        sections.append(f"## Chat with supervisor\n{intervention_text}")
-
-    # 6. Recent observations — adaptive budget
-    combined_budget = config.context_memory_max_chars + config.context_obs_max_chars
-    obs_budget = max(1000, combined_budget - mem_len)
-    observations = read_recent_observations(config, max_chars=obs_budget)
-    if observations:
-        obs_lines = []
-        for obs in observations:
-            ts = obs.get("ts", "?")
-            tick = obs.get("tick", "?")
-            tool = obs.get("tool", "?")
-            success = "OK" if obs.get("success", False) else "FAIL"
-            output = obs.get("output", "")
-            obs_lines.append(f"[tick {tick} | {ts} | {tool} | {success}]\n{output}")
-        obs_text = "\n---\n".join(obs_lines)
-        if len(obs_text) > config.context_obs_max_chars:
-            _log_overrun(config, tick_number, "observations",
-                         len(obs_text), config.context_obs_max_chars)
-            obs_text = _truncate(obs_text, config.context_obs_max_chars, "observations")
-        sections.append(f"## Recent Observations (newest first)\n{obs_text}")
-
-    user_content = "\n\n".join(sections)
-    messages.append({"role": "user", "content": user_content})
-
-    # 7. Tick prompt
-    tick_msg = _build_tick_prompt(config, tick_number, goal_start_time,
-                                  loop_detected, repeat_count, max_ticks)
-    messages.append({"role": "user", "content": tick_msg})
-
-    # Hard-enforce total context ceiling
-    total_chars = _enforce_ceiling(config, messages, tick_number)
-
-    est_tokens = estimate_tokens(str(total_chars), config.chars_per_token)
-    logger.info("tick=%d ctx_chars=%d est_tokens=%d (legacy mode)",
-                tick_number, total_chars, est_tokens)
-
-    return messages
 
 
 # ---------------------------------------------------------------------------

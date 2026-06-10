@@ -36,7 +36,7 @@ from knowledge import (
     store_entry, load_index, search_bm25,
     format_recalled, rebuild_index, _invalidate_bm25_cache,
 )
-from context import assemble_context, _build_intelligence_section
+from context import assemble_context
 from compaction import compact_briefing
 from embedding import (
     embed_and_store, semantic_search, _load_vectors, mock_embed_texts,
@@ -81,7 +81,6 @@ def _make_config(llm_url, llm_model):
     config.llm_url = llm_url
     config.llm_model = llm_model
     config.workspace_dir = ws
-    config.briefing_model = True
     config.knowledge_enabled = True
     config.knowledge_embedding_enabled = False  # disable ONNX; use mock where needed
     config.mock_mode = False  # we're hitting a real LLM
@@ -314,30 +313,29 @@ def stage_tool_recall(config):
 # ---------------------------------------------------------------------------
 
 def stage_passive_recall(config):
-    """Verify _build_intelligence_section injects knowledge into the context."""
-    r = Result("4. Passive BM25 recall (auto-surfaced in Intelligence section)")
+    """Verify step-keyed passive recall (_build_relevant_recall) surfaces knowledge."""
+    r = Result("4. Passive BM25 recall (step-keyed, auto-surfaced)")
     start = time.monotonic()
     try:
-        goal = "Set up a DHT22 temperature sensor on GPIO pin 4"
-        plan = "Step 1: Wire the DHT22 with a 10K pullup. Step 2: Install adafruit-dht library."
+        from context import _build_relevant_recall
+        write_plan(config, "Wire the DHT22 sensor with a 10K pullup on GPIO pin 4")
 
-        intel = _build_intelligence_section(config, goal, plan)
+        intel = _build_relevant_recall(config, set())
         if not intel:
-            r.error = "Intelligence section is empty — BM25 recall returned nothing"
+            r.error = "Passive recall returned nothing for a DHT22 step"
             r.duration = time.monotonic() - start
             return r
 
-        # Should surface the DHT22 knowledge entry
         lowered = intel.lower()
         if "dht22" in lowered or "pullup" in lowered or "gpio" in lowered:
             r.passed = True
-            r.details["intel_chars"] = len(intel)
-            r.details["preview"] = intel[:80].replace("\n", " ")
+            r.details["recall_chars"] = len(intel)
+            r.details["preview"] = intel[:80].replace(chr(10), " ")
         else:
-            r.error = f"Intelligence section doesn't mention DHT22/GPIO: {intel[:200]}"
+            r.error = f"Passive recall doesn't mention DHT22/GPIO: {intel[:200]}"
 
     except Exception as e:
-        r.error = f"{e}\n{traceback.format_exc()}" if VERBOSE else str(e)
+        r.error = f"{e}: {traceback.format_exc()}" if VERBOSE else str(e)
     r.duration = time.monotonic() - start
     return r
 
@@ -702,87 +700,10 @@ def stage_embedding_roundtrip(config):
 # Stage 10: Dream prefetch (semantic recall cache)
 # ---------------------------------------------------------------------------
 
-def stage_dream_prefetch(config):
-    """Run dream_prefetch, verify recall_cache.md is written."""
-    r = Result("10. Dream prefetch (semantic → recall_cache.md)")
-    start = time.monotonic()
-    try:
-        config.mock_mode = True
-        rebuild_index(config)
-        _invalidate_bm25_cache()
-
-        from compaction import dream_prefetch
-        count = dream_prefetch(
-            config,
-            goal="Set up DHT22 temperature sensor on GPIO4",
-            plan="1. Wire sensor\n2. Install library\n3. Test readings",
-        )
-
-        cache_path = config.workspace / "recall_cache.md"
-        if count > 0 and cache_path.exists():
-            cache_text = cache_path.read_text()
-            r.passed = True
-            r.details["cached"] = count
-            r.details["cache_chars"] = len(cache_text)
-            r.details["preview"] = cache_text[:80].replace("\n", " ")
-        elif count == 0:
-            r.error = "dream_prefetch returned 0 cached entries"
-        else:
-            r.error = "recall_cache.md not written"
-
-        config.mock_mode = False
-
-    except Exception as e:
-        config.mock_mode = False
-        r.error = f"{e}\n{traceback.format_exc()}" if VERBOSE else str(e)
-    r.duration = time.monotonic() - start
-    return r
-
 
 # ---------------------------------------------------------------------------
 # Stage 11: End-to-end — context with both BM25 + recall cache
 # ---------------------------------------------------------------------------
-
-def stage_dual_recall(config):
-    """Verify context assembly includes both BM25 and cached semantic recall."""
-    r = Result("11. Dual recall (BM25 + recall_cache in context)")
-    start = time.monotonic()
-    try:
-        # Ensure recall cache exists (from stage 10)
-        cache_path = config.workspace / "recall_cache.md"
-        if not cache_path.exists():
-            cache_path.write_text("[FACT] (dht22, gpio) DHT22 sensor needs 10K pullup on data pin")
-
-        config.goal_path.write_text("Set up DHT22 and BMP280 sensors")
-        write_plan(config, "# Plan\n1. Wire DHT22 to GPIO4\n2. Install libraries")
-
-        messages = assemble_context(
-            config,
-            tick_number=5,
-            goal_start_time=time.time() - 300,
-        )
-
-        all_content = "\n".join(m["content"] for m in messages)
-        has_intel = "dht22" in all_content.lower() or "pullup" in all_content.lower()
-
-        r.details["context_chars"] = len(all_content)
-        r.details["has_intel"] = has_intel
-
-        # Send to LLM — can it use the intelligence?
-        _pr("Sending context to LLM...")
-        response = complete(messages, config, temperature=0.1)
-        _pr(f"LLM: {response[:300]}")
-
-        call = parse_tool_call(response)
-        r.passed = True  # Context assembled and LLM responded
-        if call:
-            r.details["tool"] = call.tool
-        r.details["response_chars"] = len(response or "")
-
-    except Exception as e:
-        r.error = f"{e}\n{traceback.format_exc()}" if VERBOSE else str(e)
-    r.duration = time.monotonic() - start
-    return r
 
 
 # ---------------------------------------------------------------------------
@@ -814,8 +735,6 @@ def run_validation(llm_url, llm_model):
         stage_tool_update_plan,     # 7. update_plan tool
         stage_multi_turn,           # 8. 3 ticks
         stage_embedding_roundtrip,  # 9. mock embedding
-        stage_dream_prefetch,       # 10. semantic cache
-        stage_dual_recall,          # 11. BM25 + cache → LLM
     ]
 
     results = []

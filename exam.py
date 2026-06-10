@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import Config, load_config
 from context import assemble_context
-from compaction import should_compact, compact
+from compaction import should_compact, compact_briefing
 from llm import complete, ensure_model_loaded, LLMError
 from memory import (
     append_observation,
@@ -135,7 +135,7 @@ def run_ticks(config, n_ticks, *, verbose=True, run_id=""):
 
         if should_compact(config, ticks_since_compaction):
             try:
-                compact(config)
+                compact_briefing(config)
                 ticks_since_compaction = 0
                 stats["compactions"] += 1
                 if verbose:

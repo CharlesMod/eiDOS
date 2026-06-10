@@ -94,7 +94,6 @@ class Config:
     context_env_max_chars: int = 800
     context_interventions_max_chars: int = 2000
     context_max_total_chars: int = 20000  # test/dev default; production uses config.toml (6500)
-    briefing_model: bool = False  # enable new context structure (Phase 2)
     dream_combined: bool = True    # combined plan+extract in one LLM call (Phase 4)
 
     # Compaction context budgets (chars) — generous for distillation
@@ -294,7 +293,6 @@ def load_config(path: str = "config.toml") -> Config:
         config.context_interventions_max_chars = ctx.get("interventions_max_chars", config.context_interventions_max_chars)
         config.context_max_total_chars = ctx.get("max_total_chars", config.context_max_total_chars)
         config.chars_per_token = ctx.get("chars_per_token", config.chars_per_token)
-        config.briefing_model = ctx.get("briefing_model", config.briefing_model)
         config.dream_combined = ctx.get("dream_combined", config.dream_combined)
 
         comp_ctx = data.get("compaction", {})

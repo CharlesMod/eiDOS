@@ -28,8 +28,6 @@ from memory import (
 )
 from llm import complete, ReasoningExhausted
 from prompts import (
-    COMPACTION_SYSTEM,
-    COMPACTION_USER,
     COMPACTION_PERSONALITY_CLAUSE,
     COMPACTION_PLAN_SYSTEM,
     COMPACTION_PLAN_USER,
@@ -52,127 +50,6 @@ def should_compact(config: Config, ticks_since_last: int) -> bool:
         return True
     return False
 
-
-def compact(config: Config, persona: dict = None) -> None:
-    """Run a compaction pass: snapshot memory, call LLM, atomic rewrite.
-
-    Reads all recent observations (with a generous budget for compaction)
-    and the current memory, then asks the LLM to produce a consolidated
-    new memory.md.  Uses separate (larger) context budgets than a normal tick
-    so the distillation LLM sees the full picture.
-    """
-    # Snapshot current memory before overwriting
-    _snapshot_memory(config)
-
-    current_memory = read_memory(config)
-
-    # Truncate memory if it exceeds the compaction budget
-    if current_memory and len(current_memory) > config.compaction_memory_max_chars:
-        logger.warning("compaction: memory exceeds budget (%d > %d), truncating",
-                       len(current_memory), config.compaction_memory_max_chars)
-        current_memory = current_memory[:config.compaction_memory_max_chars] + "\n... [truncated]"
-
-    # For compaction, read MORE observations than a normal tick —
-    # use the dedicated compaction budget so distillation sees everything.
-    observations = read_recent_observations(
-        config,
-        max_chars=config.compaction_obs_max_chars,
-        max_count=200,
-    )
-
-    if not observations and not current_memory:
-        return  # Nothing to compact
-
-    # Format observations for the prompt
-    obs_text = _format_observations(observations)
-
-    # Build system prompt with optional personality clause
-    system_content = COMPACTION_SYSTEM
-    if persona and config.persona_enabled:
-        traits = ", ".join(persona.get("traits", [])) or "developing"
-        mood = persona.get("mood", "neutral")
-        system_content += COMPACTION_PERSONALITY_CLAUSE.format(traits=traits, mood=mood)
-
-    goal = read_goal(config)
-    messages = [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": COMPACTION_USER.format(
-            goal=goal or "(no goal set)",
-            memory=current_memory or "(empty — first compaction)",
-            observations=obs_text or "(no observations)",
-        )},
-    ]
-
-    # Log compaction context size
-    total_chars = sum(len(m["content"]) for m in messages)
-    est_tokens = int(total_chars / config.chars_per_token)
-    logger.info("compaction ctx_chars=%d est_tokens=%d (memory=%d obs=%d)",
-                total_chars, est_tokens, len(current_memory or ""), len(obs_text or ""))
-
-    if total_chars > config.compaction_context_max_chars:
-        logger.warning("compaction ctx overrun: %d chars > %d budget",
-                       total_chars, config.compaction_context_max_chars)
-        _log_compaction_overrun(config, total_chars)
-
-    # Thinking models (Qwen 3.5, etc.) may exhaust max_tokens on reasoning
-    # and produce zero content tokens.  We keep thinking enabled (it helps
-    # small models) but catch the exhaustion and retry with:
-    #   1. A larger token budget
-    #   2. A prompt nudge telling the model to keep reasoning brief
-    try:
-        new_memory = complete(messages, config, temperature=0.3,
-                              max_tokens=config.compaction_max_tokens)
-    except ReasoningExhausted as e:
-        logger.warning("compaction: reasoning exhausted %d/%d tokens — "
-                       "retrying with %d max_tokens and budget feedback",
-                       e.reasoning_tokens, e.max_tokens,
-                       config.compaction_retry_max_tokens)
-        # Add budget feedback so the model knows what happened
-        retry_messages = messages + [
-            {"role": "assistant", "content": "(internal thinking used all available tokens — no output produced)"},
-            {"role": "user", "content":
-             "Your reasoning used the entire token budget and produced no output. "
-             "You now have a larger budget. Keep your thinking concise and "
-             "focus on producing the memory document."},
-        ]
-        try:
-            new_memory = complete(retry_messages, config, temperature=0.3,
-                                  max_tokens=config.compaction_retry_max_tokens)
-        except ReasoningExhausted:
-            logger.warning("compaction: reasoning exhausted even on retry — "
-                           "building fallback memory from observations")
-            new_memory = _build_fallback_memory(
-                current_memory, goal, observations, config.context_memory_max_chars
-            )
-
-    # Some models occasionally return empty content for chat completions.
-    # Keep at least the existing memory to avoid destructive compaction.
-    if not new_memory or not new_memory.strip():
-        new_memory = current_memory or "# Working Memory\nNo consolidated update produced in this pass."
-
-    # Hard cap: compaction output must fit in the tick-level memory budget.
-    # This guarantees memory reliably shrinks back to a usable size.
-    cap = config.context_memory_max_chars
-    if len(new_memory) > cap:
-        logger.warning("compaction output too large (%d > %d), trimming",
-                       len(new_memory), cap)
-        new_memory = new_memory[:cap].rsplit("\n", 1)[0] + "\n... [compaction trimmed]"
-
-    # Atomic write
-    write_memory(config, new_memory.strip())
-
-    # Truncate observations — they've been distilled into memory.
-    # Without this, the file grows forever and should_compact() fires every tick.
-    removed = truncate_observations(config)
-    logger.info("compaction: truncated %d observations after distillation", removed)
-
-    # Log the compaction event (this goes into the now-clean file)
-    append_observation(config, {
-        "tick": "compaction",
-        "tool": "dream",
-        "success": True,
-        "output": f"Compacted memory. Before: {len(current_memory)} chars, after: {len(new_memory)} chars. Cleared {removed} observations.",
-    })
 
 
 def emit_flavor(config: Config, persona: dict = None) -> None:
@@ -276,47 +153,6 @@ def _write_dream_record(config: Config, old_plan: str, new_plan: str,
     tmp.write_text(record, encoding="utf-8")
     replace_with_retry(tmp, path)
 
-
-def _build_fallback_memory(
-    current_memory: str,
-    goal: str,
-    observations: list,
-    cap: int,
-) -> str:
-    """Build fallback memory when LLM compaction fails completely.
-
-    Preserves existing memory and appends observation summaries so
-    critical facts aren't lost when the model can't produce output.
-    """
-    parts = []
-
-    if goal:
-        parts.append(f"## Active Goal (immutable — do NOT alter)\n{goal}")
-
-    if current_memory:
-        parts.append(current_memory.strip())
-
-    if observations:
-        obs_lines = ["## Uncompacted Observations (auto-preserved)"]
-        for obs in observations:
-            tick = obs.get("tick", "?")
-            tool = obs.get("tool", "?")
-            output = obs.get("output", "")
-            if len(output) > 150:
-                output = output[:150] + "..."
-            line = f"- [tick {tick} | {tool}] {output}"
-            # Stop if we'd exceed the cap
-            current_len = sum(len(p) for p in parts) + sum(len(l) for l in obs_lines) + len(line) + 10
-            if current_len > cap:
-                obs_lines.append("... (observations truncated to fit budget)")
-                break
-            obs_lines.append(line)
-        parts.append("\n".join(obs_lines))
-
-    if not parts:
-        return "# Working Memory\nCompaction failed — no data available."
-
-    return "\n\n".join(parts)
 
 
 def _format_observations(observations: list[dict]) -> str:
@@ -487,13 +323,6 @@ def compact_briefing(config: Config, persona: dict = None) -> None:
     except Exception as exc:  # noqa: BLE001 - journaling must never disturb the dream
         logger.warning("dream record write failed: %s", exc)
 
-    # Semantic pre-fetch for next tick (Phase 5)
-    if config.knowledge_embedding_enabled:
-        try:
-            prefetch_count = dream_prefetch(config, goal or "", new_plan or current_plan)
-            logger.info("dream prefetch: %d entries cached", prefetch_count)
-        except Exception as exc:
-            logger.warning("dream prefetch failed: %s", exc)
 
 
 def _dream_combined(config, goal, plan, obs_text, persona):
@@ -619,71 +448,3 @@ def _parse_combined_output(output: str, fallback_plan: str) -> tuple:
 
     extractions = parse_extractions(knowledge_text)
     return (plan_text or fallback_plan), extractions
-
-
-# ---------------------------------------------------------------------------
-# Dream pre-fetch (Phase 5: embedding-based semantic pre-caching)
-# ---------------------------------------------------------------------------
-
-def dream_prefetch(config: Config, goal: str, plan: str) -> int:
-    """After the dream cycle, embed new entries and pre-cache recalls.
-
-    1. Rebuild all embeddings (incremental when possible)
-    2. Semantic search using goal + plan as query
-    3. Write recall_cache.md for next tick's Intelligence section
-
-    Returns the number of entries cached.
-    """
-    from embedding import (
-        load_model, unload_model, is_loaded,
-        embed_and_store, semantic_search,
-    )
-    from knowledge import format_recalled
-
-    # In mock mode (testing), skip model loading
-    if config.mock_mode:
-        was_loaded = True
-    else:
-        # Load model if not already resident
-        was_loaded = is_loaded()
-        if not was_loaded:
-            if not load_model(config):
-                return 0
-
-    try:
-        # Embed all entries (idempotent — re-embeds any new/changed entries)
-        embed_and_store(config)
-
-        # Build query from goal + plan
-        query_parts = []
-        if goal:
-            query_parts.append(goal[:300])
-        if plan:
-            for line in plan.splitlines():
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    query_parts.append(line[:200])
-                    break
-        query = " ".join(query_parts)
-        if not query.strip():
-            return 0
-
-        # Search
-        results = semantic_search(config, query, top_k=config.knowledge_recall_top_k)
-        if not results:
-            # Clear stale cache
-            cache_path = config.workspace / "recall_cache.md"
-            if cache_path.exists():
-                cache_path.unlink()
-            return 0
-
-        # Write cache
-        cache_text = format_recalled(results, max_chars=config.context_intelligence_max_chars)
-        cache_path = config.workspace / "recall_cache.md"
-        cache_path.write_text(cache_text)
-
-        return len(results)
-    finally:
-        # Unload model unless co-hosting (or in mock mode)
-        if not config.mock_mode and not was_loaded and not config.knowledge_embedding_cohost:
-            unload_model()

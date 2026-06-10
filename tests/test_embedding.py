@@ -258,65 +258,6 @@ class TestSemanticSearch(unittest.TestCase):
         self.assertEqual(results, [])
 
 
-class TestDreamPrefetch(unittest.TestCase):
-    """Tests for the dream_prefetch integration in compaction.py."""
-
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.config = Config()
-        self.config.workspace_dir = os.path.join(self.tmp, "workspace")
-        os.makedirs(self.config.workspace_dir)
-        self.config.mock_mode = True
-        self.config.knowledge_embedding_enabled = True
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def _populate_and_embed(self):
-        from knowledge import store_entry, rebuild_index, _invalidate_bm25_cache
-        store_entry(self.config, "pip needs --break-system-packages on Bookworm",
-                    tags=["pip", "bookworm"], category="facts")
-        store_entry(self.config, "DHT22 CRC errors when wire exceeds 3 meters",
-                    tags=["dht22", "gpio"], category="errors")
-        rebuild_index(self.config)
-        _invalidate_bm25_cache()
-        embed_and_store(self.config)
-
-    def test_prefetch_writes_cache(self):
-        from compaction import dream_prefetch
-        self._populate_and_embed()
-
-        count = dream_prefetch(self.config, "Set up pip on Bookworm", "Step 1: install pip")
-        self.assertGreater(count, 0)
-
-        cache_path = self.config.workspace / "recall_cache.md"
-        self.assertTrue(cache_path.exists())
-        self.assertGreater(len(cache_path.read_text()), 0)
-
-    def test_prefetch_empty_goal(self):
-        from compaction import dream_prefetch
-        self._populate_and_embed()
-
-        count = dream_prefetch(self.config, "", "")
-        self.assertEqual(count, 0)
-
-    def test_prefetch_no_vectors(self):
-        from compaction import dream_prefetch
-        count = dream_prefetch(self.config, "test goal", "test plan")
-        # Should embed entries (there are none), then search returns empty
-        self.assertEqual(count, 0)
-
-    def test_prefetch_clears_stale_cache(self):
-        from compaction import dream_prefetch
-        cache_path = self.config.workspace / "recall_cache.md"
-        cache_path.write_text("stale cached data")
-
-        # No knowledge entries → no results → cache should be cleared
-        count = dream_prefetch(self.config, "test goal", "test plan")
-        self.assertEqual(count, 0)
-        self.assertFalse(cache_path.exists())
-
 
 class TestRecallCacheInContext(unittest.TestCase):
     """Tests for recall_cache.md integration in context.py intelligence section."""

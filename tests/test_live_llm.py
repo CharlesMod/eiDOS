@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from config import load_config, Config
-from compaction import compact
+from compaction import compact_briefing
 from llm import complete, LLMError, ReasoningExhausted
 from memory import (
     append_observation,
@@ -23,7 +23,7 @@ from memory import (
     write_memory,
 )
 from context import assemble_context
-from prompts import SYSTEM_PROMPT
+from prompts import SYSTEM_PROMPT_BRIEFING as SYSTEM_PROMPT
 from parser import parse_tool_call
 
 # Mark every test in this module as "live" — requires real LM Studio
@@ -189,7 +189,7 @@ class TestLiveCompaction:
             })
 
         start = time.monotonic()
-        compact(self.config)
+        compact_briefing(self.config)
         elapsed = time.monotonic() - start
         print(f"\n  Compaction took {elapsed:.1f}s")
 
@@ -223,7 +223,7 @@ class TestLiveCompaction:
             "success": True, "output": "Noted.",
         })
 
-        compact(self.config)
+        compact_briefing(self.config)
         mem = read_memory(self.config)
         print(f"\n  Compacted memory:\n{mem}")
 
@@ -455,7 +455,7 @@ class TestLiveGoalResilience:
             "success": True, "output": "Noted.",
         })
 
-        compact(self.config)
+        compact_briefing(self.config)
         mem = read_memory(self.config)
         print(f"\n  Post-compaction memory:\n{mem}")
 
@@ -558,7 +558,7 @@ class TestLiveAdaptiveTokens:
                 "output": f"file_{i}_a.txt  file_{i}_b.txt",
             })
 
-        compact(self.config)
+        compact_briefing(self.config)
         mem = read_memory(self.config)
         print(f"\n  Post-compaction memory ({len(mem)} chars):")
         print(f"  {mem[:400]!r}")
@@ -587,7 +587,7 @@ class TestLiveAdaptiveTokens:
                 "output": f"load average: 0.{i}1, 0.{i}2, 0.{i}3",
             })
 
-        compact(self.config)
+        compact_briefing(self.config)
         mem = read_memory(self.config)
         print(f"\n  Adaptive recovery memory ({len(mem)} chars):")
         print(f"  {mem[:400]!r}")

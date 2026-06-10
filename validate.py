@@ -31,10 +31,10 @@ from memory import (
     read_interventions,
 )
 from llm import complete, ensure_model_loaded, LLMError
-from prompts import SYSTEM_PROMPT, TICK_PROMPT
+from prompts import SYSTEM_PROMPT_BRIEFING, TICK_PROMPT
 from env_snapshot import generate as generate_env_snapshot
 from context import assemble_context
-from compaction import should_compact, compact
+from compaction import should_compact, compact_briefing
 
 
 class ValidationResult:
@@ -99,7 +99,7 @@ def stage_tool_call_parsing(config: Config) -> ValidationResult:
     r = ValidationResult("Stage 2: Tool Call Parsing")
     start = time.monotonic()
 
-    system = SYSTEM_PROMPT.format(workspace=str(config.workspace))
+    system = SYSTEM_PROMPT_BRIEFING.format(workspace=str(config.workspace))
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": (
@@ -261,7 +261,7 @@ def stage_compaction(config: Config) -> ValidationResult:
         # Verify snapshot dir is empty/baseline
         snapshots_before = list(config.snapshots_dir.glob("memory_before_*.md"))
 
-        compact(config)
+        compact_briefing(config)
 
         r.duration = time.monotonic() - start
 

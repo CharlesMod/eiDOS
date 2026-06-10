@@ -37,7 +37,7 @@ if LIVE:
 
 from config import Config
 from context import assemble_context
-from compaction import should_compact, compact
+from compaction import should_compact, compact_briefing
 from llm import LLMError
 from memory import (
     append_observation,
@@ -168,7 +168,7 @@ def _run_ticks(config, mock_llm, n_ticks, *, goal_start_time=None):
         if should_compact(config, ticks_since_compaction):
             try:
                 with patch("compaction.complete", mock_llm):
-                    compact(config)
+                    compact_briefing(config)
                 ticks_since_compaction = 0
                 entry["compacted"] = True
             except LLMError:
@@ -652,7 +652,7 @@ class TestCompactionUnderLoad(SimulationTestBase):
         write_memory(self.config, "critical data must not be lost")
         append_observation(self.config, {"tick": 1, "tool": "bash",
                                           "success": True, "output": "x"})
-        compact(self.config)
+        compact_briefing(self.config)
         self.assertEqual(read_memory(self.config), "critical data must not be lost")
 
     @patch("compaction.complete", side_effect=LLMError("timeout"))
@@ -662,7 +662,7 @@ class TestCompactionUnderLoad(SimulationTestBase):
         append_observation(self.config, {"tick": 1, "tool": "bash",
                                           "success": True, "output": "x"})
         with self.assertRaises(LLMError):
-            compact(self.config)
+            compact_briefing(self.config)
         # Memory should still be intact
         self.assertEqual(read_memory(self.config), "preserved")
 
@@ -672,7 +672,7 @@ class TestCompactionUnderLoad(SimulationTestBase):
         write_memory(self.config, "before compaction content")
         append_observation(self.config, {"tick": 1, "tool": "bash",
                                           "success": True, "output": "x"})
-        compact(self.config)
+        compact_briefing(self.config)
 
         snapshots = list(self.config.snapshots_dir.glob("memory_snapshot_*.md"))
         self.assertEqual(len(snapshots), 1)
@@ -689,7 +689,7 @@ class TestCompactionUnderLoad(SimulationTestBase):
         write_memory(self.config, "prior memory")
         append_observation(self.config, {"tick": 1, "tool": "bash",
                                           "success": True, "output": "x"})
-        compact(self.config)
+        compact_briefing(self.config)
 
         mem = read_memory(self.config)
         self.assertLessEqual(
@@ -712,7 +712,7 @@ class TestCompactionUnderLoad(SimulationTestBase):
                 "tick": cycle, "tool": "bash", "success": True,
                 "output": f"reading {cycle}",
             })
-            compact(self.config)
+            compact_briefing(self.config)
 
         messages = assemble_context(self.config, tick_number=11,
                                      goal_start_time=time.time())
@@ -881,7 +881,7 @@ class TestMediumSimulation(SimulationTestBase):
 
             if should_compact(self.config, ticks_since_compaction):
                 with patch("compaction.complete", compact_llm):
-                    compact(self.config)
+                    compact_briefing(self.config)
                 ticks_since_compaction = 0
                 compaction_count += 1
 
@@ -956,7 +956,7 @@ class TestLongSimulation(SimulationTestBase):
 
             if should_compact(self.config, ticks_since_compaction):
                 with patch("compaction.complete", compact_llm):
-                    compact(self.config)
+                    compact_briefing(self.config)
                 ticks_since_compaction = 0
                 compaction_count += 1
 
@@ -1023,7 +1023,7 @@ class TestLongSimulation(SimulationTestBase):
         for tick in range(1, n_ticks + 1):
             if should_compact(self.config, ticks_since_compaction):
                 with patch("compaction.complete", compact_llm):
-                    compact(self.config)
+                    compact_briefing(self.config)
                 ticks_since_compaction = 0
 
             response = llm([], self.config)

@@ -6,13 +6,16 @@ Run tests with the v1 venv: `C:\Users\cmod\llm\Kairos\.venv\Scripts\python.exe -
 
 ## Phase 0 — deletion sweep + repo hygiene (no behavior change)
 
-- [ ] 0a. SSH-standby subsystem (session.py, eidos.py standby block, grace_period_s)
-- [ ] 0b. attempt_llm_restart + restart_cmd/local_only knobs (keep failure counting)
-- [ ] 0c. subgoals tier: auto_subgoals block, tool_plan_goal, PLANNING_* prompts,
-      memory read/write_subgoals + current_subtask, dashboard checklist, config keys
-- [ ] 0d. legacy context generation: _assemble_legacy, SYSTEM_PROMPT, pyramid renderer,
+- [x] 0a. SSH-standby subsystem (session.py, eidos.py standby block, grace_period_s) — 9d285d0
+- [x] 0b. attempt_llm_restart + restart_cmd/local_only knobs (keep failure counting) — 9d285d0/fa00962
+- [x] 0c. subgoals tier: auto_subgoals block, tool_plan_goal, PLANNING_* prompts,
+      memory read/write_subgoals + current_subtask, dashboard checklist, config keys — fa00962
+- [x] 0d. legacy context generation: _assemble_legacy, SYSTEM_PROMPT, pyramid renderer,
       _build_intelligence_section + recall_cache + dream_prefetch, briefing_model flag,
-      legacy compact() + COMPACTION_SYSTEM/USER prompts
+      legacy compact() + COMPACTION_SYSTEM/USER prompts; harnesses (validate/exam/
+      simulate/stress/validate_memory) ported to the briefing path; legacy test classes
+      removed (briefing dream/context coverage retained). NOTE: test_simulation still
+      scaffolds memory.md (trivially passing) — cleaned in 0e.
 - [ ] 0e. memory.md generation: tool_remember, read/write_memory aliases, read_plan
       fallback, prompt lines advertising `remember`, stub snapshotting
 - [ ] 0f. _tension_note + _BREADTH + _breadth_menu (gate owns pivoting)

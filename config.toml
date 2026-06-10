@@ -95,7 +95,6 @@ env_max_chars = 1000
 interventions_max_chars = 6000     # chat history room
 max_total_chars = 120000           # ~30k tokens — open it up; we have a 128k window, not a Pi
 chars_per_token = 4.0              # Gemma tokenizer
-briefing_model = true
 dream_combined = true
 
 [persona]

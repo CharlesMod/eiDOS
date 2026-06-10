@@ -20,7 +20,7 @@ from pathlib import Path
 from config import Config, load_config
 from atomicio import replace_with_retry
 from context import assemble_context, _norm_cmd
-from compaction import should_compact, compact, compact_briefing, emit_flavor
+from compaction import should_compact, compact_briefing, emit_flavor
 from llm import complete, LLMError, ReasoningExhausted
 from gpu_gate import yield_to_speech
 from memory import (
@@ -541,10 +541,7 @@ def run_loop(config: Config, persona=None, wal=None):
             print(f"{pfx} Dreaming... consolidating memories.")
             write_activity(config, "dreaming", detail="consolidating memories")
             try:
-                if config.briefing_model:
-                    compact_briefing(config, persona=persona)
-                else:
-                    compact(config, persona=persona)
+                compact_briefing(config, persona=persona)
                 emit_flavor(config, persona)
                 ticks_since_compaction = 0
                 tick_compacted = True
@@ -706,10 +703,7 @@ def run_loop(config: Config, persona=None, wal=None):
                     "Forcing compaction after %d consecutive reasoning exhaustions",
                     reasoning_exhaustions)
                 try:
-                    if config.briefing_model:
-                        compact_briefing(config, persona=persona)
-                    else:
-                        compact(config, persona=persona)
+                    compact_briefing(config, persona=persona)
                     ticks_since_compaction = 0
                     if persona and config.persona_enabled:
                         record_compaction(persona)
