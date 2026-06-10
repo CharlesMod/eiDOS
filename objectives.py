@@ -242,10 +242,15 @@ def _maybe_escalate(data: dict, tick_number: int) -> bool:
     return True
 
 
-def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int) -> dict:
+def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int,
+                extra_frustration: int = 0) -> dict:
     """THE GATE. Called every tick after progress is known. Updates the active objective's
     frustration, then rotates focus if it has stalled / been parked / finished. Returns a small
     event dict: {rotated: bool, escalate: bool, active: <obj or None>}.
+
+    extra_frustration (phase-6 strain teeth): added on a no-progress tick when the strain glue
+    detects chronic / repeated failure, so a dead end parks and rotates FASTER — the mechanism
+    that replaces the old advisory 'you seem stuck' prose.
     """
     data = _load(config)
     active = _by_id(data, data.get("active_id"))
@@ -279,7 +284,7 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
         active["ticks_since_progress"] = 0
         active["last_progress_tick"] = tick_number
     else:
-        active["frustration"] += FRUST_FAIL if tool_failed else FRUST_STALL
+        active["frustration"] += (FRUST_FAIL if tool_failed else FRUST_STALL) + max(0, extra_frustration)
         active["ticks_since_progress"] += 1
 
     # Has it earned a park? (Frustration over threshold → auto-block + rotate.)

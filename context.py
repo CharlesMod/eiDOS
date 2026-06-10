@@ -437,11 +437,19 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
     lines = ["## Right now",
              f"It is {time.strftime('%A %H:%M', time.localtime())} "
              f"({time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}); you are on tick {tick_number}."]
+    # Condition (DMN glue, phase 6): a behaviorally load-bearing label computed from the recent
+    # success/failure window — STABLE / FOCUSED / STRAINED / RECOVERY — replacing the decorative
+    # XP-only persona mood. STRAINED is also when the gate's strain teeth are biting (faster park).
     try:
-        p = json.loads((config.workspace / "persona.json").read_text(encoding="utf-8"))
-        traits = ", ".join(p.get("traits", []) or []) or "still forming"
-        lines.append(f"You are Level {p.get('level', '?')} — {p.get('mood', 'curious')}, "
-                     f"{p.get('xp', '?')} XP. Traits: {traits}.")
+        import glue
+        cond = glue.compute_condition(glue.recent_outcomes(config))
+        _desc = {
+            "STABLE": "steady — pick the next useful thing and do it",
+            "FOCUSED": "on a roll — keep advancing the current objective",
+            "STRAINED": "repeated failure lately — change METHOD or let the gate move you on; don't retry the same thing",
+            "RECOVERY": "just recovered from a rough patch — consolidate, then proceed",
+        }.get(cond, "")
+        lines.append(f"Condition: {cond}" + (f" — {_desc}" if _desc else ""))
     except Exception:  # noqa: BLE001
         pass
     # (The single objective is rendered as its own high-salience "## Current focus" block, not here —

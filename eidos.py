@@ -703,6 +703,7 @@ def run_loop(config: Config, persona=None, wal=None):
         tick_tool_name = ""
         tick_tool_success = False
         tick_tool_duration = 0.0
+        tick_fail_kind = ""
         write_activity(config, "thinking", detail=f"tick {tick_number}")
 
         # Streaming reply→voice (phase 3): when Boss is waiting, the reply streams first and the
@@ -903,6 +904,7 @@ def run_loop(config: Config, persona=None, wal=None):
                 print(f"{pfx} Tick {tick_number}: no valid tool call parsed")
                 # Hash as empty for loop detection
                 recent_hashes.append("__no_tool__")
+                tick_fail_kind = "parse"
                 if persona and config.persona_enabled:
                     record_tick(persona, None, False)
                     last_tick_failed = True
@@ -914,6 +916,7 @@ def run_loop(config: Config, persona=None, wal=None):
             tick_tool_name = call.tool
             tick_tool_success = result.success
             tick_tool_duration = result.duration_s
+            tick_fail_kind = result.fail_kind
 
             # --- Log observation ---
             append_observation(config, {
@@ -1027,13 +1030,28 @@ def run_loop(config: Config, persona=None, wal=None):
             last_progress_tick = tick_number
         prev_knowledge_count, prev_skill_count = _kc, _sc
 
-        # --- Action Gate: update the active objective's frustration from this tick's outcome, and
-        #     ROTATE focus deterministically if it has stalled/parked/finished. This is the structural
-        #     anti-rabbit-hole: the harness moves focus, the model doesn't get to keep grinding. ---
+        # --- Strain glue (Insula/ACC, phase 6): record this tick's TYPED outcome, then compute a
+        #     frustration bump from chronic / repeated-signature failure. Feeding it to the gate is
+        #     the mechanical teeth — a repeated dead end parks and rotates FASTER, instead of the old
+        #     advisory "you seem stuck" prose the model ignored. ---
+        _strain_bump = 0
+        try:
+            import glue as _glue
+            _fail_sig = "" if tick_tool_success else (recent_hashes[-1] if recent_hashes else tick_tool_name)
+            _glue.record_outcome(config, success=tick_tool_success,
+                                 fail_kind=tick_fail_kind, signature=str(_fail_sig))
+            _strain_bump = _glue.gate_frustration_bump(_glue.recent_outcomes(config))
+        except Exception as _ge:  # noqa: BLE001 - glue is best-effort
+            logger.warning("strain glue failed: %s", _ge)
+
+        # --- Action Gate: update the active objective's frustration from this tick's outcome (+ strain
+        #     bump), and ROTATE focus deterministically if it has stalled/parked/finished. This is the
+        #     structural anti-rabbit-hole: the harness moves focus, the model doesn't keep grinding. ---
         try:
             import objectives as _obj
             _gate = _obj.record_tick(config, made_progress=_made_progress,
-                                     tool_failed=(not tick_tool_success), tick_number=tick_number)
+                                     tool_failed=(not tick_tool_success), tick_number=tick_number,
+                                     extra_frustration=_strain_bump)
             if _gate.get("rotated") and _gate.get("active"):
                 print(f"{pfx} Gate: rotated focus → {_gate['active']['title']}")
             if _gate.get("escalate"):
