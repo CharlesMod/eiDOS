@@ -2938,6 +2938,20 @@ def _eidos_should_run_path(config):
     return config.workspace / "eidos.should_run"
 
 
+# Death event (phase 4b, ARCH #1): the spawn HOLDS the Popen handle and a daemon thread
+# wait()s on it, so a child exit is an interrupt to the watchdog — not something a 5s
+# tasklist poll discovers late. The pid file + tasklist liveness remain ground truth for
+# children this dashboard run didn't spawn (e.g. eidos surviving a dashboard restart).
+_child_died = _sp_threading.Event()
+
+
+def _watch_child(proc):
+    try:
+        proc.wait()
+    finally:
+        _child_died.set()
+
+
 def _spawn_eidos(config):
     """Spawn the eidos process detached, record its pid, return the pid."""
     import subprocess, sys, os
@@ -2958,6 +2972,9 @@ def _spawn_eidos(config):
         except OSError:
             pass
     (config.workspace / "eidos.pid").write_text(str(proc.pid))
+    _child_died.clear()
+    _sp_threading.Thread(target=_watch_child, args=(proc,), daemon=True,
+                         name="eidos-death-watch").start()
     return proc.pid
 
 
@@ -3136,7 +3153,13 @@ def _watchdog_loop(config):
     restarts = []
     while True:
         try:
-            time.sleep(5)
+            # Event-driven (phase 4b): a spawned child's death fires _child_died instantly;
+            # the 5s timeout retains every periodic check (should_run, stability re-arm,
+            # children from a previous dashboard run that we have no handle for).
+            died = _child_died.wait(timeout=5)
+            if died:
+                _child_died.clear()
+                _pid_cache.clear()   # bypass the liveness cache — react to the death NOW
             if not _eidos_should_run_path(config).exists():
                 continue  # operator stopped it — do not resurrect
             try:
