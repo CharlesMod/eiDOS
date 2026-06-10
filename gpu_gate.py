@@ -9,7 +9,14 @@ so it holds for the WHOLE utterance however long, and only releases early if syn
 standalone) -> return immediately and proceed; never block the tick on a failure.
 """
 import json
+import os
 import urllib.request
+
+# Set by the test harness (conftest) so no test ever reaches a live dashboard: a real eidos
+# talks to :8099 for these channels, and that port may hold the live v1 dashboard, whose
+# control long-poll would hang a run_loop-driving test. With this set, both channels take their
+# fail-open path immediately. Never set in production.
+_NO_DASHBOARD = "EIDOS_NO_DASHBOARD"
 
 # Kept in sync with the dashboard's gate defaults so client + server agree on the bounds.
 GPU_STARTUP_S = 12.0  # generous wait for speech to START (variable TTFA: warmup, contention)
@@ -22,6 +29,8 @@ def yield_to_speech(config, stall_s: float = GPU_STALL_S, max_s: float = GPU_MAX
     """Block until the GPU is free of TTS synthesis (or it never starts / stalls / hits the backstop).
     Returns the gate state ({"idle","reason","active",...}); never raises — on any failure it reports
     idle so the tick proceeds without delay."""
+    if os.environ.get(_NO_DASHBOARD):
+        return {"idle": True, "reason": "no_dashboard", "active": 0}
     port = getattr(config, "dashboard_port", 8099)
     url = f"http://127.0.0.1:{port}/api/gpu/wait?stall={stall_s}&max={max_s}&startup={startup_s}"
     try:
@@ -48,6 +57,8 @@ def control_wait(config, since: int, max_s: float = 25.0):
     Returns {"seq", "paused", "held", "interventions"} — or None if the channel is down."""
     global _ctrl_down_until
     import time as _t
+    if os.environ.get(_NO_DASHBOARD):
+        return None
     if _t.monotonic() < _ctrl_down_until:
         return None
     port = getattr(config, "dashboard_port", 8099)

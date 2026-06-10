@@ -318,8 +318,12 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                         "output_path": str(out_path),
                         "exit_path": exit_path,
                         "notified": False,
+                        "waited": True,
                     })
-                    _write_jobs(config, jobs)
+                    with _jobs_lock:
+                        _write_jobs(config, jobs)
+                    threading.Thread(target=_job_waiter, args=(config, proc, jobname, exit_path),
+                                     daemon=True, name=f"job-waiter-{jobname}").start()
                 except Exception:  # noqa: BLE001
                     pass
                 intent_note = f" (intent: {intent})" if intent else ""
@@ -352,8 +356,12 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                         "output_path": str(out_path),
                         "exit_path": exit_path,
                         "notified": False,
+                        "waited": True,
                     })
-                    _write_jobs(config, jobs)
+                    with _jobs_lock:
+                        _write_jobs(config, jobs)
+                    threading.Thread(target=_job_waiter, args=(config, proc, jobname, exit_path),
+                                     daemon=True, name=f"job-waiter-{jobname}").start()
                 except Exception:  # noqa: BLE001
                     pass
                 return ToolResult(
@@ -843,6 +851,40 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
+# In-process ledger lock (phase 4c): the tick thread and per-job waiter threads both
+# read-modify-write jobs.json. (The dashboard's cross-process reap-on-stop remains
+# unsynchronized — the deferred cross-process lock; see V2_SUPERVISED_HANDOFF.)
+_jobs_lock = threading.Lock()
+
+
+def _job_waiter(config: Config, proc, jobname: str, exit_path: str) -> None:
+    """Phase 4c (ARCH #1): hold the Popen handle and wait() — job completion becomes an
+    event, not something a per-tick tasklist poll discovers late. Writes the exit-code
+    sidecar from the REAL returncode (authoritative for every route, including cmd.exe
+    and explicit-exit scripts the PS epilogue can't cover), then flips the ledger entry.
+    The PS epilogue remains as cross-restart recovery for jobs whose waiter died with us."""
+    try:
+        rc = proc.wait()
+    except Exception:  # noqa: BLE001
+        rc = None
+    if rc is not None:
+        try:
+            Path(exit_path).write_text(str(rc), encoding="ascii")
+        except OSError:
+            pass
+    try:
+        with _jobs_lock:
+            jobs = _read_jobs(config)
+            for j in jobs:
+                if j.get("name") == jobname and j.get("status") == "running":
+                    j["exit_code"] = rc
+                    j["status"] = "completed" if (rc is None or rc == 0) else "failed"
+                    break
+            _write_jobs(config, jobs)
+    except Exception:  # noqa: BLE001 - ledger update is best-effort; collect re-derives
+        pass
+
+
 def _read_jobs(config: Config) -> list[dict]:
     try:
         p = config.jobs_path
@@ -891,17 +933,20 @@ def _finish_dead_job(job: dict) -> None:
 
 def refresh_jobs(config: Config) -> list[dict]:
     """Check all tracked jobs, update statuses, return current list."""
-    jobs = _read_jobs(config)
-    changed = False
-    for job in jobs:
-        if job["status"] != "running":
-            continue
-        if not _pid_alive(job.get("pid", 0)):
-            _finish_dead_job(job)
-            changed = True
-    if changed:
-        _write_jobs(config, jobs)
-    return jobs
+    with _jobs_lock:
+        jobs = _read_jobs(config)
+        changed = False
+        for job in jobs:
+            if job["status"] != "running":
+                continue
+            if job.get("waited"):
+                continue  # a waiter thread owns this one's completion (phase 4c) — no pid poll
+            if not _pid_alive(job.get("pid", 0)):
+                _finish_dead_job(job)
+                changed = True
+        if changed:
+            _write_jobs(config, jobs)
+        return jobs
 
 
 def reap_jobs(config: Config, kill_all: bool = False) -> int:
@@ -911,25 +956,27 @@ def reap_jobs(config: Config, kill_all: bool = False) -> int:
     previous run's detached children (bg_run/async use a new process group, so they survive a
     taskkill of eidos itself, and would otherwise run forever). Also marks dead pids completed.
     """
-    jobs = _read_jobs(config)
-    killed = 0
-    changed = False
-    for j in jobs:
-        if j.get("status") != "running":
-            continue
-        pid = j.get("pid", 0)
-        if not _pid_alive(pid):
-            _finish_dead_job(j)
-            changed = True
-            continue
-        if kill_all:
-            _kill_pid_tree(pid)
-            j["status"] = "reaped"
-            killed += 1
-            changed = True
-    if changed:
-        _write_jobs(config, jobs)
-    return killed
+    with _jobs_lock:
+        jobs = _read_jobs(config)
+        killed = 0
+        changed = False
+        for j in jobs:
+            if j.get("status") != "running":
+                continue
+            pid = j.get("pid", 0)
+            if not j.get("waited") and not _pid_alive(pid):
+                # No waiter owns it (pre-restart orphan) and the pid is gone -> close it out.
+                _finish_dead_job(j)
+                changed = True
+                continue
+            if kill_all:
+                _kill_pid_tree(pid)
+                j["status"] = "reaped"
+                killed += 1
+                changed = True
+        if changed:
+            _write_jobs(config, jobs)
+        return killed
 
 
 def _read_job_tail(output_path: str, n: int = 2500) -> str:
@@ -951,43 +998,42 @@ def collect_finished_jobs(config: Config) -> list[dict]:
     jobs are left for the model to bg_check itself (it asked for them explicitly).
     """
     ceiling = float(getattr(config, "cmd_async_ceiling_s", 180.0))
-    jobs = _read_jobs(config)
-    changed = False
-    finished = []
-    now = time.time()
-    for j in jobs:
-        if j.get("status") == "running":
-            alive = _pid_alive(j.get("pid", 0))
-            started_ts = j.get("started_ts")
-            if alive:
+    with _jobs_lock:
+        jobs = _read_jobs(config)
+        changed = False
+        finished = []
+        now = time.time()
+        for j in jobs:
+            if j.get("status") == "running":
+                started_ts = j.get("started_ts")
                 manual_cap = float(getattr(config, "bg_job_max_age_s", 1800.0))
-                if (j.get("kind") in ("async", "auto")
-                        and started_ts and (now - started_ts) > ceiling):
+                over_ceiling = (j.get("kind") in ("async", "auto")
+                                and started_ts and (now - started_ts) > ceiling)
+                over_manual = (started_ts and manual_cap > 0 and (now - started_ts) > manual_cap)
+                if over_ceiling or over_manual:
+                    # Lifetime caps apply to every route (a kill on an already-dead pid is a
+                    # no-op; the waiter sees status != running afterwards and stands down).
                     _kill_pid_tree(j.get("pid", 0))
                     j["status"] = "timed_out"
                     changed = True
-                elif (started_ts and manual_cap > 0 and (now - started_ts) > manual_cap):
-                    # Even deliberately-backgrounded manual bg_run jobs get a GENEROUS lifetime cap,
-                    # so a runaway/infinite bg command (e.g. an all-night poll loop) can't run forever.
-                    _kill_pid_tree(j.get("pid", 0))
-                    j["status"] = "timed_out"
-                    changed = True
+                elif j.get("waited"):
+                    continue  # a waiter thread owns completion (phase 4c) — no tasklist poll
+                elif _pid_alive(j.get("pid", 0)):
+                    continue  # legacy/orphan path: still running
                 else:
-                    continue  # still running — not finished yet
-            else:
-                _finish_dead_job(j)
+                    _finish_dead_job(j)
+                    changed = True
+            # Deliver finished async/auto jobs exactly once.
+            if (j.get("kind") in ("async", "auto")
+                    and j.get("status") in ("completed", "failed", "timed_out")
+                    and not j.get("notified")):
+                finished.append({**j, "tail": _read_job_tail(j.get("output_path", ""))})
+                j["notified"] = True
                 changed = True
-        # Deliver finished async/auto jobs exactly once.
-        if (j.get("kind") in ("async", "auto")
-                and j.get("status") in ("completed", "failed", "timed_out")
-                and not j.get("notified")):
-            finished.append({**j, "tail": _read_job_tail(j.get("output_path", ""))})
-            j["notified"] = True
-            changed = True
-    pruned = _prune_jobs(jobs)
-    if changed or len(pruned) != len(jobs):
-        _write_jobs(config, pruned)
-    return finished
+        pruned = _prune_jobs(jobs)
+        if changed or len(pruned) != len(jobs):
+            _write_jobs(config, pruned)
+        return finished
 
 
 def tool_create_skill(args: dict, config: Config) -> ToolResult:

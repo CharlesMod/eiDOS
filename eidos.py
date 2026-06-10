@@ -296,6 +296,9 @@ def _interruptible_sleep(config: Config, interval: float = None):
     the channel is down, so the loop never depends on the dashboard to keep ticking."""
     global _ctl_cursor
     target = config.tick_interval_s if interval is None else float(interval)
+    if target <= 0:
+        time.sleep(0)   # zero-interval (fast cadence): yield the GIL once; keep ONE time.sleep
+        return          # call so this stays a cooperative throttle point (and a test seam)
     deadline = time.monotonic() + target
     while not _shutdown_requested:
         remaining = deadline - time.monotonic()
@@ -543,7 +546,9 @@ def run_loop(config: Config, persona=None, wal=None):
     print(f"{pfx} Starting tick loop (interval={config.tick_interval_s}s, mock={config.mock_mode})")
 
     # --- Wait for LLM health before entering tick loop (cold-boot safety) ---
-    if not config.mock_mode:
+    # Skipped in the isolated test env (EIDOS_NO_DASHBOARD): tests mock `complete`, so probing a
+    # real LLM endpoint only adds multi-second urlopen timeouts (a port may be up but lack /health).
+    if not config.mock_mode and not os.environ.get("EIDOS_NO_DASHBOARD"):
         import urllib.request as _ur
         health_url = config.llm_url.rstrip("/") + "/health"
         print(f"{pfx} Waiting for LLM server health at {health_url}")

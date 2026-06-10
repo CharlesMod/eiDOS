@@ -118,13 +118,30 @@ class TestAsyncExitCodes(unittest.TestCase):
         self.assertEqual(job["status"], "completed")
         self.assertEqual(job["exit_code"], 0)
 
-    def test_explicit_exit_skips_sidecar_never_lies(self):
-        """A script that exits explicitly bypasses the epilogue: sidecar absent
-        means exit code UNKNOWN -> completed (old behavior), never a wrong code."""
+    def test_explicit_exit_recovered_by_waiter(self):
+        """A script that exits explicitly bypasses the PS epilogue, but the phase-4c
+        waiter thread holds the Popen handle and records the REAL returncode anyway."""
         tool_bash({"cmd": "exit 0", "name": "explicit"}, self.config)
         job = self._wait_finished("explicit")
         self.assertEqual(job["status"], "completed")
-        self.assertIsNone(job["exit_code"])
+        self.assertEqual(job["exit_code"], 0)
+
+    def test_unknown_exit_never_lies(self):
+        """The cross-restart recovery path (no waiter, no sidecar — e.g. a job whose
+        waiter died with the previous eidos): exit UNKNOWN -> completed, never a
+        fabricated failure."""
+        import json as _json
+        from tools import collect_finished_jobs
+        job = {"name": "orphan", "pid": 99999999, "cmd": "echo x", "intent": "",
+               "started": "2026-06-10T00:00:00Z", "started_ts": time.time(),
+               "status": "running", "kind": "async",
+               "output_path": "", "exit_path": str(Path(self.config.workspace_dir) / "nope.exit"),
+               "notified": False}
+        self.config.jobs_path.write_text(_json.dumps([job]))
+        fins = collect_finished_jobs(self.config)
+        self.assertEqual(len(fins), 1)
+        self.assertEqual(fins[0]["status"], "completed")
+        self.assertIsNone(fins[0]["exit_code"])
 
 
 if __name__ == "__main__":

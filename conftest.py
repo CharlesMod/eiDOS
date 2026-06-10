@@ -57,6 +57,12 @@ def pytest_unconfigure(config):
 def pytest_sessionstart(session):
     global _session_start
     _session_start = time.time()
+    # Tests must never reach a live dashboard. A real eidos talks to its dashboard on :8099 for
+    # the GPU speech-gate and the phase-4 control channel; in dev that port may hold the LIVE v1
+    # dashboard, whose control long-poll would HANG any run_loop-driving test (it bypasses the
+    # test's time.sleep mock). The client checks this env flag and takes its fail-open path. An
+    # env flag (not a fixture) because pytest's monkeypatch doesn't inject into unittest.TestCase.
+    os.environ["EIDOS_NO_DASHBOARD"] = "1"
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
