@@ -43,7 +43,7 @@ from persona import (
     format_status_line,
 )
 from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rotate_metrics, cleanup_old_snapshots
-from safety import check_ram, get_cpu_temp, kill_child_processes, check_disk_space
+from safety import check_ram, check_disk_space
 from telemetry import write_heartbeat, append_metrics, write_activity, get_cpu_pct
 from tools import execute_tool, refresh_jobs, collect_finished_jobs, reap_jobs
 
@@ -557,17 +557,18 @@ def run_loop(config: Config, persona=None, wal=None):
                     "output": f"Compaction failed: {e}",
                 })
 
-        # --- RAM check ---
+        # --- RAM check (observation only; the model is the big consumer and it's a
+        # service we don't own — there are no expendable children worth killing) ---
         ram_ok, ram_pct = check_ram(config.ram_max_pct)
         if not ram_ok:
-            killed = kill_child_processes()
             append_observation(config, {
                 "tick": tick_number,
                 "tool": "system",
                 "success": False,
-                "output": f"RAM pressure ({ram_pct:.0f}%), killed {killed} child process(es)",
+                "output": f"RAM pressure: {ram_pct:.0f}% used (threshold {config.ram_max_pct:.0f}%). "
+                          f"Avoid dispatching heavy new jobs until it falls.",
             })
-            print(f"{pfx} RAM pressure: {ram_pct:.0f}%, killed children")
+            print(f"{pfx} RAM pressure: {ram_pct:.0f}%")
 
         # --- Loop detection ---
         loop_detected = False
@@ -892,7 +893,6 @@ def run_loop(config: Config, persona=None, wal=None):
         # --- Telemetry ---
         _disk_ok, _disk_free = check_disk_space(min_gb=0)
         _ram_ok, _ram_pct = check_ram(config.ram_max_pct)
-        _cpu_temp = get_cpu_temp()
         _cpu_pct = get_cpu_pct()
         _uptime = time.monotonic() - loop_start
         _p_level = persona.get("level", 1) if persona else 1
@@ -916,7 +916,7 @@ def run_loop(config: Config, persona=None, wal=None):
             consecutive_failures=consecutive_failures,
             current_max_tokens=current_max_tokens,
             disk_free_gb=_disk_free, ram_pct=_ram_pct,
-            cpu_pct=_cpu_pct, cpu_temp_c=_cpu_temp, llm_elapsed_s=llm_elapsed,
+            cpu_pct=_cpu_pct, llm_elapsed_s=llm_elapsed,
             tool_name=tick_tool_name, tool_success=tick_tool_success,
             uptime_s=_uptime,
         )

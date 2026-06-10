@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import unittest
 from unittest.mock import patch, MagicMock
 from config import Config
-from safety import is_command_blocked, check_disk_space, check_ram, get_cpu_temp, kill_child_processes
+from safety import is_command_blocked, check_disk_space, check_ram
 
 
 class TestCommandBlocking(unittest.TestCase):
@@ -77,61 +77,6 @@ class TestResourceChecks(unittest.TestCase):
         self.assertFalse(ok)
 
 
-class TestCpuTemp(unittest.TestCase):
-
-    def test_get_cpu_temp_returns_float_or_none(self):
-        result = get_cpu_temp()
-        self.assertTrue(result is None or isinstance(result, float))
-
-    @patch("safety.sys")
-    def test_get_cpu_temp_linux_reads_thermal(self, mock_sys):
-        mock_sys.platform = "linux"
-        import builtins
-        original_open = builtins.open
-        from io import StringIO
-        with patch("builtins.open", return_value=StringIO("45000\n")):
-            # Re-call with patched platform
-            import safety
-            original_platform = safety.sys.platform
-            safety.sys.platform = "linux"
-            try:
-                result = safety.get_cpu_temp()
-                if result is not None:  # Only on Linux
-                    self.assertAlmostEqual(result, 45.0, places=1)
-            finally:
-                safety.sys.platform = original_platform
-
-    def test_get_cpu_temp_non_linux_returns_none(self):
-        """On macOS, get_cpu_temp should return None."""
-        if sys.platform == "darwin":
-            self.assertIsNone(get_cpu_temp())
-
-
-class TestKillChildProcesses(unittest.TestCase):
-
-    def test_kill_child_returns_int(self):
-        result = kill_child_processes(parent_pid=999999999)
-        self.assertIsInstance(result, int)
-
-    @patch("safety.subprocess.run")
-    def test_kill_child_success(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
-        result = kill_child_processes(parent_pid=12345)
-        self.assertEqual(result, 1)
-        mock_run.assert_called_once()
-
-    @patch("safety.subprocess.run")
-    def test_kill_child_no_children(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=1)
-        result = kill_child_processes(parent_pid=12345)
-        self.assertEqual(result, 0)
-
-    @patch("safety.subprocess.run")
-    def test_kill_child_timeout(self, mock_run):
-        import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired("pkill", 5)
-        result = kill_child_processes(parent_pid=12345)
-        self.assertEqual(result, 0)
 
 
 if __name__ == "__main__":

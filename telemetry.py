@@ -21,17 +21,25 @@ _prev_cpu_times = None
 def get_cpu_pct() -> float:
     """Return total system CPU usage as 0–100%, normalized across all cores.
 
-    Uses delta between two reads of /proc/stat.
-    Falls back to 0.0 on non-Linux or on error.
+    Windows-native: delta between two GetSystemTimes() reads (idle vs
+    kernel+user; kernel time includes idle). First call primes the counter
+    and returns 0.0; on non-Windows platforms or error, returns 0.0.
     """
     global _prev_cpu_times
+    import sys
+    if sys.platform != "win32":
+        return 0.0
     try:
-        with open("/proc/stat") as f:
-            parts = f.readline().split()
-        # parts: cpu user nice system idle iowait irq softirq steal ...
-        vals = [int(x) for x in parts[1:]]
-        idle = vals[3] + vals[4]   # idle + iowait
-        total = sum(vals)
+        import ctypes
+
+        idle_t = ctypes.c_ulonglong()
+        kernel_t = ctypes.c_ulonglong()
+        user_t = ctypes.c_ulonglong()
+        if not ctypes.windll.kernel32.GetSystemTimes(
+                ctypes.byref(idle_t), ctypes.byref(kernel_t), ctypes.byref(user_t)):
+            return 0.0
+        idle = idle_t.value
+        total = kernel_t.value + user_t.value
 
         if _prev_cpu_times is None:
             _prev_cpu_times = (idle, total)
@@ -45,7 +53,7 @@ def get_cpu_pct() -> float:
         if d_total <= 0:
             return 0.0
         return round((1.0 - d_idle / d_total) * 100.0, 1)
-    except (OSError, IndexError, ValueError):
+    except (OSError, AttributeError, ValueError):
         return 0.0
 
 
@@ -73,7 +81,7 @@ def write_activity(config: Config, state: str, *, detail: str = "",
 def write_heartbeat(config: Config, *, tick: int, level: int, mood: str,
                     xp: int, goal_snippet: str, consecutive_failures: int,
                     current_max_tokens: int, disk_free_gb: float,
-                    ram_pct: float, cpu_temp_c, llm_elapsed_s: float,
+                    ram_pct: float, llm_elapsed_s: float,
                     tool_name: str, tool_success: bool, uptime_s: float,
                     cpu_pct: float = 0.0, idle_since: float = None):
     """Atomically write the current heartbeat snapshot."""
@@ -90,7 +98,6 @@ def write_heartbeat(config: Config, *, tick: int, level: int, mood: str,
         "disk_free_gb": round(disk_free_gb, 2),
         "ram_pct": round(ram_pct, 1),
         "cpu_pct": round(cpu_pct, 1),
-        "cpu_temp_c": round(cpu_temp_c, 1) if cpu_temp_c is not None else None,
         "llm_elapsed_s": round(llm_elapsed_s, 2),
         "tool_name": tool_name,
         "tool_success": tool_success,
@@ -111,7 +118,7 @@ def write_heartbeat(config: Config, *, tick: int, level: int, mood: str,
 def append_metrics(config: Config, *, tick: int, level: int, mood: str,
                    xp: int, consecutive_failures: int,
                    current_max_tokens: int, disk_free_gb: float,
-                   ram_pct: float, cpu_temp_c, llm_elapsed_s: float,
+                   ram_pct: float, llm_elapsed_s: float,
                    tool_name: str, tool_success: bool, uptime_s: float,
                    cpu_pct: float = 0.0,
                    prompt_tokens: int = 0, completion_tokens: int = 0,
@@ -130,7 +137,6 @@ def append_metrics(config: Config, *, tick: int, level: int, mood: str,
         "disk_free_gb": round(disk_free_gb, 2),
         "ram_pct": round(ram_pct, 1),
         "cpu_pct": round(cpu_pct, 1),
-        "cpu_temp_c": round(cpu_temp_c, 1) if cpu_temp_c is not None else None,
         "llm_elapsed_s": round(llm_elapsed_s, 2),
         "tool_name": tool_name,
         "tool_success": tool_success,
