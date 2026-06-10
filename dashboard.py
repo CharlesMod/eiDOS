@@ -2011,11 +2011,10 @@ function thoughtToolVerb(name) {
         'write_file': '\u270d writing something',
         'read_file': '\ud83d\udc41 reading',
         'update_plan': '\ud83d\udcdd making plans',
-        'http_get': '\ud83c\udf10 reaching out',
+        'http_request': '\ud83c\udf10 reaching out',
         'bg_run': '\u2699 starting something',
         'bg_check': '\ud83d\udc41 checking',
-        'goal_complete': '\u2728 done!',
-        'ask_supervisor': '\u270b asking',
+        'objective_done': '\u2728 done!',
     };
     return verbs[name] || name;
 }
