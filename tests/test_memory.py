@@ -11,8 +11,6 @@ import unittest
 from config import Config
 from memory import (
     read_goal,
-    read_memory,
-    write_memory,
     read_plan,
     write_plan,
     append_observation,
@@ -44,15 +42,7 @@ class TestMemory(unittest.TestCase):
         self.config.goal_path.write_text("Find the answer.")
         self.assertEqual(read_goal(self.config), "Find the answer.")
 
-    def test_write_read_memory(self):
-        write_memory(self.config, "test memory content")
-        self.assertEqual(read_memory(self.config), "test memory content")
 
-    def test_atomic_write(self):
-        # Write should not leave temp files on success
-        write_memory(self.config, "content")
-        tmp_files = list(Path(self.config.workspace_dir).glob(".memory_*"))
-        self.assertEqual(len(tmp_files), 0)
 
     def test_append_observation(self):
         append_observation(self.config, {"tick": 1, "tool": "bash", "output": "hello"})
@@ -109,29 +99,11 @@ class TestMemory(unittest.TestCase):
         interventions = read_interventions(self.config)
         self.assertEqual(len(interventions), 0)
 
-    # --- New tests: write_memory edge cases ---
 
-    def test_write_memory_overwrites_previous(self):
-        write_memory(self.config, "first version")
-        write_memory(self.config, "second version")
-        self.assertEqual(read_memory(self.config), "second version")
 
-    def test_write_memory_empty_string(self):
-        write_memory(self.config, "")
-        self.assertEqual(read_memory(self.config), "")
 
-    def test_write_memory_unicode(self):
-        write_memory(self.config, "Résumé: température 42°C — Raspberry Pi 🥧")
-        self.assertEqual(read_memory(self.config), "Résumé: température 42°C — Raspberry Pi 🥧")
 
-    def test_write_memory_large_content(self):
-        big = "x" * 50000
-        write_memory(self.config, big)
-        self.assertEqual(read_memory(self.config), big)
 
-    def test_read_memory_strips_whitespace(self):
-        self.config.memory_path.write_text("  content with spaces  \n\n")
-        self.assertEqual(read_memory(self.config), "content with spaces")
 
     # --- New tests: observation edge cases ---
 
@@ -280,23 +252,8 @@ class TestMemory(unittest.TestCase):
     def test_plan_path_is_plan_md(self):
         self.assertTrue(str(self.config.plan_path).endswith("plan.md"))
 
-    def test_plan_and_memory_are_separate(self):
-        write_memory(self.config, "memory content")
-        write_plan(self.config, "plan content")
-        self.assertEqual(read_memory(self.config), "memory content")
-        self.assertEqual(read_plan(self.config), "plan content")
 
-    def test_read_plan_fallback_to_memory(self):
-        """When plan.md is missing, read_plan falls back to memory.md."""
-        write_memory(self.config, "legacy memory content")
-        self.assertFalse(self.config.plan_path.exists())
-        self.assertEqual(read_plan(self.config), "legacy memory content")
 
-    def test_read_plan_prefers_plan_md(self):
-        """When both plan.md and memory.md exist, read_plan prefers plan.md."""
-        write_memory(self.config, "old memory")
-        write_plan(self.config, "new plan")
-        self.assertEqual(read_plan(self.config), "new plan")
 
     def test_read_plan_missing_both(self):
         self.assertEqual(read_plan(self.config), "")

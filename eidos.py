@@ -28,7 +28,7 @@ from memory import (
     append_thought,
     read_goal,
     validate_observations,
-    write_memory,
+    write_plan,
 )
 from parser import parse_tool_call, parse_reply
 from persona import (
@@ -310,21 +310,22 @@ def recover(config: Config) -> dict:
     if not goal:
         print("[eidos] WARNING: No goal.md found. Agent will idle until one is created.")
 
-    # 2. Create memory.md if missing, or restore from snapshot if empty
-    mem_missing = not config.memory_path.exists()
-    mem_empty = False
-    if not mem_missing:
+    # 2. Create plan.md (working memory) if missing, or restore from snapshot if empty
+    plan_missing = not config.plan_path.exists()
+    plan_empty = False
+    if not plan_missing:
         try:
-            mem_empty = config.memory_path.stat().st_size == 0
+            plan_empty = config.plan_path.stat().st_size == 0
         except OSError:
-            mem_empty = True
+            plan_empty = True
 
-    if mem_missing or mem_empty:
-        # Try restoring from most recent snapshot
+    if plan_missing or plan_empty:
+        # Try restoring from most recent dream snapshot (either filename generation)
         restored = False
         if config.snapshots_dir.exists():
             snapshots = sorted(
-                config.snapshots_dir.glob("memory_snapshot_*"),
+                list(config.snapshots_dir.glob("plan_snapshot_*"))
+                + list(config.snapshots_dir.glob("memory_snapshot_*")),
                 key=lambda p: p.stat().st_mtime,
                 reverse=True,
             )
@@ -332,20 +333,20 @@ def recover(config: Config) -> dict:
                 try:
                     content = snapshots[0].read_text()
                     if content.strip():
-                        write_memory(config, content)
+                        write_plan(config, content)
                         restored = True
-                        print(f"[eidos] Restored memory.md from snapshot: {snapshots[0].name}")
+                        print(f"[eidos] Restored plan.md from snapshot: {snapshots[0].name}")
                         append_observation(config, {
                             "tick": 0,
                             "tool": "system",
                             "success": True,
-                            "output": f"Restored memory from snapshot {snapshots[0].name} after {'missing' if mem_missing else 'empty'} memory.md.",
+                            "output": f"Restored plan from snapshot {snapshots[0].name} after {'missing' if plan_missing else 'empty'} plan.md.",
                         })
                 except OSError:
                     pass
         if not restored:
-            write_memory(config, "# Working Memory\nFresh start. No prior context.")
-            print("[eidos] Created initial memory.md")
+            write_plan(config, "# Plan\nFresh start. No prior context.")
+            print("[eidos] Created initial plan.md")
 
     # 3. Validate observations.jsonl
     truncated = validate_observations(config)
@@ -933,7 +934,7 @@ def run_loop(config: Config, persona=None, wal=None):
         _goal_snip = goal if goal else ""
         _mem_chars = 0
         try:
-            _mem_chars = config.memory_path.stat().st_size
+            _mem_chars = config.plan_path.stat().st_size
         except OSError:
             pass
         _obs_count = 0

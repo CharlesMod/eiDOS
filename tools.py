@@ -607,37 +607,6 @@ def tool_http_get(args: dict, config: Config) -> ToolResult:
         return ToolResult(output=f"HTTP error: {e}", full_output_path=None, success=False, duration_s=time.monotonic() - start)
 
 
-def tool_remember(args: dict, config: Config) -> ToolResult:
-    """Write an urgent note to memory.md."""
-    from memory import read_memory, write_memory
-
-    note = args.get("note", "")
-    if not note:
-        return ToolResult(output="Error: 'note' required", full_output_path=None, success=False, duration_s=0)
-
-    disk_ok, free_gb = check_disk_space(min_gb=config.disk_min_gb)
-    if not disk_ok:
-        return ToolResult(
-            output=f"BLOCKED: disk space low ({free_gb:.1f} GB free, minimum {config.disk_min_gb} GB)",
-            full_output_path=None, success=False, duration_s=0,
-        )
-
-    current = read_memory(config)
-    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    addition = f"\n\n[Remembered at {timestamp}]\n{note}"
-    updated = current + addition
-
-    # Hard cap: if memory would exceed budget, trim oldest lines from the top
-    budget = config.context_memory_max_chars
-    if len(updated) > budget:
-        lines = updated.splitlines(keepends=True)
-        while lines and len("".join(lines)) > budget:
-            lines.pop(0)
-        updated = "".join(lines)
-
-    write_memory(config, updated)
-    return ToolResult(output=f"Noted in memory: {note[:100]}", full_output_path=None, success=True, duration_s=0)
-
 
 def tool_update_plan(args: dict, config: Config) -> ToolResult:
     """Write an urgent note to plan.md (briefing model working memory)."""
@@ -1684,7 +1653,6 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "http_request": tool_http_request,   # first-class HTTP client (any method/JSON/headers, no `requests` dep)
     "fetch": tool_http_request,          # alias
     "http": tool_http_request,           # alias
-    "remember": tool_remember,
     "update_plan": tool_update_plan,
     "memorize": tool_memorize,
     "update_self_guide": tool_update_self_guide,

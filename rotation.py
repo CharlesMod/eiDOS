@@ -149,7 +149,7 @@ def rotate_metrics(config: Config) -> bool:
 
 
 def cleanup_old_snapshots(config: Config) -> int:
-    """Keep only the most recent snapshot_max_count memory snapshots.
+    """Keep only the most recent snapshot_max_count plan (working-memory) snapshots.
 
     Returns count of snapshots deleted.
     """
@@ -158,7 +158,7 @@ def cleanup_old_snapshots(config: Config) -> int:
         return 0
 
     snapshots = sorted(
-        snap_dir.glob("memory_snapshot_*"),
+        list(snap_dir.glob("plan_snapshot_*")) + list(snap_dir.glob("memory_snapshot_*")),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )

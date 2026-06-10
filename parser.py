@@ -38,7 +38,7 @@ TOOL_ALT_FORMAT = re.compile(
 # Builtin tool names the model sometimes emits AS the tag (shorthand),
 # e.g. <bash>{"cmd": "..."}</bash> instead of <tool>bash</tool><args>...</args>.
 _KNOWN_TOOL_TAGS = {
-    "bash", "read_file", "write_file", "http_get", "remember", "update_plan",
+    "bash", "read_file", "write_file", "http_get", "update_plan",
     "memorize", "recall", "goal_complete", "ask_supervisor",
     "bg_run", "bg_check", "create_skill", "edit_skill", "list_skills", "rollback_skill",
 }
@@ -102,7 +102,6 @@ def _clean_json(s: str) -> str:
 # When the model emits raw text instead of JSON, we wrap it automatically.
 _TEXT_ARG_TOOLS = {
     "bash": "cmd",
-    "remember": "note",
     "update_plan": "note",
 }
 

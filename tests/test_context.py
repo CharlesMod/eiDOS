@@ -14,7 +14,7 @@ from config import Config
 from context import (
     assemble_context, _format_elapsed, _truncate, estimate_tokens, _log_overrun,
 )
-from memory import write_memory, write_plan, append_observation
+from memory import write_plan, append_observation
 
 
 class TestFormatElapsed(unittest.TestCase):
@@ -94,14 +94,6 @@ class TestBriefingModel(unittest.TestCase):
         self.assertIn("## Plan", content)
         self.assertIn("install packages", content)
 
-    def test_plan_fallback_to_memory(self):
-        """When plan.md is missing, briefing model reads memory.md."""
-        os.unlink(str(self.config.plan_path))
-        write_memory(self.config, "legacy memory content")
-        messages = self._assemble()
-        content = messages[1]["content"]
-        self.assertIn("## Plan", content)
-        self.assertIn("legacy memory content", content)
 
     def test_no_env_when_normal(self):
         """Alert-only env produces no Environment section when all is well."""

@@ -21,8 +21,8 @@ import unittest
 from config import Config
 from eidos import write_wal, read_wal, clear_wal, recover, run_loop
 from memory import (
-    write_memory,
-    read_memory,
+    write_plan,
+    read_plan,
     append_observation,
     read_recent_observations,
     validate_observations,
@@ -102,25 +102,25 @@ class TestServiceRestartMidTick(unittest.TestCase):
 
     def test_memory_survives_restart(self):
         """Memory.md written before crash is preserved on recovery."""
-        write_memory(self.config, "critical context about GPIO sensor readings")
+        write_plan(self.config, "critical context about GPIO sensor readings")
         write_wal(self.config, tick_number=5, ticks_since_compaction=2,
                   goal_start_time=1000.0)
 
         wal = recover(self.config)
-        content = read_memory(self.config)
+        content = read_plan(self.config)
         self.assertIn("critical context about GPIO sensor readings", content)
 
     def test_memory_restored_from_snapshot_if_empty(self):
-        """If memory.md is empty after crash, restore from snapshot."""
+        """If plan.md is empty after crash, restore from snapshot."""
         # Create a snapshot
-        snap_path = self.config.snapshots_dir / "memory_snapshot_001.md"
+        snap_path = self.config.snapshots_dir / "plan_snapshot_001.md"
         snap_path.write_text("snapshot: sensor calibration data")
 
-        # Create empty memory.md (simulating crash mid-write)
-        self.config.memory_path.write_text("")
+        # Create empty plan.md (simulating crash mid-write)
+        self.config.plan_path.write_text("")
 
         wal = recover(self.config)
-        content = read_memory(self.config)
+        content = read_plan(self.config)
         self.assertIn("sensor calibration data", content)
 
     def test_corrupted_observation_truncated_on_restart(self):
@@ -226,12 +226,12 @@ class TestDiskFull(unittest.TestCase):
         self.assertEqual(len(obs), 1)
 
     def test_memory_write_fails_gracefully_on_oserror(self):
-        """write_memory raises on actual OS write failure (temp file creation)."""
+        """write_plan raises on actual OS write failure (temp file creation)."""
         # Make the workspace dir read-only to simulate disk full / permissions error
         os.chmod(self.config.workspace_dir, 0o444)
         try:
             with self.assertRaises(OSError):
-                write_memory(self.config, "data that cannot be written")
+                write_plan(self.config, "data that cannot be written")
         finally:
             # Restore permissions for cleanup
             os.chmod(self.config.workspace_dir, 0o755)
@@ -312,7 +312,7 @@ class TestLLMCrashMidRequest(unittest.TestCase):
         from llm import LLMError
 
         self.config.goal_path.write_text("Test goal")
-        write_memory(self.config, "Test memory")
+        write_plan(self.config, "Test memory")
 
         call_count = [0]
 
@@ -337,7 +337,7 @@ class TestLLMCrashMidRequest(unittest.TestCase):
         from llm import LLMError
 
         self.config.goal_path.write_text("Test goal")
-        write_memory(self.config, "Test memory")
+        write_plan(self.config, "Test memory")
 
         tick_count = [0]
 
@@ -360,7 +360,7 @@ class TestLLMCrashMidRequest(unittest.TestCase):
         from llm import ReasoningExhausted, LLMError
 
         self.config.goal_path.write_text("Test goal")
-        write_memory(self.config, "Test memory")
+        write_plan(self.config, "Test memory")
         self.config.llm_max_tokens = 1024
         self.config.llm_token_backoff_step = 512
         self.config.llm_max_tokens_ceiling = 4096
@@ -401,7 +401,7 @@ class TestLLMCrashMidRequest(unittest.TestCase):
         from llm import LLMError
 
         self.config.goal_path.write_text("Test goal")
-        write_memory(self.config, "Test memory")
+        write_plan(self.config, "Test memory")
 
         wal_snapshots = []
 
@@ -435,7 +435,7 @@ class TestLLMCrashMidRequest(unittest.TestCase):
 class TestColdStart(unittest.TestCase):
     """Verify first start on a fresh Pi with nothing in the workspace.
 
-    No goal.md, no memory.md, no observations.jsonl, no persona.json.
+    No goal.md, no plan.md, no observations.jsonl, no persona.json.
     The agent should initialize cleanly and idle until a goal appears.
     """
 
@@ -457,19 +457,19 @@ class TestColdStart(unittest.TestCase):
         self.assertEqual(wal, {})
 
     def test_memory_created_on_first_start(self):
-        """recover() creates initial memory.md if missing."""
-        self.assertFalse(self.config.memory_path.exists())
+        """recover() creates initial plan.md if missing."""
+        self.assertFalse(self.config.plan_path.exists())
         recover(self.config)
-        self.assertTrue(self.config.memory_path.exists())
-        content = read_memory(self.config)
-        self.assertTrue(len(content) > 0, "memory.md should have initial content")
+        self.assertTrue(self.config.plan_path.exists())
+        content = read_plan(self.config)
+        self.assertTrue(len(content) > 0, "plan.md should have initial content")
 
     def test_no_goal_means_idle(self):
         """Without goal.md, run_loop should exit cleanly in mock mode."""
         self.config.mock_mode = True
         self.config.tick_interval_s = 0
         self.config.persona_enabled = False
-        write_memory(self.config, "initial")
+        write_plan(self.config, "initial")
 
         # No goal.md — mock mode exits immediately
         with patch("eidos.time.sleep"):
@@ -506,7 +506,7 @@ class TestColdStart(unittest.TestCase):
         self.config.mock_mode = True
         self.config.tick_interval_s = 0
         self.config.persona_enabled = False
-        write_memory(self.config, "fresh start")
+        write_plan(self.config, "fresh start")
         self.config.goal_path.write_text("Monitor CPU temperature every tick")
 
         tick_count = [0]

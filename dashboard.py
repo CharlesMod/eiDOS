@@ -487,7 +487,6 @@ def build_status(config: Config) -> dict:
     wal = _read_json(config.workspace / "wal.json")
     activity = _read_json(config.workspace / "activity.json")
     goal = _read_text(config.workspace / "goal.md")
-    memory = _read_text(config.workspace / "memory.md")
     plan = _read_text(config.workspace / "plan.md")[:2000]
     observations = _tail_jsonl(config.workspace / "observations.jsonl", 20)
     paused = (config.workspace / "paused").exists()
@@ -529,7 +528,6 @@ def build_status(config: Config) -> dict:
         "creature": creature,
         "goal": goal[:500],
         "plan": plan,
-        "memory": memory[:3000],
         "observations": observations,
         "narration": narration,
         "flavor": flavor,
@@ -2190,7 +2188,7 @@ function update(data) {
     feedEl.innerHTML = obs.map(renderFeedEntry).join('');
 
     // Memory
-    document.getElementById('memory').textContent = data.plan || data.memory || '(empty)';
+    document.getElementById('memory').textContent = data.plan || '(empty)';
 
     // New panels
     updateNarration(data);

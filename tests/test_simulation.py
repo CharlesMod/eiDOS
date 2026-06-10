@@ -41,9 +41,9 @@ from compaction import should_compact, compact_briefing
 from llm import LLMError
 from memory import (
     append_observation,
-    read_memory,
+    read_plan,
     read_recent_observations,
-    write_memory,
+    write_plan,
     count_observation_chars,
     count_observation_lines,
     validate_observations,
@@ -303,7 +303,7 @@ class SimulationTestBase(unittest.TestCase):
 
         # Write default goal + memory
         self.config.goal_path.write_text("Test goal: do autonomous work.")
-        write_memory(self.config, "# Working Memory\nFresh start.")
+        write_plan(self.config, "# Working Memory\nFresh start.")
 
         # Patch only tools.py subprocess — prevents real command execution
         self._p_tools_run = patch("tools.subprocess.run",
@@ -405,7 +405,7 @@ class TestCommandBlockingInHarness(SimulationTestBase):
             ToolCall(tool="remember", args={"note": "important"}, raw=""),
             self.config)
         self.assertTrue(result.success)
-        mem = read_memory(self.config)
+        mem = read_plan(self.config)
         self.assertIn("important", mem)
 
     def test_goal_complete_allowed(self):
@@ -649,32 +649,32 @@ class TestCompactionUnderLoad(SimulationTestBase):
     @patch("compaction.complete", return_value="")
     def test_compaction_empty_response_preserves_memory(self, _):
         """If LLM returns empty during compaction, old memory is kept."""
-        write_memory(self.config, "critical data must not be lost")
+        write_plan(self.config, "critical data must not be lost")
         append_observation(self.config, {"tick": 1, "tool": "bash",
                                           "success": True, "output": "x"})
         compact_briefing(self.config)
-        self.assertEqual(read_memory(self.config), "critical data must not be lost")
+        self.assertEqual(read_plan(self.config), "critical data must not be lost")
 
     @patch("compaction.complete", side_effect=LLMError("timeout"))
     def test_compaction_llm_failure_non_fatal(self, _):
         """Compaction LLM failure doesn't crash the agent."""
-        write_memory(self.config, "preserved")
+        write_plan(self.config, "preserved")
         append_observation(self.config, {"tick": 1, "tool": "bash",
                                           "success": True, "output": "x"})
         with self.assertRaises(LLMError):
             compact_briefing(self.config)
         # Memory should still be intact
-        self.assertEqual(read_memory(self.config), "preserved")
+        self.assertEqual(read_plan(self.config), "preserved")
 
     @patch("compaction.complete", return_value="# Compacted\nSummary of 200 ticks.")
     def test_compaction_snapshot_created(self, _):
         """Each compaction creates a snapshot of the prior memory."""
-        write_memory(self.config, "before compaction content")
+        write_plan(self.config, "before compaction content")
         append_observation(self.config, {"tick": 1, "tool": "bash",
                                           "success": True, "output": "x"})
         compact_briefing(self.config)
 
-        snapshots = list(self.config.snapshots_dir.glob("memory_snapshot_*.md"))
+        snapshots = list(self.config.snapshots_dir.glob("plan_snapshot_*.md"))
         self.assertEqual(len(snapshots), 1)
         self.assertEqual(snapshots[0].read_text(), "before compaction content")
 
@@ -686,12 +686,12 @@ class TestCompactionUnderLoad(SimulationTestBase):
         oversized = "# Big Memory\n" + ("W" * self.config.context_memory_max_chars * 2)
         mock_complete.return_value = oversized
 
-        write_memory(self.config, "prior memory")
+        write_plan(self.config, "prior memory")
         append_observation(self.config, {"tick": 1, "tool": "bash",
                                           "success": True, "output": "x"})
         compact_briefing(self.config)
 
-        mem = read_memory(self.config)
+        mem = read_plan(self.config)
         self.assertLessEqual(
             len(mem), self.config.context_memory_max_chars,
             f"Compaction output not capped: {len(mem)} > "
@@ -804,7 +804,7 @@ class TestShortSimulation(SimulationTestBase):
         successes = [r for r in results if r["call"] is not None]
         self.assertEqual(len(successes), 60)
 
-        mem = read_memory(self.config)
+        mem = read_plan(self.config)
         self.assertGreater(len(mem), 100)  # Memory accumulated
 
     def test_60_ticks_mixed_tools(self):
@@ -997,7 +997,7 @@ class TestLongSimulation(SimulationTestBase):
         self.assertEqual(llm.call_count, n_ticks)
 
         # Memory should not be empty
-        mem = read_memory(self.config)
+        mem = read_plan(self.config)
         self.assertGreater(len(mem), 0)
 
     @pytest.mark.slow
@@ -1100,7 +1100,7 @@ class TestContextEdgeCases(SimulationTestBase):
 
     def test_empty_memory(self):
         """Context works with empty memory."""
-        self.config.memory_path.unlink(missing_ok=True)
+        self.config.plan_path.unlink(missing_ok=True)
         messages = assemble_context(self.config, tick_number=1,
                                      goal_start_time=time.time())
         self.assertEqual(len(messages), 3)
@@ -1164,7 +1164,7 @@ class TestContextEdgeCases(SimulationTestBase):
         self.config.context_max_total_chars = 10000  # ceiling < sum of sections
 
         # Fill memory and observations to their per-section maxima.
-        write_memory(self.config, "M" * 8000)
+        write_plan(self.config, "M" * 8000)
         for i in range(100):
             append_observation(self.config, {
                 "tick": i, "tool": "bash", "success": True,
@@ -1185,7 +1185,7 @@ class TestContextEdgeCases(SimulationTestBase):
         """When memory is at its ceiling, observations still receive at
         least 1000 chars — the agent must not go blind to recent events."""
         # Pin memory at the exact ceiling
-        write_memory(self.config, "M" * self.config.context_memory_max_chars)
+        write_plan(self.config, "M" * self.config.context_memory_max_chars)
         # Add enough observations to fill well beyond the minimum floor
         for i in range(30):
             append_observation(self.config, {
@@ -1244,16 +1244,16 @@ class TestMemoryIntegrity(SimulationTestBase):
     """Verify memory stays consistent under rapid writes."""
 
     def test_rapid_memory_writes(self):
-        """100 rapid write_memory calls don't corrupt the file."""
+        """100 rapid write_plan calls don't corrupt the file."""
         for i in range(100):
-            write_memory(self.config, f"state_{i}")
-        final = read_memory(self.config)
+            write_plan(self.config, f"state_{i}")
+        final = read_plan(self.config)
         self.assertEqual(final, "state_99")
 
     def test_atomic_write_no_temp_files(self):
         """Atomic write shouldn't leave .tmp files behind."""
         for i in range(50):
-            write_memory(self.config, f"content_{i}")
+            write_plan(self.config, f"content_{i}")
         tmp_files = list(Path(self.config.workspace_dir).glob(".memory_*"))
         self.assertEqual(len(tmp_files), 0)
 
@@ -1293,7 +1293,7 @@ class TestMemoryIntegrity(SimulationTestBase):
         self.assertEqual(obs[0]["tick"], 1)
 
     def test_remember_tool_stays_within_budget(self):
-        """Calling tool_remember repeatedly never lets memory.md exceed
+        """Calling tool_remember repeatedly never lets plan.md exceed
         context_memory_max_chars — critical for days-long runs where the
         agent accumulates hundreds of notes."""
         # Use the default 4000-char budget from _sandboxed_config
@@ -1307,7 +1307,7 @@ class TestMemoryIntegrity(SimulationTestBase):
                 ),
                 self.config,
             )
-        mem = read_memory(self.config)
+        mem = read_plan(self.config)
         self.assertLessEqual(
             len(mem), budget,
             f"Memory exceeded budget after many remember calls: "
@@ -1474,8 +1474,8 @@ class TestCrashRecovery(SimulationTestBase):
         self.assertTrue(all(r["call"] is not None for r in results))
 
     def test_recovery_with_missing_memory(self):
-        """Agent starts with no memory.md — creates default."""
-        self.config.memory_path.unlink(missing_ok=True)
+        """Agent starts with no plan.md — creates default."""
+        self.config.plan_path.unlink(missing_ok=True)
 
         responses = [
             _make_tool_response("remember", {"note": "fresh start"})
@@ -1495,14 +1495,14 @@ class TestCrashRecovery(SimulationTestBase):
     def test_recovery_after_mid_compaction_crash(self):
         """Simulate crash during compaction — snapshot exists but memory
         was not rewritten."""
-        write_memory(self.config, "pre-compaction state")
+        write_plan(self.config, "pre-compaction state")
         # Create a snapshot as if compaction started
         snapshot_path = (self.config.snapshots_dir /
                          "memory_before_20260401_000000.md")
         snapshot_path.write_text("pre-compaction state")
 
         # Memory should still be readable
-        mem = read_memory(self.config)
+        mem = read_plan(self.config)
         self.assertEqual(mem, "pre-compaction state")
 
         # Agent can continue

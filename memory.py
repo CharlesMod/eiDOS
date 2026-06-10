@@ -1,6 +1,6 @@
 """Three-tier memory management: goal.md, plan.md (working memory), observations.jsonl.
 
-Historical note: plan.md was previously memory.md.  The read_memory / write_memory
+Historical note: plan.md was previously memory.md (file removed in v2 phase 0e).
 functions are kept as aliases so existing callers continue to work during the
 transition.
 """
@@ -164,38 +164,6 @@ def read_recent_thoughts(config: Config, n: int = 6) -> list:
 
 # --- Aliases for backward compatibility (used by eidos.py, compaction.py, tools.py) ---
 
-def read_memory(config: Config) -> str:
-    """Read memory.md. Returns empty string if missing.
-
-    Note: new code should prefer read_plan().
-    """
-    try:
-        return config.memory_path.read_text().strip()
-    except FileNotFoundError:
-        return ""
-
-
-def write_memory(config: Config, content: str) -> None:
-    """Atomically write memory.md (temp file + rename).
-
-    Note: new code should prefer write_plan().
-    """
-    config.workspace.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        dir=str(config.workspace),
-        prefix=".memory_",
-        suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
-        replace_with_retry(tmp_path, str(config.memory_path))
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
 
 
 def append_observation(config: Config, entry: dict) -> None:

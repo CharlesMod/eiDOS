@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import unittest
 from config import Config
 from eidos import write_wal, read_wal, clear_wal, recover
-from memory import write_memory, append_observation, read_goal
+from memory import write_plan, append_observation, read_goal
 
 
 class TestWAL(unittest.TestCase):
@@ -99,14 +99,14 @@ class TestRecoverWithWAL(unittest.TestCase):
         wal = recover(self.config)
         self.assertEqual(wal, {})
 
-    def test_recover_creates_memory_if_missing(self):
+    def test_recover_creates_plan_if_missing(self):
         recover(self.config)
-        self.assertTrue(self.config.memory_path.exists())
+        self.assertTrue(self.config.plan_path.exists())
 
-    def test_recover_preserves_existing_memory(self):
-        write_memory(self.config, "important memory content")
+    def test_recover_preserves_existing_plan(self):
+        write_plan(self.config, "important plan content")
         recover(self.config)
-        self.assertEqual(self.config.memory_path.read_text(), "important memory content")
+        self.assertEqual(self.config.plan_path.read_text(), "important plan content")
 
 
 

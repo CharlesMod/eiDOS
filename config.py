@@ -149,10 +149,6 @@ class Config:
         return self.workspace / "goal.md"
 
     @property
-    def memory_path(self) -> Path:
-        return self.workspace / "memory.md"
-
-    @property
     def plan_path(self) -> Path:
         return self.workspace / "plan.md"
 

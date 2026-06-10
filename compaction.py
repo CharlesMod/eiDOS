@@ -4,7 +4,6 @@ Uses a generous context budget so the LLM has full visibility of observations
 when distilling them into concise working memory.
 
 Two modes:
-- Legacy: single LLM call rewrites memory.md (original behaviour)
 - Briefing: two-phase dream cycle (plan update + knowledge extraction)
 """
 
@@ -17,8 +16,6 @@ from config import Config
 from atomicio import replace_with_retry
 from memory import (
     read_goal,
-    read_memory,
-    write_memory,
     read_plan,
     write_plan,
     read_recent_observations,
@@ -68,7 +65,7 @@ def emit_flavor(config: Config, persona: dict = None) -> None:
         level = persona.get("level", 1)
 
     goal = read_goal(config)
-    memory = read_memory(config)
+    memory = read_plan(config)
 
     messages = [
         {"role": "system", "content":
@@ -100,13 +97,13 @@ def emit_flavor(config: Config, persona: dict = None) -> None:
 
 
 def _snapshot_memory(config: Config) -> None:
-    """Save a timestamped copy of memory.md before compaction."""
+    """Save a timestamped copy of plan.md (working memory) before the dream rewrites it."""
     config.snapshots_dir.mkdir(parents=True, exist_ok=True)
-    current = read_memory(config)
+    current = read_plan(config)
     if not current:
         return
     ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
-    snapshot_path = config.snapshots_dir / f"memory_snapshot_{ts}.md"
+    snapshot_path = config.snapshots_dir / f"plan_snapshot_{ts}.md"
     snapshot_path.write_text(current)
 
 

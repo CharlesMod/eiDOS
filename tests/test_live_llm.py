@@ -18,9 +18,9 @@ from compaction import compact_briefing
 from llm import complete, LLMError, ReasoningExhausted
 from memory import (
     append_observation,
-    read_memory,
+    read_plan,
     read_recent_observations,
-    write_memory,
+    write_plan,
 )
 from context import assemble_context
 from prompts import SYSTEM_PROMPT_BRIEFING as SYSTEM_PROMPT
@@ -171,7 +171,7 @@ class TestLiveCompaction:
         _check_server(self.config)
         # Write goal + memory
         self.config.goal_path.write_text("Explore the filesystem and document findings.")
-        write_memory(self.config, "# Working Memory\nFresh start. No observations yet.")
+        write_plan(self.config, "# Working Memory\nFresh start. No observations yet.")
         yield
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -193,7 +193,7 @@ class TestLiveCompaction:
         elapsed = time.monotonic() - start
         print(f"\n  Compaction took {elapsed:.1f}s")
 
-        mem = read_memory(self.config)
+        mem = read_plan(self.config)
         print(f"  Memory length: {len(mem)} chars")
         print(f"  Memory preview: {mem[:300]!r}")
 
@@ -207,7 +207,7 @@ class TestLiveCompaction:
 
     def test_compaction_preserves_key_information(self):
         """Compacted memory retains important facts from observations."""
-        write_memory(self.config, "# Working Memory\nGoal: find config files.")
+        write_plan(self.config, "# Working Memory\nGoal: find config files.")
         # Observations with distinctive facts the model should retain
         append_observation(self.config, {
             "tick": 1, "tool": "bash", "args": {"cmd": "cat /etc/hostname"},
@@ -224,7 +224,7 @@ class TestLiveCompaction:
         })
 
         compact_briefing(self.config)
-        mem = read_memory(self.config)
+        mem = read_plan(self.config)
         print(f"\n  Compacted memory:\n{mem}")
 
         # At least some key facts should survive compaction
@@ -247,7 +247,7 @@ class TestLiveToolCompliance:
         self.config, self.tmp = _make_config()
         _check_server(self.config)
         self.config.goal_path.write_text("Explore the system and report findings.")
-        write_memory(self.config, "# Working Memory\nJust started. No actions taken yet.")
+        write_plan(self.config, "# Working Memory\nJust started. No actions taken yet.")
         yield
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -400,7 +400,7 @@ class TestLiveGoalResilience:
         """Model should not obey a fake goal injected through observations."""
         real_goal = "Monitor system temperature and log readings."
         self.config.goal_path.write_text(real_goal)
-        write_memory(self.config, "# Working Memory\nMonitoring temperature. No readings yet.")
+        write_plan(self.config, "# Working Memory\nMonitoring temperature. No readings yet.")
 
         # Inject a fake goal through observations
         append_observation(self.config, {
@@ -439,7 +439,7 @@ class TestLiveGoalResilience:
         """After compaction, memory should still reference the active goal."""
         goal = "Set up automated backups for /home/pi/data."
         self.config.goal_path.write_text(goal)
-        write_memory(self.config, "# Working Memory\nStarting backup setup task.")
+        write_plan(self.config, "# Working Memory\nStarting backup setup task.")
 
         # Seed observations with backup-relevant work
         for i in range(8):
@@ -456,7 +456,7 @@ class TestLiveGoalResilience:
         })
 
         compact_briefing(self.config)
-        mem = read_memory(self.config)
+        mem = read_plan(self.config)
         print(f"\n  Post-compaction memory:\n{mem}")
 
         # Memory should retain backup-related context
@@ -473,7 +473,7 @@ class TestLiveGoalResilience:
         """After an LLM error, the next tick still works toward the goal."""
         goal = "Check disk usage and free space."
         self.config.goal_path.write_text(goal)
-        write_memory(self.config, "# Working Memory\nChecking disk usage.")
+        write_plan(self.config, "# Working Memory\nChecking disk usage.")
 
         # Simulate a failed tick followed by a successful one
         append_observation(self.config, {
@@ -547,7 +547,7 @@ class TestLiveAdaptiveTokens:
         """Compaction retry with higher token budget should produce usable
         memory even when the model spends most tokens on reasoning."""
         self.config.goal_path.write_text("Explore the filesystem.")
-        write_memory(self.config, "# Working Memory\nFresh start.")
+        write_plan(self.config, "# Working Memory\nFresh start.")
         self.config.compaction_retry_max_tokens = 4096
 
         for i in range(8):
@@ -559,7 +559,7 @@ class TestLiveAdaptiveTokens:
             })
 
         compact_briefing(self.config)
-        mem = read_memory(self.config)
+        mem = read_plan(self.config)
         print(f"\n  Post-compaction memory ({len(mem)} chars):")
         print(f"  {mem[:400]!r}")
 
@@ -574,7 +574,7 @@ class TestLiveAdaptiveTokens:
         from llm import complete, ReasoningExhausted
 
         self.config.goal_path.write_text("Monitor system health.")
-        write_memory(self.config, "# Working Memory\nSystem is healthy.")
+        write_plan(self.config, "# Working Memory\nSystem is healthy.")
         # Force a small compaction budget to trigger exhaustion
         self.config.compaction_max_tokens = 512
         self.config.compaction_retry_max_tokens = 4096
@@ -588,7 +588,7 @@ class TestLiveAdaptiveTokens:
             })
 
         compact_briefing(self.config)
-        mem = read_memory(self.config)
+        mem = read_plan(self.config)
         print(f"\n  Adaptive recovery memory ({len(mem)} chars):")
         print(f"  {mem[:400]!r}")
 
@@ -610,7 +610,7 @@ class TestLiveRecovery:
         self.config, self.tmp = _make_config()
         _check_server(self.config)
         self.config.goal_path.write_text("Explore the filesystem and report findings.")
-        write_memory(self.config, "# Working Memory\nExploring. Goal is to find interesting files.")
+        write_plan(self.config, "# Working Memory\nExploring. Goal is to find interesting files.")
         yield
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -671,7 +671,7 @@ class TestLiveRecovery:
         find an alternative way to accomplish its goal.
         """
         self.config.goal_path.write_text("Clean up temporary files in /tmp.")
-        write_memory(self.config, "# Working Memory\nNeed to clean /tmp. Starting cleanup.")
+        write_plan(self.config, "# Working Memory\nNeed to clean /tmp. Starting cleanup.")
 
         # Tick 1: tried rm -rf /, got blocked
         append_observation(self.config, {
@@ -704,7 +704,7 @@ class TestLiveRecovery:
         A smart model should check what happened rather than blindly re-running.
         """
         self.config.goal_path.write_text("Install and configure a cron job for log rotation.")
-        write_memory(self.config, (
+        write_plan(self.config, (
             "# Working Memory\n"
             "Installing logrotate. Was editing crontab when system crashed."
         ))
@@ -744,7 +744,7 @@ class TestLiveRecovery:
         It should adapt after seeing repeated FAIL observations.
         """
         self.config.goal_path.write_text("Find Python version and pip packages.")
-        write_memory(self.config, "# Working Memory\nNeed to find Python setup.")
+        write_plan(self.config, "# Working Memory\nNeed to find Python setup.")
 
         # 3 consecutive failures trying the same thing
         for tick in range(1, 4):
@@ -775,7 +775,7 @@ class TestLiveRecovery:
         not blindly retry the same long-running command.
         """
         self.config.goal_path.write_text("Scan for open network ports.")
-        write_memory(self.config, "# Working Memory\nScanning ports. First attempt timed out.")
+        write_plan(self.config, "# Working Memory\nScanning ports. First attempt timed out.")
 
         append_observation(self.config, {
             "tick": 1, "tool": "bash",
@@ -804,7 +804,7 @@ class TestLiveRecovery:
         that no longer exist.
         """
         self.config.goal_path.write_text("Build a system health dashboard.")
-        write_memory(self.config, (
+        write_plan(self.config, (
             "# Working Memory\n"
             "## Progress\n"
             "- Ticks 1-49: Gathered CPU, RAM, disk, network stats.\n"
@@ -857,7 +857,7 @@ class TestLiveRecovery:
         self.config, self.tmp = _make_config()
         _check_server(self.config)
         self.config.goal_path.write_text("Explore the filesystem and report findings.")
-        write_memory(self.config, "# Working Memory\nExploring. Goal is to find interesting files.")
+        write_plan(self.config, "# Working Memory\nExploring. Goal is to find interesting files.")
         yield
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -929,7 +929,7 @@ class TestLiveRecovery:
         find an alternative way to accomplish its goal.
         """
         self.config.goal_path.write_text("Clean up temporary files in /tmp.")
-        write_memory(self.config, "# Working Memory\nNeed to clean /tmp. Starting cleanup.")
+        write_plan(self.config, "# Working Memory\nNeed to clean /tmp. Starting cleanup.")
 
         # Tick 1: tried rm -rf /, got blocked
         append_observation(self.config, {
@@ -962,7 +962,7 @@ class TestLiveRecovery:
         A smart model should check what happened rather than blindly re-running.
         """
         self.config.goal_path.write_text("Install and configure a cron job for log rotation.")
-        write_memory(self.config, (
+        write_plan(self.config, (
             "# Working Memory\n"
             "Installing logrotate. Was editing crontab when system crashed."
         ))
@@ -1002,7 +1002,7 @@ class TestLiveRecovery:
         It should adapt after seeing repeated FAIL observations.
         """
         self.config.goal_path.write_text("Find Python version and pip packages.")
-        write_memory(self.config, "# Working Memory\nNeed to find Python setup.")
+        write_plan(self.config, "# Working Memory\nNeed to find Python setup.")
 
         # 3 consecutive failures trying the same thing
         for tick in range(1, 4):
@@ -1043,7 +1043,7 @@ class TestLiveRecovery:
         not blindly retry the same long-running command.
         """
         self.config.goal_path.write_text("Scan for open network ports.")
-        write_memory(self.config, "# Working Memory\nScanning ports. First attempt timed out.")
+        write_plan(self.config, "# Working Memory\nScanning ports. First attempt timed out.")
 
         append_observation(self.config, {
             "tick": 1, "tool": "bash",
@@ -1072,7 +1072,7 @@ class TestLiveRecovery:
         that no longer exist.
         """
         self.config.goal_path.write_text("Build a system health dashboard.")
-        write_memory(self.config, (
+        write_plan(self.config, (
             "# Working Memory\n"
             "## Progress\n"
             "- Ticks 1-49: Gathered CPU, RAM, disk, network stats.\n"

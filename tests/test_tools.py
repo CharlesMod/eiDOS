@@ -15,7 +15,7 @@ from parser import ToolCall
 from tools import (
     execute_tool, tool_bash, tool_write_file, tool_read_file,
     tool_bg_run, tool_bg_check, tool_http_get,
-    tool_remember, tool_update_plan, tool_memorize, tool_recall,
+    tool_update_plan, tool_memorize, tool_recall,
     tool_goal_complete, tool_ask_supervisor,
     refresh_jobs, _read_jobs, _write_jobs, ToolResult,
 )
@@ -229,28 +229,8 @@ class TestTools(unittest.TestCase):
 
     # --- remember ---
 
-    def test_remember_success(self):
-        # Write initial memory
-        Path(self.config.workspace_dir, "memory.md").write_text("initial memory")
-        result = tool_remember({"note": "important fact"}, self.config)
-        self.assertTrue(result.success)
-        memory = Path(self.config.workspace_dir, "memory.md").read_text()
-        self.assertIn("important fact", memory)
-        self.assertIn("[Remembered at", memory)
 
-    def test_remember_no_note(self):
-        result = tool_remember({}, self.config)
-        self.assertFalse(result.success)
 
-    def test_remember_budget_cap(self):
-        """Memory should be capped at context_memory_max_chars."""
-        Path(self.config.workspace_dir, "memory.md").write_text("x" * 5000)
-        self.config.context_memory_max_chars = 200
-        result = tool_remember({"note": "new note"}, self.config)
-        self.assertTrue(result.success)
-        memory = Path(self.config.workspace_dir, "memory.md").read_text()
-        self.assertLessEqual(len(memory), 200)
-        self.assertIn("new note", memory)
 
     # --- goal_complete ---
 
