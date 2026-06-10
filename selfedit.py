@@ -240,3 +240,95 @@ def apply(config: Config, pid: str) -> dict:
     return {"ok": True, "id": pid, "target": rel, "prev_sha": prev_sha,
             "checkpoint": cp.get("tag"),
             "message": f"Applied {rel}. Pre-apply checkpoint {cp.get('tag')} is the rollback floor."}
+
+
+# ---------------------------------------------------------------------------
+# Health-probe leg (the missing safety: a self-edit that BOOTS but misbehaves was
+# invisible — the watchdog checked PID-exists only). The apply writes a pending_apply
+# marker; the booting eidos drops an applied_ok breadcrumb (a paused eidos never ticks,
+# so the heartbeat alone can't prove a healthy boot); the watchdog resolves or rolls back
+# within self_edit_health_probe_s. State lives in state_dir (dashboard-owned).
+# ---------------------------------------------------------------------------
+
+def _pending_apply_path(config: Config) -> Path:
+    return config.state_dir / "selfedit_pending_apply.json"
+
+
+def _applied_ok_path(config: Config) -> Path:
+    return config.state_dir / "selfedit_applied_ok.json"
+
+
+def write_pending_apply(config: Config, pid: str, prev_sha: str,
+                        baseline_heartbeat_ts: float, deadline_epoch: float) -> None:
+    """Dashboard-side: record an in-flight apply so the watchdog can probe its health."""
+    config.state_dir.mkdir(parents=True, exist_ok=True)
+    p = _pending_apply_path(config)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps({
+        "id": pid, "prev_sha": prev_sha,
+        "baseline_heartbeat_ts": float(baseline_heartbeat_ts or 0),
+        "deadline_epoch": float(deadline_epoch),
+        "ts": time.time(),
+    }), encoding="utf-8")
+    replace_with_retry(str(tmp), str(p))
+    # A fresh apply invalidates any stale breadcrumb from a prior one.
+    try:
+        _applied_ok_path(config).unlink()
+    except OSError:
+        pass
+
+
+def read_pending_apply(config: Config):
+    try:
+        return json.loads(_pending_apply_path(config).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def clear_pending_apply(config: Config) -> None:
+    for p in (_pending_apply_path(config), _applied_ok_path(config)):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
+def write_applied_ok(config: Config) -> None:
+    """eidos-side breadcrumb: the new code IMPORTED and reached run_loop. Written early (before
+    the boot-paused wait) because a paused eidos never produces a post-tick heartbeat. Carries
+    the pending id so a stale breadcrumb from a previous apply can't satisfy a new probe."""
+    pend = read_pending_apply(config)
+    if not pend:
+        return
+    try:
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        p = _applied_ok_path(config)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"id": pend.get("id"), "ts": time.time()}), encoding="utf-8")
+        replace_with_retry(str(tmp), str(p))
+    except OSError:
+        pass
+
+
+def read_applied_ok(config: Config):
+    try:
+        return json.loads(_applied_ok_path(config).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def autorollback(config: Config, prev_sha: str, pid: str = "") -> dict:
+    """Terminal: a self-edit failed its health probe. Revert the applied source to prev_sha
+    (single-file safe — restore_to skips PROTECT_PATHS) and mark the proposal rolled_back."""
+    res = git_safety.restore_to(config, prev_sha)
+    try:
+        if pid:
+            m = _load_manifest(config, pid)
+            if m:
+                m["status"] = "rolled_back"
+                m["rolled_back_ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                _save_manifest(config, m)
+    except Exception:  # noqa: BLE001
+        pass
+    clear_pending_apply(config)
+    return res

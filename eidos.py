@@ -545,6 +545,15 @@ def run_loop(config: Config, persona=None, wal=None):
     pfx = _pfx(persona, config)
     print(f"{pfx} Starting tick loop (interval={config.tick_interval_s}s, mock={config.mock_mode})")
 
+    # Self-edit health-probe breadcrumb: if this boot follows an operator-applied self-edit, drop
+    # an applied_ok marker NOW — reaching run_loop proves the new code imported and started. A
+    # paused eidos never writes a post-tick heartbeat, so the watchdog keys its probe on this.
+    try:
+        import selfedit as _se
+        _se.write_applied_ok(config)
+    except Exception as _se_e:  # noqa: BLE001 - breadcrumb is best-effort, never blocks boot
+        logger.warning("applied_ok breadcrumb failed: %s", _se_e)
+
     # --- Wait for LLM health before entering tick loop (cold-boot safety) ---
     # Skipped in the isolated test env (EIDOS_NO_DASHBOARD): tests mock `complete`, so probing a
     # real LLM endpoint only adds multi-second urlopen timeouts (a port may be up but lack /health).

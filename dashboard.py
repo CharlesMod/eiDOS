@@ -3088,17 +3088,31 @@ def _git_restore_endpoint(config, tag=""):
         return res
 
 
+def _current_heartbeat_ts(config) -> float:
+    try:
+        return float(_read_json(config.workspace / "heartbeat.json").get("ts", 0) or 0)
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def _selfedit_apply_endpoint(config, pid):
     """Operator-approved self-edit apply: checkpoint+write+commit, then restart eidos paused.
-    If the applied code crash-loops, the watchdog auto-restores the pre-apply checkpoint."""
+    Arms the HEALTH PROBE (a pending_apply marker) before restarting, so the watchdog can
+    auto-rollback a self-edit that boots-but-misbehaves — not just one that crash-loops."""
     import selfedit
     with _LIFECYCLE_LOCK:
         res = selfedit.apply(config, pid)
         if res.get("ok"):
+            probe_s = float(getattr(config, "self_edit_health_probe_s", 90) or 90)
+            selfedit.write_pending_apply(
+                config, pid, res.get("prev_sha", ""),
+                baseline_heartbeat_ts=_current_heartbeat_ts(config),
+                deadline_epoch=time.time() + probe_s)
             newpid = _restart_eidos_keep_armed(config, reason=f"self-edit {pid}")
             res["restarted_pid"] = newpid
             res["message"] = (res.get("message", "") +
-                              f" eiDOS restarting (paused) on the new code as pid {newpid}.")
+                              f" eiDOS restarting (paused) on the new code as pid {newpid}. "
+                              f"Health probe armed ({probe_s:.0f}s).")
         return res
 
 
@@ -3143,6 +3157,43 @@ def _watchdog_event(config, msg):
         pass
 
 
+def _selfedit_probe(config):
+    """Resolve or roll back an in-flight self-edit. Called from the watchdog's alive branch.
+
+    Healthy when the booted code dropped its applied_ok breadcrumb (matching id) AND it is
+    either paused (awaiting operator GO — the normal post-apply state) or has ticked past the
+    pre-apply heartbeat baseline. If the deadline passes without that signal — the new code hung
+    mid-boot (no breadcrumb) or wedged-alive (heartbeat never advanced) — revert to prev_sha and
+    restart on the reverted code, paused. This is the gap the crash-loop path can't see: a bad
+    self-edit that does NOT crash."""
+    import selfedit
+    pend = selfedit.read_pending_apply(config)
+    if not pend:
+        return
+    crumb = selfedit.read_applied_ok(config)
+    booted = bool(crumb and crumb.get("id") == pend.get("id"))
+    paused = (config.workspace / "paused").exists()
+    hb_ts = _current_heartbeat_ts(config)
+    progressed = hb_ts > float(pend.get("baseline_heartbeat_ts", 0) or 0)
+    if booted and (paused or progressed):
+        selfedit.clear_pending_apply(config)
+        _watchdog_event(config, f"self-edit {pend.get('id')} passed health probe "
+                                f"({'paused, awaiting GO' if paused else 'ticking on new code'})")
+        return
+    if time.time() < float(pend.get("deadline_epoch", 0) or 0):
+        return  # still within the probe window — keep watching
+    prev = pend.get("prev_sha", "")
+    res = selfedit.autorollback(config, prev, pend.get("id"))
+    with _LIFECYCLE_LOCK:
+        newpid = _restart_eidos_keep_armed(config, reason=f"self-edit {pend.get('id')} rolled back")
+    why = "never reached run_loop (no breadcrumb)" if not booted else "heartbeat never advanced (wedged)"
+    _watchdog_note(config,
+        f"Self-edit {pend.get('id')} FAILED its health probe — {why}. Reverted source to "
+        f"{prev[:9]} ({res.get('restored', 0)} files) and restarted you (paused) on the reverted "
+        f"code as pid {newpid}. The change is rolled back; review the proposal before retrying.")
+    _watchdog_event(config, f"HEALTH-PROBE ROLLBACK of self-edit {pend.get('id')} -> {prev[:9]} ({why})")
+
+
 def _watchdog_loop(config):
     """Supervise eiDOS: when it should be running but has died, record why and respawn it.
 
@@ -3167,6 +3218,15 @@ def _watchdog_loop(config):
             except Exception:  # noqa: BLE001
                 pid = 0
             if pid and _ctrl_pid_alive(pid):
+                # Self-edit HEALTH PROBE: a process being alive isn't proof a just-applied self-edit
+                # is healthy — it could be hung mid-boot (never reaching run_loop) or wedged-alive
+                # after resume. Resolve when the new code dropped its applied_ok breadcrumb AND is
+                # either awaiting operator GO (paused) or ticking (heartbeat past the pre-apply
+                # baseline). Roll back to prev_sha if the probe deadline passes without that.
+                try:
+                    _selfedit_probe(config)
+                except Exception as _pe:  # noqa: BLE001 - probe must never crash the watchdog
+                    _watchdog_event(config, f"health-probe error: {_pe}")
                 # Healthy. If we auto-rolled-back earlier and eidos has since been stable
                 # for >10 min, clear the guard so a *future* unrelated break can recover too.
                 try:
@@ -3208,6 +3268,11 @@ def _watchdog_loop(config):
                                 f"({res.get('restored', 0)} source files) — attempt {attempts + 1}/2 on "
                                 f"known-good code. If this recurs the watchdog stands down for the operator.")
                             _watchdog_event(config, f"AUTO-ROLLBACK ({attempts + 1}/2) to {lg}")
+                            try:
+                                import selfedit
+                                selfedit.clear_pending_apply(config)  # last_good IS the pre-apply floor
+                            except Exception:  # noqa: BLE001
+                                pass
                             restarts = []  # fresh chance on good code
                             new_pid = _spawn_eidos(config)
                             time.sleep(3)
@@ -3306,6 +3371,25 @@ def main():
 
     config = load_config(args.config)
     port = args.port or config.dashboard_port
+
+    # Boot-reconcile a dangling self-edit health probe BEFORE arming the watchdog: if the
+    # dashboard itself restarted mid-probe and the deadline has since passed without a healthy
+    # signal, roll the edit back now rather than leaving it unresolved (the marker outlives any
+    # one dashboard process — it's in state_dir).
+    try:
+        import selfedit
+        _pend = selfedit.read_pending_apply(config)
+        if _pend and time.time() >= float(_pend.get("deadline_epoch", 0) or 0):
+            _crumb = selfedit.read_applied_ok(config)
+            if not (_crumb and _crumb.get("id") == _pend.get("id")):
+                res = selfedit.autorollback(config, _pend.get("prev_sha", ""), _pend.get("id"))
+                _watchdog_event(config, f"BOOT-RECONCILE rolled back stranded self-edit "
+                                        f"{_pend.get('id')} -> {_pend.get('prev_sha','')[:9]} "
+                                        f"({res.get('restored',0)} files)")
+            else:
+                selfedit.clear_pending_apply(config)  # it had booted OK; just clear the stale marker
+    except Exception as _bre:  # noqa: BLE001
+        print(f"[dashboard] boot-reconcile error: {_bre}")
 
     handler = _make_handler(config)
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
