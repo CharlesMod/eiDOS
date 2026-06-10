@@ -67,9 +67,6 @@ class TestCompactionTriggers(unittest.TestCase):
         self.assertIn("...", formatted)
         self.assertLess(len(formatted), 600)
 
-    @patch("compaction.complete", return_value="")
-
-
     # --- New tests: compaction trigger edge cases ---
 
     def test_should_compact_exact_tick_threshold(self):

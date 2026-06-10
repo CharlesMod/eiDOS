@@ -176,7 +176,14 @@ class TestCRUDFresh:
 
         ids = []
         for i in range(5):
-            eid = store_entry(cfg, f"Fact number {i}", [f"tag{i}"], category="facts")
+            distinct = [
+                "The octoprint server answers on port 5000",
+                "Boss prefers terse spoken replies in the morning",
+                "The living-room lamp is a Tuya smart plug",
+                "Gemma decodes at roughly fifty tokens per second",
+                "The garage camera streams RTSP on channel one",
+            ]
+            eid = store_entry(cfg, distinct[i], [f"tag{i}"], category="facts")
             ids.append(eid)
             _reset_caches()
 

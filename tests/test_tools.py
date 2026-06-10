@@ -49,28 +49,33 @@ class TestTools(unittest.TestCase):
         result = tool_bash({}, self.config)
         self.assertFalse(result.success)
 
-    def test_bash_timeout(self):
+    def test_bash_wait_overrun_auto_backgrounds(self):
+        """A wait:true command that overruns cmd_timeout_s is handed to the jobs
+        ledger (still running, output preserved) instead of being killed — the
+        never-block-the-tick contract."""
         self.config.cmd_timeout_s = 1
-        result = tool_bash({"cmd": "sleep 10"}, self.config)
-        self.assertFalse(result.success)
-        self.assertIn("TIMEOUT", result.output)
+        result = tool_bash({"cmd": "Start-Sleep -Seconds 10", "wait": True}, self.config)
+        self.assertTrue(result.success)
+        self.assertIn("AUTO-BACKGROUNDED", result.output)
 
     def test_bash_truncation(self):
         self.config.output_truncation_chars = 50
-        result = tool_bash({"cmd": "python3 -c \"print('x' * 200)\""}, self.config)
+        result = tool_bash({"cmd": "python -c \"print('x' * 200)\"", "wait": True},
+                           self.config)
         self.assertTrue(result.success)
         self.assertIn("[truncated", result.output)
         self.assertIsNotNone(result.full_output_path)
         self.assertTrue(Path(result.full_output_path).exists())
 
     def test_bash_stderr_captured(self):
-        result = tool_bash({"cmd": "echo err >&2"}, self.config)
+        """stderr is merged into the command's output stream (no separate tag)."""
+        result = tool_bash({"cmd": 'cmd /c "echo err 1>&2"', "wait": True}, self.config)
         self.assertIn("err", result.output)
-        self.assertIn("[stderr]", result.output)
 
     def test_bash_nonzero_exit(self):
-        result = tool_bash({"cmd": "exit 42"}, self.config)
+        result = tool_bash({"cmd": 'cmd /c "exit 42"', "wait": True}, self.config)
         self.assertFalse(result.success)
+        self.assertEqual(result.fail_kind, "exec")
 
     # --- write_file / read_file ---
 

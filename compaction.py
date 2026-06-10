@@ -320,6 +320,14 @@ def compact_briefing(config: Config, persona: dict = None) -> None:
     except Exception as exc:  # noqa: BLE001 - journaling must never disturb the dream
         logger.warning("dream record write failed: %s", exc)
 
+    # The dream is self-bounding: prune snapshots + dream records in the same cycle
+    # that creates them, so growth never depends on a separate caller's sweep.
+    try:
+        from rotation import cleanup_old_snapshots
+        cleanup_old_snapshots(config)
+    except Exception as exc:  # noqa: BLE001 - pruning must never disturb the dream
+        logger.warning("snapshot prune failed: %s", exc)
+
 
 
 def _dream_combined(config, goal, plan, obs_text, persona):

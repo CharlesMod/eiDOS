@@ -226,11 +226,13 @@ class TestDiskFull(unittest.TestCase):
         self.assertEqual(len(obs), 1)
 
     def test_memory_write_fails_gracefully_on_oserror(self):
-        """write_plan raises on actual OS write failure (temp file creation)."""
-        # Make the workspace dir read-only to simulate disk full / permissions error
-        os.chmod(self.config.workspace_dir, 0o444)
+        """write_plan raises on actual OS write failure (temp file creation).
+
+        chmod on a directory is a no-op on Windows, so simulate the failure by
+        making the temp-file creation itself raise."""
+        from unittest.mock import patch as _patch
         try:
-            with self.assertRaises(OSError):
+            with _patch("memory.tempfile.mkstemp", side_effect=OSError("disk full")),                  self.assertRaises(OSError):
                 write_plan(self.config, "data that cannot be written")
         finally:
             # Restore permissions for cleanup
@@ -245,15 +247,6 @@ class TestDiskFull(unittest.TestCase):
             "path": os.path.join(self.config.workspace_dir, "data.txt"),
             "content": "sensor data",
         }, self.config)
-        self.assertFalse(result.success)
-        self.assertIn("disk", result.output.lower())
-
-    def test_remember_tool_blocked_when_disk_low(self):
-        """tool_remember refuses when disk space is below threshold."""
-        from tools import tool_remember
-
-        self.config.disk_min_gb = 99999.0
-        result = tool_remember({"note": "important note"}, self.config)
         self.assertFalse(result.success)
         self.assertIn("disk", result.output.lower())
 

@@ -151,31 +151,28 @@ class TestBuildChat(unittest.TestCase):
         self.assertEqual(len(chat["messages"]), 1)
         self.assertEqual(chat["messages"][0]["status"], "delivered")
 
-    def test_build_chat_pending_questions(self):
+    def test_build_chat_ignores_legacy_pending_questions(self):
+        """ask_supervisor/pending_questions was removed in v2 phase 0h — a leftover
+        file must contribute nothing to the chat feed."""
         qpath = Path(self.tmp) / "pending_questions.jsonl"
         entry = {"ts": "2026-04-04T10:00:00Z", "question": "What port?", "status": "pending"}
         qpath.write_text(json.dumps(entry) + "\n")
         chat = build_chat(self.config)
-        self.assertEqual(len(chat["messages"]), 1)
-        self.assertEqual(chat["messages"][0]["direction"], "incoming")
-        self.assertIn("What port?", chat["messages"][0]["text"])
+        self.assertEqual(len(chat["messages"]), 0)
 
     def test_build_chat_mixed_sorted(self):
-        """Interventions and questions should be sorted by timestamp."""
-        # Early intervention
+        """Interventions and outgoing replies are sorted by timestamp."""
         ipath = self.config.interventions_dir / "msg_001.md"
         ipath.write_text("First message")
         os.utime(ipath, (1712000000, 1712000000))
 
-        # Later question
-        qpath = Path(self.tmp) / "pending_questions.jsonl"
-        entry = {"ts": "2026-04-04T12:00:00Z", "question": "Later question", "status": "pending"}
-        qpath.write_text(json.dumps(entry) + "\n")
+        rpath = Path(self.tmp) / "chat_replies.jsonl"
+        entry = {"ts": "2026-04-04T12:00:00Z", "tick": 7, "text": "Later reply"}
+        rpath.write_text(json.dumps(entry) + "\n")
 
         chat = build_chat(self.config)
         self.assertEqual(len(chat["messages"]), 2)
-        # First should be outgoing (earlier timestamp)
-        self.assertEqual(chat["messages"][0]["direction"], "outgoing")
+        self.assertIn("Later reply", chat["messages"][1]["text"])
 
     def test_build_chat_skips_hidden_files(self):
         (self.config.interventions_dir / ".hidden").write_text("secret")

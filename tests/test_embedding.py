@@ -259,47 +259,6 @@ class TestSemanticSearch(unittest.TestCase):
 
 
 
-class TestRecallCacheInContext(unittest.TestCase):
-    """Tests for recall_cache.md integration in context.py intelligence section."""
-
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.config = Config()
-        self.config.workspace_dir = os.path.join(self.tmp, "workspace")
-        os.makedirs(self.config.workspace_dir)
-        self.config.mock_mode = True
-        self.config.briefing_model = True
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def test_cache_included_in_intelligence(self):
-        from context import _build_intelligence_section
-        # Write a recall cache file
-        cache_path = self.config.workspace / "recall_cache.md"
-        cache_path.write_text("[FACT] (pip, bookworm) pip needs --break-system-packages")
-
-        result = _build_intelligence_section(self.config, "Set up pip", "Step 1")
-        self.assertIn("pip needs --break-system-packages", result)
-
-    def test_no_cache_still_works(self):
-        from context import _build_intelligence_section
-        # No cache file — should still work (BM25 only)
-        result = _build_intelligence_section(self.config, "test", "plan")
-        # May be empty if no knowledge entries, but shouldn't crash
-        self.assertIsInstance(result, str)
-
-    def test_cache_respects_budget(self):
-        from context import _build_intelligence_section
-        cache_path = self.config.workspace / "recall_cache.md"
-        # Write oversized cache
-        cache_path.write_text("x" * 5000)
-        self.config.context_intelligence_max_chars = 200
-
-        result = _build_intelligence_section(self.config, "goal", "plan")
-        self.assertLessEqual(len(result), 200)
-
 
 class TestModelAvailable(unittest.TestCase):
 

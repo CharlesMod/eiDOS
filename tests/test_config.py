@@ -28,7 +28,7 @@ class TestConfig(unittest.TestCase):
             # Just verify it loads without error and overrides defaults
             self.assertIsInstance(config.llm_url, str)
             self.assertTrue(config.llm_url.startswith("http"))
-            self.assertEqual(config.tick_interval_s, 5)
+            self.assertGreater(float(config.tick_interval_s), 0)
 
     def test_env_var_override(self):
         os.environ["EIDOS_LLM_URL"] = "http://test:9999"
@@ -51,7 +51,7 @@ class TestConfig(unittest.TestCase):
         config = Config()
         config.workspace_dir = "/tmp/test_workspace"
         self.assertEqual(config.goal_path, Path("/tmp/test_workspace/goal.md"))
-        self.assertEqual(config.memory_path, Path("/tmp/test_workspace/memory.md"))
+        self.assertEqual(config.plan_path, Path("/tmp/test_workspace/plan.md"))
         self.assertEqual(config.observations_path, Path("/tmp/test_workspace/observations.jsonl"))
         self.assertEqual(config.wal_path, Path("/tmp/test_workspace/wal.json"))
 

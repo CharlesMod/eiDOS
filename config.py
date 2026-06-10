@@ -323,11 +323,6 @@ def load_config(path: str = "config.toml") -> Config:
         config.self_edit_max_proposal_bytes = si.get("self_edit_max_proposal_bytes", config.self_edit_max_proposal_bytes)
         config.self_edit_health_probe_s = si.get("self_edit_health_probe_s", config.self_edit_health_probe_s)
 
-        config.planning_model_path = planning.get("model_path", config.planning_model_path)
-        config.planning_context_size = planning.get("context_size", config.planning_context_size)
-        config.planning_reasoning_budget = planning.get("reasoning_budget", config.planning_reasoning_budget)
-        config.planning_max_tokens = planning.get("max_tokens", config.planning_max_tokens)
-
         knowledge = data.get("knowledge", {})
         config.knowledge_enabled = knowledge.get("enabled", config.knowledge_enabled)
         config.knowledge_recall_top_k = knowledge.get("recall_top_k", config.knowledge_recall_top_k)
