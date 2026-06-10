@@ -27,6 +27,7 @@ class Config:
     llm_top_k: int = 20
     llm_min_p: float = 0.0
     llm_presence_penalty: float = 1.5
+    llm_grammar_enabled: bool = True   # GBNF tick-output contract (BIBLE 2.1)
 
     # Tick
     tick_interval_s: int = 5              # idle cadence — sleep this long when there's no momentum
@@ -236,6 +237,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.llm_top_k = llm.get("top_k", config.llm_top_k)
         config.llm_min_p = llm.get("min_p", config.llm_min_p)
         config.llm_presence_penalty = llm.get("presence_penalty", config.llm_presence_penalty)
+        config.llm_grammar_enabled = llm.get("grammar_enabled", config.llm_grammar_enabled)
 
         tick = data.get("tick", {})
         config.tick_interval_s = tick.get("interval_s", config.tick_interval_s)

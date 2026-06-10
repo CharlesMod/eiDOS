@@ -12,6 +12,7 @@ top_p = 0.95
 top_k = 20
 min_p = 0.0
 presence_penalty = 0.5
+grammar_enabled = true     # GBNF-constrained tick output (form enforced at the sampler)
 
 [tick]
 interval_s = 2.5           # tick cadence (fast supervised mode); wakes instantly on chat/intervention

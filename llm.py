@@ -124,6 +124,7 @@ def complete(
     run_id: str = "",
     tick: int = 0,
     on_token: callable = None,
+    grammar: str = None,
 ) -> str:
     """Send a chat completion request, return the assistant's content string.
 
@@ -159,6 +160,10 @@ def complete(
         # the STABLE→VOLATILE context ordering in context.py so the cached prefix is long.
         "cache_prompt": True,
     }
+    if grammar:
+        # GBNF constrained decoding (BIBLE §2.1) — the tick's output contract enforced
+        # at the sampler. Fail-open on server rejection (see the HTTPError branch).
+        payload["grammar"] = grammar
 
     body = json.dumps(payload).encode("utf-8")
     logger.debug("llm payload_bytes=%d messages=%d stream=%s", len(body), len(messages), use_stream)
@@ -178,6 +183,12 @@ def complete(
             error_body = e.read().decode("utf-8", errors="replace")
         except Exception:
             pass
+        if grammar:
+            # Fail open: a grammar the server can't compile must never cost the tick.
+            logger.warning("grammar request rejected (HTTP %d) — retrying unconstrained: %s",
+                           e.code, error_body[:200])
+            return complete(messages, config, temperature, max_tokens,
+                            run_id=run_id, tick=tick, on_token=on_token, grammar=None)
         raise LLMError(f"HTTP {e.code}: {error_body}") from e
     except urllib.error.URLError as e:
         raise LLMError(f"Connection failed: {e.reason}") from e

@@ -662,9 +662,19 @@ def run_loop(config: Config, persona=None, wal=None):
         # background tick so voice stays crisp; returns immediately when no speech is in flight.
         yield_to_speech(config)
 
+        tick_grammar = None
+        if getattr(config, "llm_grammar_enabled", True) and not config.mock_mode:
+            try:
+                from grammar import tick_grammar_cached
+                from tools import TOOLS as _live_tools
+                tick_grammar = tick_grammar_cached(_live_tools.keys())
+            except Exception as _ge:  # noqa: BLE001 - grammar is an enhancement, never a blocker
+                logger.warning("tick grammar build failed (running unconstrained): %s", _ge)
+
         try:
             response = complete(messages, config, max_tokens=current_max_tokens,
-                                on_token=_on_token, tick=tick_number)
+                                on_token=_on_token, tick=tick_number,
+                                grammar=tick_grammar)
             llm_elapsed = time.monotonic() - llm_start
             consecutive_failures = 0  # reset on success
 
