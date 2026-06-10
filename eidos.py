@@ -84,7 +84,7 @@ def main():
     config.snapshots_dir.mkdir(parents=True, exist_ok=True)
     config.outputs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Hot-load any skills Nexus has previously authored
+    # Hot-load any skills eiDOS has previously authored
     try:
         from skills import load_active_skills
         loaded = load_active_skills(config)
@@ -261,7 +261,8 @@ def _count_skills(config: Config) -> int:
 
 def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
               goal_start_time: float, consecutive_failures: int = 0,
-              reasoning_exhaustions: int = 0, current_max_tokens: int = 0):
+              reasoning_exhaustions: int = 0, current_max_tokens: int = 0,
+              last_progress_tick: int = 0):
     """Atomically write tick state to WAL for crash recovery."""
     wal = {
         "tick_number": tick_number,
@@ -270,6 +271,7 @@ def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
         "consecutive_failures": consecutive_failures,
         "reasoning_exhaustions": reasoning_exhaustions,
         "current_max_tokens": current_max_tokens,
+        "last_progress_tick": last_progress_tick,
         "ts": time.time(),
     }
     tmp = config.wal_path.with_suffix(".tmp")
@@ -714,7 +716,8 @@ def run_loop(config: Config, persona=None, wal=None):
 
             write_wal(config, tick_number, ticks_since_compaction,
                       goal_start_time, consecutive_failures,
-                      reasoning_exhaustions, current_max_tokens)
+                      reasoning_exhaustions, current_max_tokens,
+                      last_progress_tick)
             time.sleep(config.tick_interval_s)
             tick_number += 1
             ticks_since_compaction += 1
@@ -741,7 +744,8 @@ def run_loop(config: Config, persona=None, wal=None):
 
             write_wal(config, tick_number, ticks_since_compaction,
                       goal_start_time, consecutive_failures,
-                      reasoning_exhaustions, current_max_tokens)
+                      reasoning_exhaustions, current_max_tokens,
+                      last_progress_tick)
             time.sleep(config.tick_interval_s)
             tick_number += 1
             ticks_since_compaction += 1
@@ -996,7 +1000,8 @@ def run_loop(config: Config, persona=None, wal=None):
         # --- Persist tick state to WAL ---
         write_wal(config, tick_number, ticks_since_compaction,
                   goal_start_time, consecutive_failures,
-                  reasoning_exhaustions, current_max_tokens)
+                  reasoning_exhaustions, current_max_tokens,
+                  last_progress_tick)
 
         if not goal_complete and not _shutdown_requested:
             interval = _adaptive_tick_interval(config, tick_tool_name)
