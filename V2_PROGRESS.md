@@ -103,15 +103,25 @@ validation — NOT appropriate to land unsupervised. Deferred to a Dean-supervis
 Phases 5/6/7 are eidos-internal and unit-testable → done autonomously. (Phase 5 has no hard
 dependency on phase 4's event bus; it's pure context.py work.)
 
-## Phase 4 — kernel event bus + control channel + job waiters (DEFERRED → Dean-supervised)
+## Phase 4 — kernel event bus + control channel + job waiters (COMPLETE — Dean-supervised)
 
-The cross-process polling nervous system. Replace eidos-side file polls (pause @5s, hold @2s,
-interventions @≤2s) with ONE long-poll to a dashboard /api/control/wait endpoint (Condition +
-notify-on-change — the GPU-gate pattern in reverse); watchdog proc.wait() on the held handle
-instead of 5s tasklist poll; per-job waiter threads instead of per-tick tasklist storm. KEEP the
-sentinel files as crash-survivable ground truth (the audit: it's the polled consumption, not the
-file, that violates ARCH #1). RISK: edits dashboard.py (trust boundary); adds a jobs.json writer
-(needs the deferred lock); needs both processes live to validate. Why supervised, not autonomous.
+The cross-process polling nervous system, killed. Done in three commits with live dual-process
+smokes (Dean watching):
+- 4a (6bae355) control channel: dashboard control_notify bumps a Condition-guarded seq on every
+  control mutation; GET /api/control/wait long-polls until seq passes ?since= (the GPU-gate
+  pattern in reverse). eidos's pause/hold/end-of-tick waits + the two LLM-error-branch sleeps go
+  event-driven; sentinel files stay crash-survivable ground truth; fail-open to a bounded nap.
+  Live: chat→wake ~31ms (was ≤2000ms), pause/resume ~25ms (was ≤5000ms).
+- 4b (7eccf00) watchdog death event: _spawn_eidos holds the Popen handle; a daemon thread
+  wait()s and fires _child_died, so the watchdog's 5s poll becomes _child_died.wait(timeout=5).
+  Live: respawn 0.34s after kill (was 0–5s poll window).
+- 4c (0abf95e) job waiters + _jobs_lock: per async job a daemon thread holds the handle and
+  records the real returncode; refresh/reap/collect skip tasklist polling for waited jobs.
+- Two real bugs the test investigation surfaced: _interruptible_sleep busy-spun at interval≤0
+  (now time.sleep(0) yields once + preserves the test seam — test_resilience 653s→0.75s); the
+  cold-boot health probe hit real HTTP in tests (skipped under the isolation flag).
+- Test isolation: conftest sets EIDOS_NO_DASHBOARD session-wide so no test reaches the live
+  :8099 dashboard (the channel clients check it and fail-open). 484-test fast suite 11.8s.
 
 ## Phase 5 — context compiler: one path, true KV-stable prefix (COMPLETE)
 
