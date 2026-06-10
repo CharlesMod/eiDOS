@@ -187,26 +187,6 @@ class TestTools(unittest.TestCase):
         result = tool_bg_check({"name": "reader"}, self.config)
         self.assertIn("bg_output_here", result.output)
 
-    # --- http_get ---
-
-    @patch("urllib.request.urlopen")
-
-
-
-
-    # --- remember ---
-
-
-
-
-    # --- goal_complete ---
-
-
-
-    # --- ask_supervisor ---
-
-
-
 
     # --- refresh_jobs ---
 

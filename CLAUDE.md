@@ -16,8 +16,9 @@ services.
 - Launch dashboard: `PYTHONUTF8=1 python dashboard.py --config config.toml --port 8099`.
 - **Restart the dashboard with `taskkill /PID <pid> /F` — NEVER `/T`.** eidos is the dashboard's
   child; `/T` kills eidos too. `/F` alone lets eidos keep running (the watchdog covers gaps).
-- **Restart eidos** by `taskkill /PID <eidos-pid> /F`; the watchdog respawns it on fresh code,
-  booted PAUSED. Resume via the dashboard "GO" or `POST /api/control/resume`.
+- **Restart eidos** by `taskkill /PID <eidos-pid> /F`; the watchdog respawns it on fresh code.
+  Operator start and apply/restore restarts boot PAUSED (kill-switch design); a plain
+  crash-respawn resumes running (continuity). Resume via "GO" or `POST /api/control/resume`.
 - eidos boots **paused** (kill-switch design). Control endpoints: `/api/control/{start,stop,resume,pause,status}`.
 - Always `PYTHONUTF8=1` (unicode in prompts/output).
 

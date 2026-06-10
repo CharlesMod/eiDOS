@@ -312,7 +312,7 @@ def compact_briefing(config: Config, persona: dict = None) -> None:
                 len(current_plan), len(new_plan or ""), stored)
 
     # Write a human-readable DREAM RECORD for the dashboard's Dream Journal. The old journal read
-    # memory.md snapshots, but the briefing dream distills into plan + knowledge (not memory.md), so
+    # plan snapshots: the briefing dream distills into plan + knowledge, so
     # those snapshots were empty 48-byte stubs and the journal showed nothing. Capture the real
     # distillation here: the flavor reflection + what was learned + the resulting plan.
     try:

@@ -24,14 +24,9 @@ def read_goal(config: Config) -> str:
 
 
 def read_plan(config: Config) -> str:
-    """Read plan.md (or memory.md as fallback). Returns empty string if missing."""
+    """Read plan.md (working memory). Returns empty string if missing."""
     try:
         return config.plan_path.read_text().strip()
-    except FileNotFoundError:
-        pass
-    # Fallback: read legacy memory.md during transition
-    try:
-        return config.memory_path.read_text().strip()
     except FileNotFoundError:
         return ""
 

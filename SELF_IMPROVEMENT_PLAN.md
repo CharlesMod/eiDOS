@@ -1,6 +1,26 @@
-I have enough detail in the provided designs, risks, and integration map to synthesize the plan directly. No file exploration is needed since the task is pure synthesis of the given material into one ordered, buildable plan.
-
 # eiDOS In-App Self-Improvement — Unified Implementation Plan
+
+> **RECONCILIATION (2026-06-10, eiDOS v2 phase 0n).** This plan was written for an
+> adversary-resistant build. What shipped is a deliberate **accident-safety subset**
+> (Dean's decision; see ARCHITECTURE_PRINCIPLES.md #3, selfedit.py:12, git_safety.py:7):
+> git-reversible protection against a *confused* agent, not a wall against a malicious one.
+> Read the plan below with these standing amendments:
+>
+> - **Group A (OS isolation, localhost bind, ACLs, state relocation, HMAC) is DEFERRED by
+>   decision**, not pending. The "must land before self_edit_enabled" gate at the bottom of
+>   this doc is superseded for the accident-safety posture.
+> - **Branch discipline: commits land on `main`** (Dean, 2026-06-09). The `eidos-self`
+>   branch was never used; its config knob was removed in v2 phase 0k.
+> - **Auth posture (v2 phase 8): keep 0.0.0.0 + enforce one token uniformly on EVERY
+>   state-changing POST** — including `/api/control/*`, `/api/chat`, `/api/speech/*`,
+>   which today are ungated even when a token is set.
+> - **Still genuinely missing (v2 phase 8 builds them):** the post-apply health-probe leg
+>   (`pending_apply` marker → `applied_ok` breadcrumb → heartbeat-newer-than-baseline →
+>   auto-rollback; the `self_edit_health_probe_s` knob exists and is read by nothing), and
+>   the §7 test suite for selfedit/git_safety/watchdog-rollback.
+> - The watchdog's plain crash-respawn does NOT boot paused (only operator start and
+>   apply/restore restarts do) — that is intentional continuity, and docs that said
+>   otherwise have been corrected.
 
 ## 1. Architecture & Safety Boundary
 

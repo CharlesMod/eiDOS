@@ -27,7 +27,7 @@ ws.mkdir(exist_ok=True)
 )
 
 # Memory
-(ws / "memory.md").write_text(
+(ws / "plan.md").write_text(
     "# Working Memory\n"
     "## Progress\n"
     "- DHT22 sensor confirmed working on GPIO4. Reads take ~2s.\n"

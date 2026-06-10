@@ -61,32 +61,34 @@ def _normalize_workspace_path(path: str, config: Config) -> Path:
 
 
 
-def _kill_proc_tree(proc):
-    """Kill a process and its entire descendant tree (Windows-safe).
+def _kill_pid_tree(pid: int) -> None:
+    """Kill a process tree by PID (Windows-safe).
 
-    On Windows, killing only the immediate child leaves grandchildren holding the
-    output pipe open, so communicate() hangs forever. taskkill /T kills the tree.
+    On Windows, killing only the immediate process leaves grandchildren holding
+    the output pipe open, so communicate() hangs forever. taskkill /T kills the tree.
     """
+    if not pid:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                           capture_output=True, timeout=15)
+        else:
+            os.kill(pid, 9)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _kill_proc_tree(proc):
+    """Kill a Popen's process tree, with a direct proc.kill() fallback."""
     if proc is None or proc.poll() is not None:
         return
-    if os.name == "nt":
+    _kill_pid_tree(proc.pid)
+    if proc.poll() is None:
         try:
-            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                           capture_output=True, timeout=15)
+            proc.kill()
         except Exception:  # noqa: BLE001
-            try:
-                proc.kill()
-            except Exception:  # noqa: BLE001
-                pass
-    else:
-        import signal as _signal
-        try:
-            os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
-        except Exception:  # noqa: BLE001
-            try:
-                proc.kill()
-            except Exception:  # noqa: BLE001
-                pass
+            pass
 
 
 _PROC_SEQ = 0
@@ -880,20 +882,6 @@ def reap_jobs(config: Config, kill_all: bool = False) -> int:
     if changed:
         _write_jobs(config, jobs)
     return killed
-
-
-def _kill_pid_tree(pid: int) -> None:
-    """Kill a process tree by PID (Windows-safe)."""
-    if not pid:
-        return
-    try:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                           capture_output=True, timeout=15)
-        else:
-            os.kill(pid, 9)
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _read_job_tail(output_path: str, n: int = 2500) -> str:
