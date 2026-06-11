@@ -115,6 +115,67 @@ class TestRecallDecision(unittest.TestCase):
         self.assertEqual(episodes.render_recall({"failures": [], "worked": []}), "")
 
 
+class TestSemanticSituationRecall(unittest.TestCase):
+    """Phase 7a-2: cross-situation recall by resemblance. Uses the deterministic mock embedder
+    (knowledge_embedding_enabled + mock_mode), so no ONNX model is needed."""
+
+    def setUp(self):
+        self.config = _cfg()
+        self.config.mock_mode = True
+        self.config.knowledge_embedding_enabled = True
+
+    def _fail(self, key, sig="bash:dht_read", kind="timeout", summary="read timed out"):
+        episodes.record_episode(self.config, tick=1, tool="bash", sig=sig,
+                                fail_kind=kind, success=False, summary=summary, key=key)
+
+    def test_novel_situation_matches_resembling_failure(self):
+        # A failure under objA, wiring a dht sensor
+        self._fail("objA|wire up the dht## temperature sensor")
+        self._fail("objA|wire up the dht## temperature sensor")
+        # A NEW situation under a DIFFERENT objective, semantically similar step
+        rec = episodes.recall(self.config, key="objB|install the dht## sensor on gpio")
+        self.assertTrue(rec.get("similar"))
+        self.assertEqual(rec["via_step"], "wire up the dht## temperature sensor")
+        self.assertEqual({f["sig"] for f in rec["failures"]}, {"bash:dht_read"})
+
+    def test_unrelated_situation_does_not_match(self):
+        self._fail("objA|wire up the dht## temperature sensor")
+        rec = episodes.recall(self.config, key="objC|write a poem about the ocean")
+        self.assertNotIn("similar", rec)
+        self.assertEqual(rec["failures"], [])
+
+    def test_exact_match_is_not_flagged_similar(self):
+        # When the exact situation has history, the deterministic path wins — no "similar" tag.
+        self._fail("objA|map the network")
+        rec = episodes.recall(self.config, key="objA|map the network")
+        self.assertEqual(len(rec["failures"]), 1)
+        self.assertNotIn("similar", rec)
+
+    def test_disabled_embeddings_no_semantic_and_no_index(self):
+        self.config.knowledge_embedding_enabled = False
+        self._fail("objA|wire up the dht## temperature sensor")
+        # no situation index is written when the layer is off
+        self.assertFalse(episodes._sit_key_path(self.config).exists())
+        rec = episodes.recall(self.config, key="objB|install the dht## sensor on gpio")
+        self.assertNotIn("similar", rec)
+        self.assertEqual(rec["failures"], [])
+
+    def test_index_self_builds_on_record(self):
+        self._fail("objA|map the network")
+        vecs, keys = episodes._load_situations(self.config)
+        self.assertIn("objA|map the network", keys)
+        self.assertEqual(vecs.shape[0], len(keys))
+
+    def test_resolved_failure_in_similar_situation_stays_quiet(self):
+        # similar past situation that FAILED then RECOVERED → no standing failure → no recall
+        episodes.record_episode(self.config, tick=1, tool="bash", sig="bash:dht_read",
+                                fail_kind="timeout", success=False, key="objA|wire up the dht## sensor")
+        episodes.record_episode(self.config, tick=2, tool="bash", sig="bash:dht_read",
+                                fail_kind="", success=True, summary="worked", key="objA|wire up the dht## sensor")
+        rec = episodes.recall(self.config, key="objB|install the dht## sensor on gpio")
+        self.assertEqual(rec["failures"], [])
+
+
 class TestSituationKey(unittest.TestCase):
 
     def setUp(self):

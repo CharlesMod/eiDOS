@@ -30,6 +30,12 @@ _MAX_EPISODES = 600          # self-bounding ring (no separate rotation needed)
 _RECALL_WINDOW = 400         # how far back recall scans
 _MISFIRE = ("system", "watchdog", "dream", "")   # tools that aren't real "actions"
 
+# Phase 7a-2: semantic situation similarity. Vectors are stored per DISTINCT situation key (not per
+# episode) — keys are normalized, so the distinct set is small (tens) and self-bounds cheaply.
+_MAX_SITUATIONS = 256        # distinct situations to keep embedded (ring)
+_SIM_THRESHOLD = 0.45        # cosine floor to call a past situation "like this one" (calibrated for
+                             # MiniLM AND the mock embedder; below this is noise, not resemblance)
+
 
 def _path(config):
     return config.workspace / "episodes.jsonl"
@@ -100,6 +106,7 @@ def record_episode(config, *, tick: int, tool: str, sig: str, fail_kind: str,
         with open(_path(config), "a", encoding="utf-8") as f:
             f.write(json.dumps(ep) + "\n")
         _trim(config)
+        _remember_situation(config, key)   # build the similarity index from live ticks (gated)
     except Exception:  # noqa: BLE001 - episodic recording is best-effort
         pass
 
@@ -113,6 +120,104 @@ def _trim(config) -> None:
             p.write_text("\n".join(lines[-_MAX_EPISODES:]) + "\n", encoding="utf-8")
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Situation similarity (phase 7a-2) — the semantic layer the 7b docstring promised.
+# A novel situation rarely has an exact OR same-objective match, but it may RESEMBLE a past one
+# (a network scan under objective B is like the network scan that timed out under objective A).
+# We embed the normalized STEP of each distinct situation key (the opaque objective id is dropped —
+# it carries no meaning), so resemblance crosses objective boundaries. Embedding-gated: when
+# embeddings are off this whole layer is inert and recall is exactly the 7b deterministic store.
+# ---------------------------------------------------------------------------
+
+def _step_of(key: str) -> str:
+    return key.split("|", 1)[1] if "|" in key else key
+
+
+def _sit_vec_path(config):
+    return config.workspace / "situation_vectors.npy"
+
+
+def _sit_key_path(config):
+    return config.workspace / "situation_keys.json"
+
+
+def _load_situations(config):
+    """Return (vectors_ndarray, keys_list) or (None, []) — parallel arrays, vectors[i] ↔ keys[i]."""
+    vp, kp = _sit_vec_path(config), _sit_key_path(config)
+    if not vp.exists() or not kp.exists():
+        return None, []
+    try:
+        import numpy as np
+        v = np.load(str(vp))
+        k = json.loads(kp.read_text(encoding="utf-8"))
+        if v.shape[0] != len(k):
+            return None, []
+        return v, k
+    except Exception:  # noqa: BLE001
+        return None, []
+
+
+def _save_situations(config, vectors, keys: list) -> None:
+    import numpy as np
+    config.workspace.mkdir(parents=True, exist_ok=True)
+    np.save(str(_sit_vec_path(config)), vectors)
+    _sit_key_path(config).write_text(json.dumps(keys), encoding="utf-8")
+
+
+def _remember_situation(config, key: str) -> None:
+    """Embed and store a situation the FIRST time it's seen, so future novel situations can match it.
+    Best-effort, embedding-gated, cheap on the common path: a tiny keys-json read short-circuits when
+    the key is already known (which it usually is), so only a genuinely new situation pays an embed."""
+    if not getattr(config, "knowledge_embedding_enabled", False) or not key:
+        return
+    try:
+        kp = _sit_key_path(config)
+        if kp.exists():
+            keys = json.loads(kp.read_text(encoding="utf-8"))
+            if key in keys:
+                return  # already embedded — the hot path
+        import numpy as np
+        import embedding
+        vec = embedding.embed_query(config, _step_of(key))
+        if vec is None:
+            return
+        vectors, keys = _load_situations(config)
+        if vectors is None:
+            vectors, keys = vec.reshape(1, -1), [key]
+        else:
+            vectors, keys = np.vstack([vectors, vec.reshape(1, -1)]), keys + [key]
+        if len(keys) > _MAX_SITUATIONS:          # ring: drop oldest distinct situations
+            vectors, keys = vectors[-_MAX_SITUATIONS:], keys[-_MAX_SITUATIONS:]
+        _save_situations(config, vectors, keys)
+    except Exception:  # noqa: BLE001 - situation memory is best-effort, never raises into the loop
+        pass
+
+
+def _nearest_situation(config, key: str) -> str:
+    """The stored situation key most semantically like `key` (excluding itself), or '' if none clears
+    _SIM_THRESHOLD. The trigger for cross-situation recall."""
+    if not getattr(config, "knowledge_embedding_enabled", False) or not key:
+        return ""
+    try:
+        vectors, keys = _load_situations(config)
+        if vectors is None or not keys:
+            return ""
+        import embedding
+        q = embedding.embed_query(config, _step_of(key))
+        if q is None:
+            return ""
+        scores = vectors @ q
+        best_i, best = -1, _SIM_THRESHOLD
+        for i, k in enumerate(keys):
+            if k == key:
+                continue
+            if float(scores[i]) >= best:
+                best, best_i = float(scores[i]), i
+        return keys[best_i] if best_i >= 0 else ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def recall(config, key: str = None, *, max_items: int = 4) -> dict:
@@ -132,6 +237,14 @@ def recall(config, key: str = None, *, max_items: int = 4) -> dict:
     # has no history yet (a slightly different step under the same goal is still relevant).
     exact = [e for e in eps if e.get("key") == key]
     pool = exact if exact else [e for e in eps if e.get("key", "").split("|", 1)[0] == obj and obj]
+    similar_via = ""
+    if not pool:
+        # Novel situation deterministically — but is it LIKE a past one? (phase 7a-2). Cross-situation
+        # semantic match: pull the episodes of the nearest resembling situation instead of nothing.
+        nearest = _nearest_situation(config, key)
+        if nearest:
+            pool = [e for e in eps if e.get("key") == nearest]
+            similar_via = nearest
     if not pool:
         return {"failures": [], "worked": []}
 
@@ -156,7 +269,11 @@ def recall(config, key: str = None, *, max_items: int = 4) -> dict:
     worked = [d for d in by_sig.values() if d["succeeded"]]   # the alternatives that DID work
     failures.sort(key=lambda d: -d["fails"])
     worked.sort(key=lambda d: -d.get("fails", 0))             # a recovered approach ranks first
-    return {"failures": failures[:max_items], "worked": worked[:max_items]}
+    out = {"failures": failures[:max_items], "worked": worked[:max_items]}
+    if similar_via:                              # matched by resemblance, not exact situation
+        out["similar"] = True
+        out["via_step"] = _step_of(similar_via)
+    return out
 
 
 def render_recall(rec: dict) -> str:
@@ -164,7 +281,12 @@ def render_recall(rec: dict) -> str:
     failures, worked = rec.get("failures", []), rec.get("worked", [])
     if not failures:
         return ""
-    lines = ["## Episodic recall — you have been in this situation before:"]
+    if rec.get("similar"):
+        via = rec.get("via_step", "")
+        tail = f' ("{via}")' if via else ""
+        lines = [f"## Episodic recall — this resembles a situation you've been in before{tail}:"]
+    else:
+        lines = ["## Episodic recall — you have been in this situation before:"]
     for d in failures:
         kind = f" ({d['fail_kind']})" if d.get("fail_kind") else ""
         times = f" ×{d['fails']}" if d["fails"] > 1 else ""

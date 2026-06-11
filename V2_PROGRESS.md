@@ -149,7 +149,7 @@ STABLE/FOCUSED/STRAINED/RECOVERY from recent success/failure, replacing XP-only 
 the validate path refuses the repeat with a repair hint instead of injecting "STOP re-reading".
 All in eidos.py/context.py/a new glue module + objectives gate — unit-testable.
 
-## Phase 7 — episodic memory (7b DONE); wire embeddings (7a REMAINING)
+## Phase 7 — episodic memory (7b DONE) + wire embeddings (7a DONE)
 
 - 7b (episode store, DONE): one typed (situation→action→outcome→fix) store, `episodes.py`. The
   shredded episodic material (observations truncated each dream, thoughts never recalled by
@@ -165,9 +165,30 @@ All in eidos.py/context.py/a new glue module + objectives gate — unit-testable
   preferred, same-objective fallback. Self-bounding 600-line ring; deterministic, embedding-free
   (7a can layer semantic similarity on top). 13 unit tests (test_episodes.py) + the context
   integration. eidos.py records at tick-end; context.py renders in `_assemble_briefing`.
-- 7a (wire embeddings, REMAINING — needs explicit go): download MiniLM ONNX (~90MB) + onnxruntime,
-  enable embedding.py, BM25+semantic recall over the episode store. Deferred: needs a GPU-cohost
-  decision (the eval/house VRAM rule) and a ~90MB download — wants a Dean go-ahead, not autonomous.
+- 7a (wire embeddings, DONE — Dean-directed): the embedding substrate, lit up and serving BOTH
+  recall surfaces from ONE loaded model (the cohesive cut, not two bolt-ons). MiniLM is CPU-only
+  (onnxruntime intra_op=2) so there's NO VRAM contention with house-ai — the cohost "blocker"
+  dissolved; cohost just keeps the ~90MB resident in RAM. Model fetched by setup_embedding.py;
+  models/ gitignored (never commit the 90MB ONNX).
+  - 7a-1 (481dd57): embedding.py was complete-but-dead since phase 5. Wired live WITHOUT dream-cycle
+    surgery: embed_query() (shared single-text primitive, mock-aware, fail-open), sync_knowledge_
+    vectors() (idempotent boot sync — embeds only entries lacking a vector), eidos.run_loop loads
+    the model + syncs once before the loop, and context._build_relevant_recall fuses BM25 + semantic
+    via reciprocal-rank fusion (_rrf_blend). Embeddings off → byte-identical BM25-only. Verified
+    live: a "discover machines on the local network" paraphrase semantically surfaces an "arp -a
+    enumerated 25 hosts" fact and excludes an unrelated pip error. 11 unit tests.
+  - 7a-2 (episode situation similarity — the centerpiece, what the 7b docstring promised): embed at
+    the granularity of distinct situation KEYS (normalized → few, self-bounding 256-ring), dropping
+    the opaque objective id and embedding the STEP so resemblance crosses objectives. recall() gains
+    a semantic FALLBACK that fires ONLY when the deterministic exact/objective pool is empty (a
+    genuinely novel situation) → pulls the nearest resembling situation's episodes, tagged "similar"
+    so render says "this resembles a situation you've been in before (\"…\")". Threshold 0.45
+    (calibrated for MiniLM AND the mock embedder). The index self-builds from live ticks via
+    _remember_situation in record_episode (gated, hot-path-cheap: a keys-json check short-circuits
+    known situations). Off → exactly the 7b deterministic store. 6 unit tests + live mock smoke
+    (a dht-wiring failure under objA recalled for a novel dht-install step under objB; unrelated
+    "poem about the ocean" correctly ignored).
+  - Gates: episode 19/19, embedding 33/33, fast suite 525/0, non-slow simulation 61/61.
 
 ## Phase 8 — health probe + uniform auth DONE; shell split remaining (Dean-supervised)
 
