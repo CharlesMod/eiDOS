@@ -10,7 +10,8 @@ max_tokens = 4096
 request_timeout_s = 300
 top_p = 0.95
 top_k = 20
-min_p = 0.0
+min_p = 0.05              # floor out the tiny-probability byte-fallback tokens (the ¥¥¡ collapse) —
+                         # the long tail is exactly where the degeneration draws from
 presence_penalty = 0.5
 frequency_penalty = 0.4    # scales with token count → breaks degenerate repeat loops (the ¥¥¡ flood)
 repeat_penalty = 1.1       # llama.cpp n-gram repeat penalty (1.0 = off)
