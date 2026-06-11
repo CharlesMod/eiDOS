@@ -760,7 +760,17 @@ def run_loop(config: Config, persona=None, wal=None):
         tick_tool_success = False
         tick_tool_duration = 0.0
         tick_fail_kind = ""
+        tick_summary = ""
+        tick_situation = ""   # the SITUATION digest for this tick's episode (captured pre-action)
         write_activity(config, "thinking", detail=f"tick {tick_number}")
+
+        # Capture the SITUATION the model is deciding in (phase 7b) — the same key episodic recall
+        # used during context assembly — so this tick's episode is filed under the situation it acted in.
+        try:
+            import episodes as _ep
+            tick_situation = _ep.situation_key(config)
+        except Exception:  # noqa: BLE001
+            tick_situation = ""
 
         # Streaming reply→voice (phase 3): when Boss is waiting, the reply streams first and the
         # pump fires TTS on its opening sentence mid-generation — first-audio ~2.5s, not ~12s.
@@ -975,6 +985,7 @@ def run_loop(config: Config, persona=None, wal=None):
             tick_tool_success = result.success
             tick_tool_duration = result.duration_s
             tick_fail_kind = result.fail_kind
+            tick_summary = (result.output or "")[:160].replace("\n", " ")
 
             # --- Log observation ---
             append_observation(config, {
@@ -1093,14 +1104,27 @@ def run_loop(config: Config, persona=None, wal=None):
         #     the mechanical teeth — a repeated dead end parks and rotates FASTER, instead of the old
         #     advisory "you seem stuck" prose the model ignored. ---
         _strain_bump = 0
+        _act_sig = (recent_hashes[-1] if recent_hashes else tick_tool_name)
         try:
             import glue as _glue
-            _fail_sig = "" if tick_tool_success else (recent_hashes[-1] if recent_hashes else tick_tool_name)
+            _fail_sig = "" if tick_tool_success else _act_sig
             _glue.record_outcome(config, success=tick_tool_success,
                                  fail_kind=tick_fail_kind, signature=str(_fail_sig))
             _strain_bump = _glue.gate_frustration_bump(_glue.recent_outcomes(config))
         except Exception as _ge:  # noqa: BLE001 - glue is best-effort
             logger.warning("strain glue failed: %s", _ge)
+
+        # --- Episodic memory (phase 7b): file this acting tick as a typed (situation→action→
+        #     outcome→fix) episode, so a future tick in the SAME situation recalls it BEFORE acting
+        #     ("this is like last time"). The action signature is the loop detector's normalized sig
+        #     (bash v3/v4/v5 collapse to one), so repeated-approach failures aggregate correctly. ---
+        try:
+            import episodes as _ep
+            _ep.record_episode(config, tick=tick_number, tool=tick_tool_name, sig=str(_act_sig),
+                               fail_kind=tick_fail_kind, success=tick_tool_success,
+                               summary=tick_summary, key=tick_situation or None)
+        except Exception as _ee:  # noqa: BLE001 - episodic recording is best-effort
+            logger.warning("episode record failed: %s", _ee)
 
         # --- Action Gate: update the active objective's frustration from this tick's outcome (+ strain
         #     bump), and ROTATE focus deterministically if it has stalled/parked/finished. This is the

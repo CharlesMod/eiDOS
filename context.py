@@ -648,6 +648,17 @@ def _assemble_briefing(
     if focus_block:
         durable.append(focus_block)
 
+    # Episodic recall (phase 7b, BIBLE §2.4): state-triggered — if the agent has been in THIS
+    # situation before, surface the actions that FAILED (don't repeat) and any that WORKED (reuse).
+    # Injected unasked, near the decision point, so a known dead end is avoided before it's re-tried.
+    try:
+        import episodes
+        _recall = episodes.render_recall(episodes.recall(config))
+        if _recall:
+            durable.append(_recall)
+    except Exception:  # noqa: BLE001
+        pass
+
     # Presence (time / tick / still-running jobs / alerts) — changes EVERY tick.
     durable.append(_build_presence(config, tick_number, goal_start_time))
 

@@ -149,12 +149,25 @@ STABLE/FOCUSED/STRAINED/RECOVERY from recent success/failure, replacing XP-only 
 the validate path refuses the repeat with a repair hint instead of injecting "STOP re-reading".
 All in eidos.py/context.py/a new glue module + objectives gate — unit-testable.
 
-## Phase 7 — episodic memory + wire embeddings (PLANNED — in-process)
+## Phase 7 — episodic memory (7b DONE); wire embeddings (7a REMAINING)
 
-Unify the shredded episodic material (observations truncated each dream, thoughts never recalled,
-errors-category free text, dream records) into ONE typed (situation→action→outcome→fix) episode
-store keyed on the StatePacket; state-similarity recall fires involuntarily before failure (BIBLE
-§2.4). Wire embedding.py per decision (download MiniLM ONNX, enable, BM25+semantic). In-process.
+- 7b (episode store, DONE): one typed (situation→action→outcome→fix) store, `episodes.py`. The
+  shredded episodic material (observations truncated each dream, thoughts never recalled by
+  similarity, the knowledge "errors" free prose, write-only dream records) gets a typed home: one
+  episode recorded per ACTING tick (system/watchdog/dream/thought-only ticks skipped — not
+  decisions). SITUATION key = `<active objective id>|<normalized next step>` (digits collapsed to
+  `#` so v3/v4/v5 retries and ip/port variants share a situation); ACTION = tool+sig (the loop
+  detector's normalized signature); OUTCOME = success+fail_kind (phase-1 taxonomy). Recall fires
+  INVOLUNTARILY — `context.py` surfaces it in the volatile tail BEFORE the model acts — but ONLY
+  when a STANDING FAILURE exists in this situation (a sig that failed and never recovered): it then
+  shows "✗ `tool` here FAILED (kind) ×N — don't repeat" plus the working ALTERNATIVES ("✓ `tool`
+  WORKED here — prefer that"). No failure → empty → no recall noise. Exact situation-key match
+  preferred, same-objective fallback. Self-bounding 600-line ring; deterministic, embedding-free
+  (7a can layer semantic similarity on top). 13 unit tests (test_episodes.py) + the context
+  integration. eidos.py records at tick-end; context.py renders in `_assemble_briefing`.
+- 7a (wire embeddings, REMAINING — needs explicit go): download MiniLM ONNX (~90MB) + onnxruntime,
+  enable embedding.py, BM25+semantic recall over the episode store. Deferred: needs a GPU-cohost
+  decision (the eval/house VRAM rule) and a ~90MB download — wants a Dean go-ahead, not autonomous.
 
 ## Phase 8 — health probe + uniform auth DONE; shell split remaining (Dean-supervised)
 
