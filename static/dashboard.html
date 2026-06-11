@@ -685,11 +685,14 @@ setInterval(nxStatus,2000);nxStatus();
 //     Streaming = low latency; the <audio> element is "blessed" under your click so Firefox/Safari
 //     allow the later callback-triggered playback (the reason you heard nothing before). ---
 const NX_SILENT='data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAACAgICAgICAgA==';
+// Voice runs as its own service (phase 8.3) on a separate port. Derive its base from the host the
+// browser used to reach THIS page, so it works over localhost AND Tailscale (not hardcoded 127.0.0.1).
+const NX_VOICE_BASE=location.protocol+'//'+location.hostname+':{{VOICE_PORT}}';
 let nxVoiceOn=false, nxES=null, nxAC=null;
 function nxLabel(extra){ const b=document.getElementById('nx-voice'); const base=nxVoiceOn?'&#128266; Voice: on':'&#128263; Voice: off'; b.innerHTML=extra?extra+' '+base:base; if(extra) setTimeout(()=>{b.innerHTML=base;},1400); }
 function nxBlip(){ try{ nxAC=nxAC||new (window.AudioContext||window.webkitAudioContext)(); if(nxAC.state==='suspended')nxAC.resume(); const o=nxAC.createOscillator(),g=nxAC.createGain(); o.frequency.value=660; g.gain.value=0.05; o.connect(g); g.connect(nxAC.destination); o.start(); o.stop(nxAC.currentTime+0.12);}catch(_){} }
-function nxPlay(id){ const a=document.getElementById('nx-audio'); a.muted=false; a.src='/api/speech/stream?id='+id+'&t='+Date.now(); a.play().then(()=>nxLabel('&#9654;')).catch(()=>nxLabel('&#9888; blocked')); }
-function nxConnectSSE(){ if(nxES)return; nxES=new EventSource('/api/speech/events'); nxES.onmessage=(e)=>{ if(!nxVoiceOn)return; try{const d=JSON.parse(e.data); if(d.id) nxPlay(d.id);}catch(_){} }; }
+function nxPlay(id){ const a=document.getElementById('nx-audio'); a.muted=false; a.src=NX_VOICE_BASE+'/api/speech/stream?id='+id+'&t='+Date.now(); a.play().then(()=>nxLabel('&#9654;')).catch(()=>nxLabel('&#9888; blocked')); }
+function nxConnectSSE(){ if(nxES)return; nxES=new EventSource(NX_VOICE_BASE+'/api/speech/events'); nxES.onmessage=(e)=>{ if(!nxVoiceOn)return; try{const d=JSON.parse(e.data); if(d.id) nxPlay(d.id);}catch(_){} }; }
 function toggleVoice(){
   nxVoiceOn=!nxVoiceOn;
   if(nxVoiceOn){

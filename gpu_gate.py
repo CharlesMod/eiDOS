@@ -31,7 +31,9 @@ def yield_to_speech(config, stall_s: float = GPU_STALL_S, max_s: float = GPU_MAX
     idle so the tick proceeds without delay."""
     if os.environ.get(_NO_DASHBOARD):
         return {"idle": True, "reason": "no_dashboard", "active": 0}
-    port = getattr(config, "dashboard_port", 8099)
+    # The GPU speech-gate moved to the standalone voice service (phase 8.3); control_wait below
+    # still targets the dashboard. Both on 127.0.0.1 (same host as eidos).
+    port = getattr(config, "voice_port", 8098)
     url = f"http://127.0.0.1:{port}/api/gpu/wait?stall={stall_s}&max={max_s}&startup={startup_s}"
     try:
         # socket timeout sits just above the server's own bounded wait, so the server controls timing

@@ -107,6 +107,7 @@ enabled = true
 
 [dashboard]
 port = 8099
+voice_port = 8098   # standalone voice service (phase 8.3): GLaDOS TTS + GPU speech-gate
 # Shared token gating state-changing POSTs (self-edit approve/apply, git restore, etc.).
 # Empty = off (accident-safety mode; fine for a trusted LAN/Tailscale buddy). Set a value
 # to require ?token=... or an X-EiDOS-Token header on privileged actions.

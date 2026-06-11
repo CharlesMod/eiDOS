@@ -25,8 +25,8 @@ from atomicio import replace_with_retry
 # Files self-editing may NEVER touch (the safety machinery + lifecycle owner). Also enforced
 # at the self-edit propose/apply layer; duplicated here as the git-side backstop.
 PROTECT_PATHS = frozenset({
-    "dashboard.py", "git_safety.py", "selfedit.py", "safety.py", "atomicio.py",
-    "config.py", "config.toml", ".gitignore", "llm.py", "skills.py",
+    "dashboard.py", "voice.py", "git_safety.py", "selfedit.py", "safety.py", "atomicio.py",
+    "config.py", "config.toml", ".gitignore", "llm.py", "skills.py", "dashboard.html",
 })
 
 _TAG_PREFIX = "eidos-good-"

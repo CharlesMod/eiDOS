@@ -1497,7 +1497,8 @@ def tool_speak(args: dict, config: Config) -> ToolResult:
         return ToolResult(output="Error: provide 'text' — what to say out loud.",
                           full_output_path=None, success=False, duration_s=0)
     sid = str(int(time.time() * 1000))
-    req = urllib.request.Request("http://127.0.0.1:8099/api/speech/say",
+    _vport = getattr(config, "voice_port", 8098)   # voice is its own service now (phase 8.3)
+    req = urllib.request.Request(f"http://127.0.0.1:{_vport}/api/speech/say",
                                  data=_json.dumps({"id": sid, "text": text}).encode("utf-8"),
                                  headers={"Content-Type": "application/json"}, method="POST")
     try:

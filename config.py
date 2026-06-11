@@ -115,6 +115,7 @@ class Config:
 
     # Dashboard
     dashboard_port: int = 8099
+    voice_port: int = 8098      # standalone voice service (phase 8.3): TTS + GPU speech-gate
 
     # Knowledge store
     knowledge_enabled: bool = True
@@ -309,6 +310,7 @@ def load_config(path: str = "config.toml") -> Config:
 
         dashboard = data.get("dashboard", {})
         config.dashboard_port = dashboard.get("port", config.dashboard_port)
+        config.voice_port = dashboard.get("voice_port", config.voice_port)
         config.dashboard_token = dashboard.get("token", config.dashboard_token)
 
         si = data.get("self_improvement", {})

@@ -158,7 +158,7 @@ def _post_speech(config: Config, text: str) -> bool:
         return False
     try:
         import urllib.request as _u
-        port = getattr(config, "dashboard_port", 8099)
+        port = getattr(config, "voice_port", 8098)   # voice is its own service now (phase 8.3)
         sid = str(int(time.time() * 1000))
         req = _u.Request(f"http://127.0.0.1:{port}/api/speech/say",
                          data=json.dumps({"id": sid, "text": text}).encode("utf-8"),
