@@ -25,20 +25,24 @@ except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib  # type: ignore[no-redef]
 
 PRESERVED_PATH = os.path.join(KDIR, "preserved_nuggets.toml")
+# Machine-local nuggets that must NEVER enter git (device credentials, keys). Same format,
+# gitignored; absent on a fresh clone, which is fine.
+LOCAL_PATH = os.path.join(KDIR, "preserved_nuggets.local.toml")
 
 
-def load_nuggets(path: str = PRESERVED_PATH):
-    """Load the preserved nuggets database -> list of (category, tags, content).
+def load_nuggets(path: str = PRESERVED_PATH, optional: bool = False):
+    """Load a preserved nuggets database -> list of (category, tags, content).
 
-    Degrades gracefully: returns [] (with a printed warning) if the file is missing
-    or unparseable, so a reset can't crash on a bad edit — the operator just sees
-    "seeded 0/0" and investigates.
+    Degrades gracefully: returns [] (with a printed warning, unless `optional`) if the
+    file is missing or unparseable, so a reset can't crash on a bad edit — the operator
+    just sees "seeded 0/0" and investigates.
     """
     try:
         with open(path, "rb") as f:
             data = tomllib.load(f)
     except FileNotFoundError:
-        print(f"  ! preserved nuggets database not found: {path} (seeding nothing)")
+        if not optional:
+            print(f"  ! preserved nuggets database not found: {path} (seeding nothing)")
         return []
     except Exception as e:  # noqa: BLE001 - corrupt TOML, etc.
         print(f"  ! failed to parse {path}: {e} (seeding nothing)")
@@ -58,7 +62,8 @@ NUGGETS = load_nuggets()
 
 def main():
     cfg = load_config(os.path.join(KDIR, "config.toml"))
-    nuggets = load_nuggets()  # re-read fresh so edits to the TOML take effect immediately
+    # re-read fresh so edits take effect immediately; local (gitignored, secrets) seeds too
+    nuggets = load_nuggets() + load_nuggets(LOCAL_PATH, optional=True)
     n = 0
     for cat, tags, content in nuggets:
         try:

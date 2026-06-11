@@ -21,5 +21,8 @@ tts_output_*.mp3
 # self-authored-skill output that lands in the repo root (should live in workspace/)
 boss_habits.log
 
+# machine-local seed nuggets (device credentials/keys) — NEVER commit
+preserved_nuggets.local.toml
+
 # embedding model (90MB ONNX + tokenizer) — fetch with `python setup_embedding.py`, never commit
 models/
