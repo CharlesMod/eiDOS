@@ -725,6 +725,11 @@ def _assemble_briefing(
         _recall = episodes.render_recall(episodes.recall(config))
         if _recall:
             situation.append(_recall)
+        # Cross-objective pattern: the SAME failure recurring under different objectives is an
+        # environmental blocker, not a task problem — rotating objectives won't route around it.
+        _sys = episodes.render_systemic(episodes.systemic_blocker(config))
+        if _sys:
+            situation.append(_sys)
     except Exception:  # noqa: BLE001
         pass
 

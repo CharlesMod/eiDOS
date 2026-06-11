@@ -77,6 +77,40 @@ class TestRecallDecision(unittest.TestCase):
         self.assertEqual(rec["worked"], [])
         self.assertEqual(episodes.render_recall(rec), "")
 
+    def test_systemic_blocker_same_sig_across_objectives(self):
+        # one approach failing under TWO different objectives, never succeeding → systemic
+        for obj in ("objA", "objB"):
+            for _ in range(2):
+                self._ep("bash:mqtt_sub", False, "network", key=f"{obj}|get printer status")
+        blk = episodes.systemic_blocker(self.config)
+        self.assertIsNotNone(blk)
+        self.assertEqual(blk["scope"], "sig")
+        self.assertEqual(blk["fails"], 4)
+        self.assertEqual(blk["objectives"], 2)
+        self.assertIn("Systemic blocker", episodes.render_systemic(blk))
+
+    def test_no_systemic_when_confined_to_one_objective(self):
+        for _ in range(6):
+            self._ep("bash:mqtt_sub", False, "network", key="objA|get printer status")
+        self.assertIsNone(episodes.systemic_blocker(self.config))
+
+    def test_no_systemic_when_sig_sometimes_succeeds(self):
+        for obj in ("objA", "objB"):
+            for _ in range(2):
+                self._ep("bash:mqtt_sub", False, "network", key=f"{obj}|get printer status")
+        self._ep("bash:mqtt_sub", True, key="objB|get printer status")  # it CAN work → not a wall
+        self.assertIsNone(episodes.systemic_blocker(self.config))
+
+    def test_systemic_kind_pattern_across_many_objectives(self):
+        # different commands, same failure KIND, three objectives → environmental pattern
+        for i, obj in enumerate(("objA", "objB", "objC")):
+            for j in range(3):
+                self._ep(f"bash:cmd_{obj}_{j}", False, "network", key=f"{obj}|step {i}")
+        blk = episodes.systemic_blocker(self.config)
+        self.assertIsNotNone(blk)
+        self.assertEqual(blk["scope"], "kind")
+        self.assertEqual(blk["kind"], "network")
+
     def test_episodes_survive_objective_change(self):
         # Same normalized step filed under a DEAD objective id — recall under the new
         # objective id still finds it (the step is the stable part of the situation).

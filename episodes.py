@@ -294,6 +294,80 @@ def recall(config, key: str = None, *, max_items: int = 4) -> dict:
     return out
 
 
+_SYSTEMIC_WINDOW = 200       # recent episodes scanned for cross-objective patterns
+_SYSTEMIC_SIG_FAILS = 4      # same signature failing this often...
+_SYSTEMIC_SIG_OBJS = 2       # ...under this many DISTINCT objectives = systemic
+_SYSTEMIC_KIND_FAILS = 8     # same failure KIND this often...
+_SYSTEMIC_KIND_OBJS = 3      # ...across this many objectives = environmental pattern
+
+
+def systemic_blocker(config) -> dict | None:
+    """Detect a SYSTEM-LEVEL blocker: the same failure recurring across DIFFERENT objectives.
+
+    Per-objective frustration treats each goal's failures separately, so an environmental
+    cause (network hardening, missing credentials, a service down) accrues patience N times —
+    once per objective — and is never recognized as one blocker. This scans recent episodes
+    for (a) one action signature failing under 2+ distinct objectives with no success, and
+    (b) one failure kind dominating across 3+ objectives. Deterministic, pure read."""
+    eps = _read(config, limit=_SYSTEMIC_WINDOW)
+    if not eps:
+        return None
+    sig_fail: dict[str, dict] = {}
+    sig_ok: set = set()
+    kind_fail: dict[str, dict] = {}
+    for e in eps:
+        sig = str(e.get("sig") or e.get("tool") or "")
+        obj = str(e.get("key", "")).split("|", 1)[0]
+        if e.get("success"):
+            sig_ok.add(sig)
+            continue
+        kind = e.get("fail_kind") or "error"
+        d = sig_fail.setdefault(sig, {"fails": 0, "objs": set(), "kind": kind,
+                                      "tool": e.get("tool"), "summary": ""})
+        d["fails"] += 1
+        d["objs"].add(obj)
+        d["summary"] = e.get("summary", "") or d["summary"]
+        k = kind_fail.setdefault(kind, {"fails": 0, "objs": set()})
+        k["fails"] += 1
+        k["objs"].add(obj)
+
+    # (a) one exact approach dead under multiple objectives (and never worked in the window)
+    best = None
+    for sig, d in sig_fail.items():
+        if (sig not in sig_ok and d["fails"] >= _SYSTEMIC_SIG_FAILS
+                and len(d["objs"]) >= _SYSTEMIC_SIG_OBJS):
+            if best is None or d["fails"] > best[1]["fails"]:
+                best = (sig, d)
+    if best:
+        sig, d = best
+        return {"scope": "sig", "sig": sig, "tool": d["tool"], "kind": d["kind"],
+                "fails": d["fails"], "objectives": len(d["objs"]), "summary": d["summary"]}
+
+    # (b) one failure KIND dominating across many objectives (different commands, same wall)
+    for kind, k in kind_fail.items():
+        if k["fails"] >= _SYSTEMIC_KIND_FAILS and len(k["objs"]) >= _SYSTEMIC_KIND_OBJS:
+            return {"scope": "kind", "kind": kind, "fails": k["fails"],
+                    "objectives": len(k["objs"])}
+    return None
+
+
+def render_systemic(blk: dict) -> str:
+    """Render a systemic_blocker() result as a high-salience context block."""
+    if not blk:
+        return ""
+    if blk.get("scope") == "sig":
+        tail = f" — {blk['summary']}" if blk.get("summary") else ""
+        return ("## ⚠ Systemic blocker — this is NOT specific to your current objective\n"
+                f"`{blk.get('tool')}` has failed ({blk.get('kind')}) ×{blk['fails']} across "
+                f"{blk['objectives']} different objectives{tail}. The same wall is blocking "
+                "everything — fix the ROOT CAUSE (or tell Boss ONCE what you need and park "
+                "the affected objectives); switching objectives will NOT route around it.")
+    return ("## ⚠ Systemic failure pattern\n"
+            f"Most recent failures are `{blk.get('kind')}` (×{blk['fails']} across "
+            f"{blk['objectives']} objectives). This looks environmental (network/credentials/"
+            "service down), not task-specific — diagnose the environment before retrying tasks.")
+
+
 def render_recall(rec: dict) -> str:
     """Render recall() output as a compact context block, or '' if nothing relevant."""
     failures, worked = rec.get("failures", []), rec.get("worked", [])
