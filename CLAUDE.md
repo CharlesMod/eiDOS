@@ -10,10 +10,18 @@ services.
   calls go through a monitor tap at `:8088` → `:8081` (so its tokens show on the eval dashboard :9100).
 - Tick loop: `eidos.py run_loop`. Config: `config.toml`. Working state: `workspace/`.
 - **Dashboard (`dashboard.py`, http://127.0.0.1:8099)** also runs the **watchdog** that supervises
-  eidos and auto-restarts/auto-rolls-back. It spawns eidos as a CHILD process.
+  eidos and auto-restarts/auto-rolls-back. It spawns eidos as a CHILD process. The UI HTML lives in
+  `static/dashboard.html` (served by `do_GET "/"`), not inline.
+- **Voice service (`voice.py`, http://127.0.0.1:8098)** is a SEPARATE process (phase 8.3): GLaDOS
+  TTS streaming + the GPU speech-gate. Split out so a native TTS/ffmpeg crash can't wound the
+  watchdog. `speak`/`gpu_gate`/the browser's speech SSE all target `voice_port` (8098); only the
+  control channel stays on the dashboard. nssm install: `scripts/install_voice_service.ps1`
+  (registers `HouseAI-EidosVoice`, does NOT auto-start — start it only after stopping any in-dashboard
+  v1 voice path, so two voice services never race the GPU).
 
 ## Run / restart discipline (IMPORTANT)
 - Launch dashboard: `PYTHONUTF8=1 python dashboard.py --config config.toml --port 8099`.
+- Launch voice: `PYTHONUTF8=1 python voice.py --config config.toml` (or `Start-Service HouseAI-EidosVoice`).
 - **Restart the dashboard with `taskkill /PID <pid> /F` — NEVER `/T`.** eidos is the dashboard's
   child; `/T` kills eidos too. `/F` alone lets eidos keep running (the watchdog covers gaps).
 - **Restart eidos** by `taskkill /PID <eidos-pid> /F`; the watchdog respawns it on fresh code.

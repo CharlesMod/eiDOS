@@ -190,7 +190,7 @@ All in eidos.py/context.py/a new glue module + objectives gate — unit-testable
     "poem about the ocean" correctly ignored).
   - Gates: episode 19/19, embedding 33/33, fast suite 525/0, non-slow simulation 61/61.
 
-## Phase 8 — health probe + uniform auth DONE; shell split remaining (Dean-supervised)
+## Phase 8 — health probe + uniform auth + shell split (ALL DONE — Dean-supervised)
 
 - 8.2 (health-probe leg, DONE): the missing self-edit safety. apply arms a pending_apply marker;
   the booting eidos drops an applied_ok breadcrumb (a paused eidos never ticks, so heartbeat
@@ -202,10 +202,25 @@ All in eidos.py/context.py/a new glue module + objectives gate — unit-testable
 - 8.1 (uniform auth, DONE): one _token_ok at the top of do_POST gates EVERY state-changing POST
   (control/chat/speech were ungated even with a token set); hmac.compare_digest. Default empty
   token stays open (Dean's posture). Live smoke: control/chat/speech 401 without token.
-- 8.3 (shell split, REMAINING — large, mostly mechanical, operationally risky): split dashboard.py
-  (4 programs in one 3.3k-line file) into supervisor / voice+GPU-gate service / UI. The voice
-  service becomes its own nssm service (a TTS bug can't wound the watchdog); the 1.75k-line inline
-  HTML becomes static files + a thin status API. Keep supervisor+apply+watchdog co-located (the
-  rollback is the apply path's safety net). Defer to a dedicated session — it changes the deploy
-  topology (new nssm service) and is the least urgent (cosmetic/structural, not a correctness or
-  safety gap). Recommend doing it last, or only if the monolith becomes a maintenance problem.
+- 8.3 (shell split, DONE — Dean chose full process isolation): dashboard.py went from 3,418 ->
+  1,317 lines (4 programs -> supervisor + UI; voice is its own process). Decision: FULL split (a
+  TTS bug can't wound the watchdog), not modularize-in-place.
+  - 8.3a (304d915): the 1,732-line inline _HTML string -> static/dashboard.html; do_GET "/" reads
+    + placeholder-fills it per request. Rendered page byte-identical to the old inline (verified vs
+    HEAD); live HTTP smoke. dashboard.py 3,418 -> 1,685.
+  - 8.3b (d477d74): VOICE -> voice.py, a standalone service on config.voice_port (8098): GLaDOS TTS
+    (/api/speech/say + /api/speech/stream) + the GPU speech-gate (/api/gpu/wait). _speech_segments
+    verified byte-identical across 7 cases. The control channel (/api/control/wait) STAYS on the
+    dashboard (it was interleaved with the voice block; removal preserved it and repointed its
+    threading/time aliases). Callers repointed to voice_port: gpu_gate.yield_to_speech,
+    eidos._post_speech, tools.tool_speak (control_wait stays on dashboard). Browser derives
+    NX_VOICE_BASE from location.hostname (localhost AND Tailscale). CORS on voice responses.
+    voice.py + dashboard.html added to PROTECT_PATHS. scripts/install_voice_service.ps1 registers
+    HouseAI-EidosVoice via nssm but does NOT auto-start (v1->v2 cutover stays deliberate so two
+    voice services never race the GPU). Two-process live smoke green (gpu/wait moved off dashboard
+    -> 404, served by voice; gpu_gate reaches voice; control/wait still on dashboard).
+  - No separate supervisor.py: the blueprint keeps supervisor+apply+watchdog co-located with the UI
+    status API, so dashboard.py IS that module now. Gates: fast 525/0, dashboard 35/35.
+
+CUTOVER TODO (when v2 is blessed to live): start HouseAI-EidosVoice (scripts/install_voice_service.ps1)
+as part of the cutover, AFTER stopping v1's in-dashboard voice path — they must not both run.
