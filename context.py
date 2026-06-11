@@ -503,11 +503,17 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
     try:
         jobs = json.loads((config.workspace / "jobs.json").read_text(encoding="utf-8"))
         now = time.time()
+        # A job that has outlived the async ceiling (plus slack) but still says "running" is a
+        # zombie record (crashed runner / stale jobs.json) — showing it forever as "still
+        # running, don't re-run" misleads every subsequent tick. Drop it from presence.
+        stale_after = float(getattr(config, "cmd_async_ceiling_s", 180) or 180) * 2
         running = []
         for j in jobs:
             if j.get("status") != "running" or j.get("kind") not in ("async", "auto", "manual"):
                 continue
             age = int(now - j["started_ts"]) if j.get("started_ts") else None
+            if age is not None and age > stale_after:
+                continue
             age_s = f" {age}s" if age is not None else ""
             running.append(f"job {j.get('name')} ({(j.get('cmd') or '')[:40]}){age_s}")
         if running:

@@ -32,6 +32,11 @@ check here and with `check_tools` to confirm it doesn't already exist. It almost
   or hit the TTS endpoint, ONE `http_request` call does it — no skill, no requests.
 - `create_skill(skill_name, skill_code)` validates, saves, and hot-loads a skill — callable next tick as
   `<tool>name</tool>` (NOT via bash). `edit_skill` improves one; `rollback_skill` reverts.
+- → Skill LIFECYCLE is automatic and judged on the RUNNING version: 5+ successful uses ⇒ `trusted`;
+  5+ uses with ZERO successes ⇒ **quarantined** (auto-disabled, removed from your tools — it stops
+  appearing because it never worked, not because it was deleted). Revive one by FIXING it with
+  `edit_skill` (new version starts with a clean record) or `rollback_skill` to a version that worked.
+  Don't re-create a quarantined skill under a new name — fix or abandon it.
 - → Make skills MODULAR: take ip/port/etc as args (not hardcoded) and COMPOSE the primitives. Never author
   a near-duplicate; never build a skill loader or registry.
 - → Skills are TIME-BOUNDED: a skill that runs past ~30s (config `skill_watchdog_s`) is abandoned and

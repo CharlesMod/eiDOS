@@ -83,7 +83,8 @@ def write_heartbeat(config: Config, *, tick: int, level: int, mood: str,
                     current_max_tokens: int, disk_free_gb: float,
                     ram_pct: float, llm_elapsed_s: float,
                     tool_name: str, tool_success: bool, uptime_s: float,
-                    cpu_pct: float = 0.0, idle_since: float = None):
+                    cpu_pct: float = 0.0, idle_since: float = None,
+                    gate_wait_s: float = 0.0, gate_reason: str = ""):
     """Atomically write the current heartbeat snapshot."""
     hb = {
         "ts": time.time(),
@@ -103,6 +104,10 @@ def write_heartbeat(config: Config, *, tick: int, level: int, mood: str,
         "tool_success": tool_success,
         "uptime_s": round(uptime_s, 1),
     }
+    if gate_wait_s:
+        # GPU speech-gate held this tick (TTS owned the GPU) — visible contention, not dead air
+        hb["gate_wait_s"] = round(gate_wait_s, 2)
+        hb["gate_reason"] = gate_reason
     if idle_since is not None:
         hb["idle_since"] = idle_since
 
@@ -124,7 +129,8 @@ def append_metrics(config: Config, *, tick: int, level: int, mood: str,
                    prompt_tokens: int = 0, completion_tokens: int = 0,
                    reasoning_tokens: int = 0, ctx_chars: int = 0,
                    memory_chars: int = 0, obs_count: int = 0,
-                   tool_duration_s: float = 0.0, compacted: bool = False):
+                   tool_duration_s: float = 0.0, compacted: bool = False,
+                   gate_wait_s: float = 0.0, gate_reason: str = ""):
     """Append one metrics line to metrics.jsonl."""
     line = {
         "ts": time.time(),
@@ -149,6 +155,8 @@ def append_metrics(config: Config, *, tick: int, level: int, mood: str,
         "obs_count": obs_count,
         "tool_duration_s": round(tool_duration_s, 3),
         "compacted": compacted,
+        "gate_wait_s": round(gate_wait_s, 2),
+        "gate_reason": gate_reason,
     }
     path = config.workspace / "metrics.jsonl"
     try:

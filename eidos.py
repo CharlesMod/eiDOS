@@ -798,7 +798,13 @@ def run_loop(config: Config, persona=None, wal=None):
         # GPU speech-gate (ARCHITECTURE_PRINCIPLES.md #1): if the dashboard is mid-TTS, yield the
         # GPU and resume the instant synthesis finishes (event-driven, bounded). Speech preempts the
         # background tick so voice stays crisp; returns immediately when no speech is in flight.
-        yield_to_speech(config)
+        # Timed + surfaced in the heartbeat so speech-contention delays are visible, not silent.
+        _gate_t = time.monotonic()
+        _gate = yield_to_speech(config)
+        gate_wait_s = time.monotonic() - _gate_t
+        gate_reason = str((_gate or {}).get("reason", "")) if gate_wait_s >= 0.25 else ""
+        if gate_wait_s >= 0.25:
+            logger.info("gpu gate held the tick %.1fs (%s)", gate_wait_s, gate_reason or "tts")
 
         tick_grammar = None
         if getattr(config, "llm_grammar_enabled", True) and not config.mock_mode:
@@ -1094,6 +1100,7 @@ def run_loop(config: Config, persona=None, wal=None):
             cpu_pct=_cpu_pct, llm_elapsed_s=llm_elapsed,
             tool_name=tick_tool_name, tool_success=tick_tool_success,
             uptime_s=_uptime,
+            gate_wait_s=round(gate_wait_s, 2), gate_reason=gate_reason,
         )
         write_heartbeat(config, goal_snippet=_goal_snip,
                         idle_since=idle_since, **_telem_kw)

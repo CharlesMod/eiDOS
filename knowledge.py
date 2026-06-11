@@ -390,12 +390,18 @@ def search_bm25(config: Config, query: str, top_k: int = 5) -> list[dict]:
 
     # Build result list from index (lookup by ID)
     index_map = {item["id"]: item for item in index}
+    # Relative noise floor: BM25 scores are corpus-scaled (no absolute threshold works), but
+    # a result far below the TOP hit is filler, not relevance — a generic step like "explore"
+    # used to pull arbitrary old facts into context just for having one weak term in common.
+    floor = scored[0][0] * 0.2 if scored and scored[0][0] > 0 else None
     results = []
     for score, entry_id in scored[:top_k]:
         # score == 0 means no token overlap at all; negative scores can occur
         # with small corpora (BM25 IDF goes negative when df >= N/2) but still
-        # indicate genuine term matches, so we keep them.
+        # indicate genuine term matches, so we keep them (only when nothing positive ranks).
         if score == 0:
+            continue
+        if floor is not None and score < floor:
             continue
         item = index_map.get(entry_id)
         if item:
