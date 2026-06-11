@@ -1127,8 +1127,17 @@ def run_loop(config: Config, persona=None, wal=None):
             import glue as _glue
             _fail_sig = "" if tick_tool_success else _act_sig
             _glue.record_outcome(config, success=tick_tool_success,
-                                 fail_kind=tick_fail_kind, signature=str(_fail_sig))
-            _strain_bump = _glue.gate_frustration_bump(_glue.recent_outcomes(config))
+                                 fail_kind=tick_fail_kind, signature=str(_fail_sig),
+                                 tool=tick_tool_name)
+            _outcomes = _glue.recent_outcomes(config)
+            _strain_bump = _glue.gate_frustration_bump(_outcomes)
+            # Rumination teeth: a window dominated by thought-only ticks burns patience too —
+            # analysis-paralysis parks/rotates just like a repeated dead end does.
+            _rum_bump = _glue.rumination_bump(_outcomes)
+            if _rum_bump:
+                print(f"{pfx} Glue: ruminating ({_glue.rumination_streak(_outcomes)} thought ticks "
+                      f"in the last {_glue.RUMINATE_WINDOW}) — frustration +{_rum_bump}")
+            _strain_bump += _rum_bump
         except Exception as _ge:  # noqa: BLE001 - glue is best-effort
             logger.warning("strain glue failed: %s", _ge)
 

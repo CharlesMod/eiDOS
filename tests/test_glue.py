@@ -20,8 +20,13 @@ def F(kind="exec", sig="bash:probe"):
     return {"ok": False, "kind": kind, "sig": sig}
 
 
-def OK():
-    return {"ok": True, "kind": "", "sig": ""}
+def OK(tool="bash"):
+    return {"ok": True, "kind": "", "sig": "", "tool": tool}
+
+
+def TH():
+    """A thought-only tick — logged ok=True, but it's reflection, not action."""
+    return {"ok": True, "kind": "", "sig": "", "tool": "thought"}
 
 
 class TestStrain(unittest.TestCase):
@@ -94,6 +99,53 @@ class TestGateBump(unittest.TestCase):
         spread = glue.gate_frustration_bump([F(sig="a"), F(sig="b"), F(sig="c"), F(sig="d")])
         same = glue.gate_frustration_bump([F(sig="a")] * 4)
         self.assertGreater(same, spread)
+
+
+class TestRumination(unittest.TestCase):
+    """Phase 9: analysis-paralysis teeth. A window dominated by thought-only ticks bumps the
+    gate (and labels the condition RUMINATING) — narration must not read as progress."""
+
+    def test_pure_thought_window_max_bump(self):
+        outs = [TH()] * glue.RUMINATE_WINDOW
+        self.assertEqual(glue.rumination_bump(outs), 2)
+
+    def test_interleaved_bookkeeping_still_detected(self):
+        # th th act th th th — 5 thoughts in the 6-window despite one real action between
+        outs = [TH(), TH(), OK("note_append"), TH(), TH(), TH()]
+        self.assertEqual(glue.rumination_bump(outs), 1)
+
+    def test_real_action_clears_instantly(self):
+        # Heavy thinking, but the LAST tick acted — no nag, the model already self-corrected
+        outs = [TH(), TH(), TH(), TH(), TH(), OK()]
+        self.assertEqual(glue.rumination_bump(outs), 0)
+        self.assertEqual(glue.rumination_streak(outs), 0)
+
+    def test_below_threshold_no_bump(self):
+        outs = [OK(), TH(), OK(), TH(), OK(), TH()]
+        self.assertEqual(glue.rumination_bump(outs), 0)
+
+    def test_condition_ruminating(self):
+        self.assertEqual(glue.compute_condition([TH()] * 5), "RUMINATING")
+
+    def test_thoughts_do_not_read_as_focused(self):
+        # 4 ok=True thoughts used to satisfy the FOCUSED success count
+        self.assertNotEqual(glue.compute_condition([TH(), TH(), TH(), TH()]), "FOCUSED")
+
+    def test_thoughts_do_not_relieve_strain(self):
+        strained = [F(sig="a"), F(sig="a"), F(sig="a")]
+        self.assertEqual(glue.compute_strain(strained + [TH()]),
+                         glue.compute_strain(strained))
+
+    def test_thought_is_not_recovery(self):
+        self.assertNotEqual(glue.compute_condition([F(sig="a"), F(sig="a"), TH()]), "RECOVERY")
+
+    def test_legacy_rows_without_tool_unaffected(self):
+        # Pre-phase-9 outcome rows have no "tool" key — strain/condition behave as before
+        legacy_ok = {"ok": True, "kind": "", "sig": ""}
+        self.assertEqual(glue.compute_condition([legacy_ok] * 4), "FOCUSED")
+        strained = [F(sig="a"), F(sig="a"), F(sig="a")]
+        self.assertLess(glue.compute_strain(strained + [legacy_ok]),
+                        glue.compute_strain(strained))
 
 
 class TestPersistence(unittest.TestCase):

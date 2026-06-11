@@ -476,6 +476,7 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
             "FOCUSED": "on a roll — keep advancing the current objective",
             "STRAINED": "repeated failure lately — change METHOD or let the gate move you on; don't retry the same thing",
             "RECOVERY": "just recovered from a rough patch — consolidate, then proceed",
+            "RUMINATING": "you've been thinking without acting — take ONE CONCRETE action this tick (probe, build, memorize a fact); more narration burns patience",
         }.get(cond, "")
         lines.append(f"Condition: {cond}" + (f" — {_desc}" if _desc else ""))
     except Exception:  # noqa: BLE001

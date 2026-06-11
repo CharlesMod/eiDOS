@@ -28,6 +28,14 @@ STRAIN_RELIEF = 3        # a tick that made real progress
 STRAIN_CAP = 12
 STRAIN_HIGH = 6          # at/above this, the condition is STRAINED and the gate gets the bump
 
+# Rumination accounting (ACC/DMN: thinking-about instead of doing). A thought tick is a valid
+# reflection beat, but a WINDOW dominated by them is analysis-paralysis — the observed #1
+# time-sink once the syntax-spiral class was fixed. Windowed (not strictly consecutive) so
+# thought-thought-note-thought patterns don't reset the counter by sneaking in bookkeeping.
+RUMINATE_WINDOW = 6      # look at this many recent outcomes
+RUMINATE_K = 4           # this many thought ticks within the window = ruminating
+_THOUGHT_TOOLS = ("thought",)   # tools that are reflection, not action
+
 _WINDOW = 12             # how many recent outcomes inform the signals
 _PERSIST = 40            # how many to keep on disk
 
@@ -36,12 +44,14 @@ def _path(config):
     return config.state_dir / "outcomes.jsonl"
 
 
-def record_outcome(config, *, success: bool, fail_kind: str = "", signature: str = "") -> None:
+def record_outcome(config, *, success: bool, fail_kind: str = "", signature: str = "",
+                   tool: str = "") -> None:
     """Append one tick's outcome. Best-effort; never raises into the loop."""
     try:
         config.state_dir.mkdir(parents=True, exist_ok=True)
         rows = _read(config)
-        rows.append({"ok": bool(success), "kind": fail_kind or "", "sig": signature or ""})
+        rows.append({"ok": bool(success), "kind": fail_kind or "", "sig": signature or "",
+                     "tool": tool or ""})
         rows = rows[-_PERSIST:]
         tmp = _path(config).with_suffix(".tmp")
         tmp.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
@@ -77,6 +87,11 @@ def compute_strain(outcomes: list[dict]) -> int:
     strain = 0
     prev_fail_sig = None
     for o in outcomes:
+        if o.get("tool") in _THOUGHT_TOOLS:
+            # A thought is neutral: it neither fails nor makes progress, so it must not
+            # relieve strain (it was logged ok=True, which used to bleed off -3/thought —
+            # letting the model think its way out of STRAINED without fixing anything).
+            continue
         if o.get("ok"):
             strain = max(0, strain - STRAIN_RELIEF)
             prev_fail_sig = None
@@ -107,25 +122,55 @@ def repeated_failure_signature(outcomes: list[dict], k: int = 3) -> str:
     return run_sig if (run >= k and run_sig) else ""
 
 
+def rumination_streak(outcomes: list[dict], window: int = RUMINATE_WINDOW) -> int:
+    """How many of the last `window` outcomes were thought-only ticks — but only while the
+    model is STILL in its head (last outcome is a thought). One real action clears the nag
+    instantly; we don't keep scolding after it has started doing things again."""
+    recent = outcomes[-window:]
+    if not recent or recent[-1].get("tool") not in _THOUGHT_TOOLS:
+        return 0
+    return sum(1 for o in recent if o.get("tool") in _THOUGHT_TOOLS)
+
+
+def rumination_bump(outcomes: list[dict], window: int = RUMINATE_WINDOW,
+                    k: int = RUMINATE_K) -> int:
+    """Extra gate frustration when the recent window is dominated by thought ticks.
+    +1 at k thoughts/window (analysis-paralysis), +2 when the ENTIRE window is thoughts
+    (fully stalled). Windowed, not consecutive — interleaved bookkeeping doesn't hide it."""
+    streak = rumination_streak(outcomes, window)
+    if streak >= window:
+        return 2
+    if streak >= k:
+        return 1
+    return 0
+
+
 def compute_condition(outcomes: list[dict]) -> str:
     """Discrete condition label from the recent window (DMN). One of:
     RECOVERY (just climbed out of a failure streak), STRAINED (chronic failure / high strain),
-    FOCUSED (recent run of successes), STABLE (default / idle)."""
+    RUMINATING (thinking instead of acting), FOCUSED (recent run of successes),
+    STABLE (default / idle)."""
     if not outcomes:
         return "STABLE"
     window = outcomes[-_WINDOW:]
     last = window[-1]
     recent = window[-4:]
     fails = sum(1 for o in recent if not o.get("ok"))
-    succ = sum(1 for o in recent if o.get("ok"))
+    # Thought ticks log ok=True but are NOT successes for condition purposes — 4 musings in a
+    # row must not read as FOCUSED (that's the analysis-paralysis state, the opposite).
+    succ = sum(1 for o in recent if o.get("ok") and o.get("tool") not in _THOUGHT_TOOLS)
     strain = compute_strain(window)
 
     # Just recovered: this tick succeeded but the immediately preceding 2+ failed.
+    # (A thought doesn't recover anything — it has to actually DO something.)
     prior = window[-3:-1]
-    if last.get("ok") and len(prior) >= 2 and all(not o.get("ok") for o in prior):
+    if (last.get("ok") and last.get("tool") not in _THOUGHT_TOOLS
+            and len(prior) >= 2 and all(not o.get("ok") for o in prior)):
         return "RECOVERY"
     if strain >= STRAIN_HIGH or fails >= 3:
         return "STRAINED"
+    if rumination_bump(window) > 0:
+        return "RUMINATING"
     if succ >= 3:
         return "FOCUSED"
     return "STABLE"
