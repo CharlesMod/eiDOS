@@ -124,10 +124,30 @@ def write_self_guide_proposal(config: Config, content: str, rationale: str = "",
 
 # --- Train of thought (continuous stream of consciousness) ---
 
+def is_degenerate(text: str) -> bool:
+    """True if `text` looks like a model degeneration loop (repeated junk), not real content — e.g.
+    the ¥¥¡¥¥¡… byte-token collapse. Conservative: a long run with almost no character variety, or a
+    short block tiling most of the string. Real prose clears these thresholds easily. This is the
+    backstop that keeps a degenerate generation out of storage, the display, AND the next tick's
+    context (where it would otherwise feed the loop), regardless of why the model degenerated."""
+    t = (text or "").strip()
+    if len(t) < 40:
+        return False
+    uniq = len(set(t))
+    if uniq <= 6 and uniq / len(t) < 0.08:        # long string of only ~2-6 distinct characters
+        return True
+    for n in (1, 2, 3, 4):                          # the same ≤4-char block tiling ≥80% of the text
+        block = t[:n]
+        if block and t.count(block) * n >= len(t) * 0.8:
+            return True
+    return False
+
+
 def append_thought(config: Config, tick, text: str) -> None:
-    """Append one entry to the agent's train of thought (thoughts.jsonl)."""
+    """Append one entry to the agent's train of thought (thoughts.jsonl). Degenerate output is
+    dropped (never stored or fed back) — see is_degenerate."""
     text = (text or "").strip()
-    if not text:
+    if not text or is_degenerate(text):
         return
     rec = {"tick": tick,
            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -153,7 +173,7 @@ def append_chat_line(config: Config, text: str, *, spoken: bool = False, tick=No
     reply-and-speak without producing duplicates (mechanism, not a "please don't repeat yourself").
     """
     text = (text or "").strip()
-    if not text:
+    if not text or is_degenerate(text):   # never surface a degeneration loop to the operator
         return
     path = config.workspace / "chat_replies.jsonl"
     try:

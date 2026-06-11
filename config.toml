@@ -12,6 +12,8 @@ top_p = 0.95
 top_k = 20
 min_p = 0.0
 presence_penalty = 0.5
+frequency_penalty = 0.4    # scales with token count → breaks degenerate repeat loops (the ¥¥¡ flood)
+repeat_penalty = 1.1       # llama.cpp n-gram repeat penalty (1.0 = off)
 grammar_enabled = true     # GBNF-constrained tick output (form enforced at the sampler)
 
 [tick]

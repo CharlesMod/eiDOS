@@ -73,6 +73,31 @@ class TestMemory(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertTrue(entries[0]["spoken"])
 
+    def test_is_degenerate_catches_byte_loop(self):
+        from memory import is_degenerate
+        self.assertTrue(is_degenerate("¥¥¡" * 200))   # the ¥¥¡ flood
+        self.assertTrue(is_degenerate("a" * 200))                    # single-char run
+        self.assertTrue(is_degenerate("ababab" * 50))                # 2-char cycle
+
+    def test_is_degenerate_clears_real_text(self):
+        from memory import is_degenerate
+        self.assertFalse(is_degenerate("Boss, the network scan found 25 hosts; pivoting to port 8080."))
+        self.assertFalse(is_degenerate("ok"))                        # too short to judge
+        self.assertFalse(is_degenerate(""))
+
+    def test_degenerate_thought_dropped(self):
+        from memory import append_thought, read_recent_thoughts
+        append_thought(self.config, 90, "¥¥¡" * 200)  # degenerate → dropped
+        append_thought(self.config, 91, "A real, useful thought about the next step.")
+        thoughts = read_recent_thoughts(self.config, n=10)
+        self.assertEqual(len(thoughts), 1)
+        self.assertIn("real, useful", thoughts[0]["text"])
+
+    def test_degenerate_chat_line_dropped(self):
+        from memory import append_chat_line
+        append_chat_line(self.config, "¥¥¡" * 200, spoken=True)
+        self.assertEqual(self._chat(), [])
+
     def test_read_goal_missing(self):
         self.assertEqual(read_goal(self.config), "")
 

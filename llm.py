@@ -154,6 +154,12 @@ def complete(
         "top_k": config.llm_top_k,
         "min_p": config.llm_min_p,
         "presence_penalty": config.llm_presence_penalty,
+        # Anti-degeneration: presence_penalty is a flat one-time penalty and can't break a tight
+        # repeat loop (the ¥¥¡ byte-token collapse). frequency_penalty scales with how often a token
+        # has appeared, and repeat_penalty is llama.cpp's n-gram penalty — together they stop the loop
+        # from forming. (The degenerate-output guard in memory.py is the backstop if one slips through.)
+        "frequency_penalty": config.llm_frequency_penalty,
+        "repeat_penalty": config.llm_repeat_penalty,
         "stream": use_stream,
         # Reuse the KV of the unchanging prompt prefix (system + stable durable head) across ticks
         # instead of re-prefilling it every tick — llama.cpp's biggest latency/FLOP win. Pairs with

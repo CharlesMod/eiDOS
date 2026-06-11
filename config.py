@@ -27,6 +27,8 @@ class Config:
     llm_top_k: int = 20
     llm_min_p: float = 0.0
     llm_presence_penalty: float = 1.5
+    llm_frequency_penalty: float = 0.4   # scales with token count → breaks degenerate repeat loops
+    llm_repeat_penalty: float = 1.1      # llama.cpp n-gram repeat penalty (1.0 = off)
     llm_grammar_enabled: bool = True   # GBNF tick-output contract (BIBLE 2.1)
 
     # Tick
@@ -238,6 +240,8 @@ def load_config(path: str = "config.toml") -> Config:
         config.llm_top_k = llm.get("top_k", config.llm_top_k)
         config.llm_min_p = llm.get("min_p", config.llm_min_p)
         config.llm_presence_penalty = llm.get("presence_penalty", config.llm_presence_penalty)
+        config.llm_frequency_penalty = llm.get("frequency_penalty", config.llm_frequency_penalty)
+        config.llm_repeat_penalty = llm.get("repeat_penalty", config.llm_repeat_penalty)
         config.llm_grammar_enabled = llm.get("grammar_enabled", config.llm_grammar_enabled)
 
         tick = data.get("tick", {})
