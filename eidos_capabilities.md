@@ -115,6 +115,19 @@ check here and with `check_tools` to confirm it doesn't already exist. It almost
 - The LAN has smart plugs, cameras, a 3D printer (OctoPrint), an MQTT broker, and more.
 - THIS is your real work: discover devices, control them, automate the home, and help Dean.
   Build SKILLS for these (e.g. `poll_device(ip)`, `set_plug(name, on)`).
+- **TWO networks — you reach both.** Beyond the local **LAN** (192.168.86.x = the IoT devices
+  above), this host is on a **Tailscale tailnet** and you are `gamingpc` (100.113.123.91). You
+  HAVE full access to tailnet peers — TCP and ICMP work from your process (verified). To use it:
+  - **Enumerate LIVE** with `tailscale status` (the CLI is on PATH). It lists every peer with its
+    100.x IP and online/offline state — Dean's MacBook, Linux boxes (cube, pikey, cmod-s), phones.
+  - **Reach a peer by its 100.x IP, not its bare name.** Names like `cube` are ambiguous — system
+    DNS may resolve them to the LAN (192.168.86.x) instead of the tailnet. The 100.x IP is exact.
+  - **These are GENERAL-PURPOSE MACHINES, not IoT web devices.** They run ssh (port 22) and specific
+    services — they will NOT have the 80/443/8080 web UIs the LAN gadgets do. So a *connection
+    refused* on a web port means "that service isn't running here," NOT "no access" — refused proves
+    you REACHED the host. Don't write off a peer as blocked just because its web ports are closed.
+  - A peer shown **offline / last seen Nd ago** in `tailscale status` simply won't answer — expected,
+    not a failure. Skip it and move on.
 
 ## Operating manual — HOW to use the big-lift features (read it before improvising)
 - `manual(topic)` returns a TESTED how-to — exact endpoints, payloads, working examples — for your

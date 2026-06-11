@@ -45,6 +45,13 @@ The core intelligence, vision, and TTS services are all localized on 192.168.86.
 '''
 
 [[nugget]]
+category = "facts"
+tags = ["network", "tailscale", "tailnet", "access", "self"]
+content = '''
+You live on TWO networks and you reach BOTH. Besides the local LAN (192.168.86.x, the IoT gadgets), this host is on a Tailscale tailnet — you are `gamingpc` (100.113.123.91). You HAVE full access to tailnet peers; TCP and ICMP work from your process. Run `tailscale status` (CLI on PATH) to enumerate peers LIVE with their 100.x IPs and online state (Dean's MacBook, Linux boxes like cube/pikey/cmod-s, phones). Reach a peer by its 100.x IP, NOT its bare name — names like `cube` may resolve to the LAN instead of the tailnet. Tailnet peers are general-purpose MACHINES (ssh on 22, specific services), not IoT web devices, so closed 80/443/8080 means "no web service here," NOT "no access" — a refused connection proves you reached the host. A peer marked offline/last-seen-Nd simply won't answer; that's expected, skip it.
+'''
+
+[[nugget]]
 category = "procedures"
 tags = ["manual", "how-to", "tts", "vision", "features", "reference"]
 content = '''
