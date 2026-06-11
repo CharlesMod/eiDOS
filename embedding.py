@@ -339,6 +339,43 @@ def embed_and_store(config: Config, entry_ids: list[str] = None) -> int:
 # Semantic search
 # ---------------------------------------------------------------------------
 
+def embed_query(config: Config, text: str) -> Optional["np.ndarray"]:
+    """Embed ONE text → (D,) L2-normalised vector, or None. Mock-aware (uses the deterministic
+    hash embedder under config.mock_mode), fail-open (None if the real model isn't loaded). This is
+    the shared single-text primitive both recall surfaces (knowledge + episodes) embed queries with,
+    so the model is loaded once and reused — one capability, not two."""
+    if not (text or "").strip():
+        return None
+    if config.mock_mode:
+        return mock_embed_texts([text])[0]
+    vecs = embed_texts([text])
+    return None if vecs is None else vecs[0]
+
+
+def sync_knowledge_vectors(config: Config) -> int:
+    """Idempotent: embed any knowledge entries that don't yet have a stored vector, appending to the
+    store. Returns how many were newly embedded (0 when already in sync). Cheap to call at startup —
+    this is how the knowledge vectors get populated WITHOUT bolting an embed step into the dream
+    cycle. New entries learned mid-run get embedded on the next boot (recall degrades to BM25 for
+    them until then)."""
+    if not config.knowledge_embedding_enabled:
+        return 0
+    try:
+        from knowledge import load_index
+        index = load_index(config)
+        if not index:
+            return 0
+        _, stored_ids = _load_vectors(config)
+        have = set(stored_ids)
+        missing = [e["id"] for e in index if e.get("id") and e["id"] not in have]
+        if not missing:
+            return 0
+        return embed_and_store(config, entry_ids=missing)
+    except Exception as exc:  # noqa: BLE001 - best-effort
+        logger.warning("embedding: knowledge vector sync failed: %s", exc)
+        return 0
+
+
 def semantic_search(
     config: Config,
     query_text: str,

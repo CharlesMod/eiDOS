@@ -554,6 +554,21 @@ def run_loop(config: Config, persona=None, wal=None):
     except Exception as _se_e:  # noqa: BLE001 - breadcrumb is best-effort, never blocks boot
         logger.warning("applied_ok breadcrumb failed: %s", _se_e)
 
+    # --- Semantic recall substrate (phase 7a): load the embedding model ONCE here, before the loop,
+    #     and bring the knowledge vectors into sync. One load serves both recall surfaces (knowledge
+    #     hybrid + episode situation similarity). CPU-only (no VRAM contention with house-ai); cohost
+    #     keeps it resident. Fail-open: if anything here trips, recall degrades to lexical-only. ---
+    if config.knowledge_embedding_enabled and not config.mock_mode:
+        try:
+            import embedding as _emb
+            if _emb.model_available(config) and _emb.load_model(config):
+                _nsync = _emb.sync_knowledge_vectors(config)
+                print(f"{pfx} Embedding model loaded; synced {_nsync} knowledge vector(s)")
+            else:
+                logger.info("embedding enabled but model unavailable — recall stays lexical-only")
+        except Exception as _emb_e:  # noqa: BLE001 - semantic recall is additive, never blocks boot
+            logger.warning("embedding init failed: %s", _emb_e)
+
     # --- Wait for LLM health before entering tick loop (cold-boot safety) ---
     # Skipped in the isolated test env (EIDOS_NO_DASHBOARD): tests mock `complete`, so probing a
     # real LLM endpoint only adds multi-second urlopen timeouts (a port may be up but lack /health).

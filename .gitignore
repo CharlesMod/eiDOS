@@ -17,3 +17,6 @@ workspace.pi-backup/
 say.wav
 speak_output.wav
 tts_output_*.mp3
+
+# embedding model (90MB ONNX + tokenizer) — fetch with `python setup_embedding.py`, never commit
+models/

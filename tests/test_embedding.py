@@ -21,6 +21,8 @@ from embedding import (
     mock_embed_texts,
     embed_and_store,
     semantic_search,
+    embed_query,
+    sync_knowledge_vectors,
     _load_vectors,
     _save_vectors,
     model_available,
@@ -266,6 +268,106 @@ class TestModelAvailable(unittest.TestCase):
         config = Config()
         config.embedding_model_dir = "/nonexistent/path"
         self.assertFalse(model_available(config))
+
+
+class TestEmbedQuery(unittest.TestCase):
+    """The shared single-text primitive (phase 7a) — mock-aware, fail-open."""
+
+    def setUp(self):
+        self.config = Config()
+        self.config.mock_mode = True
+
+    def test_returns_unit_vector(self):
+        v = embed_query(self.config, "map the local network")
+        self.assertEqual(v.shape, (384,))
+        self.assertAlmostEqual(float(np.linalg.norm(v)), 1.0, places=5)
+
+    def test_empty_text_returns_none(self):
+        self.assertIsNone(embed_query(self.config, ""))
+        self.assertIsNone(embed_query(self.config, "   "))
+
+    def test_overlapping_text_more_similar(self):
+        a = embed_query(self.config, "scan the lan for hosts")
+        b = embed_query(self.config, "scan the lan for devices")  # shares 4/5 words
+        c = embed_query(self.config, "bake a chocolate cake")     # shares nothing
+        self.assertGreater(float(a @ b), float(a @ c))
+
+    def test_not_mock_no_model_returns_none(self):
+        self.config.mock_mode = False
+        self.config.embedding_model_dir = "/nonexistent/path"
+        self.assertIsNone(embed_query(self.config, "anything"))
+
+
+class TestSyncKnowledgeVectors(unittest.TestCase):
+    """Idempotent startup sync (phase 7a) — embeds only the entries lacking a vector."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.config = Config()
+        self.config.workspace_dir = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.config.workspace_dir)
+        self.config.mock_mode = True
+        self.config.knowledge_embedding_enabled = True
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _store(self, content, tags):
+        from knowledge import store_entry, rebuild_index, _invalidate_bm25_cache
+        store_entry(self.config, content, tags=tags, category="facts")
+        rebuild_index(self.config)
+        _invalidate_bm25_cache()
+
+    def test_sync_embeds_missing_then_noops(self):
+        self._store("pip needs --break-system-packages", ["pip"])
+        self._store("dht22 crc errors on long wires", ["dht22"])
+        first = sync_knowledge_vectors(self.config)
+        self.assertEqual(first, 2)              # both embedded
+        again = sync_knowledge_vectors(self.config)
+        self.assertEqual(again, 0)              # already in sync → no-op
+
+    def test_sync_only_new_entry(self):
+        self._store("first fact about solar panels", ["solar"])
+        sync_knowledge_vectors(self.config)
+        self._store("second fact about the thermostat", ["nest"])
+        self.assertEqual(sync_knowledge_vectors(self.config), 1)  # only the new one
+        _, ids = _load_vectors(self.config)
+        self.assertEqual(len(ids), 2)
+
+    def test_disabled_returns_zero(self):
+        self._store("a fact", ["x"])
+        self.config.knowledge_embedding_enabled = False
+        self.assertEqual(sync_knowledge_vectors(self.config), 0)
+
+
+class TestRRFBlend(unittest.TestCase):
+    """Reciprocal-rank fusion (phase 7a) — the hybrid BM25+semantic merge in context.py."""
+
+    def setUp(self):
+        import context
+        self._rrf = context._rrf_blend
+
+    def test_dedups_and_unions_by_id(self):
+        bm25 = [{"id": "a"}, {"id": "b"}]
+        sem = [{"id": "b"}, {"id": "c"}]
+        out = self._rrf(bm25, sem, top_k=10)
+        self.assertEqual({r["id"] for r in out}, {"a", "b", "c"})  # union, deduped
+
+    def test_agreed_item_ranks_first(self):
+        # 'b' is rank-0 in BM25 and rank-0 in semantic → highest fused score
+        bm25 = [{"id": "b"}, {"id": "a"}]
+        sem = [{"id": "b"}, {"id": "c"}]
+        out = self._rrf(bm25, sem, top_k=10)
+        self.assertEqual(out[0]["id"], "b")
+
+    def test_respects_top_k(self):
+        bm25 = [{"id": str(i)} for i in range(10)]
+        self.assertEqual(len(self._rrf(bm25, top_k=3)), 3)
+
+    def test_skips_idless_rows(self):
+        out = self._rrf([{"id": "a"}, {"no_id": 1}], top_k=10)
+        self.assertEqual([r["id"] for r in out], ["a"])
 
 
 if __name__ == "__main__":

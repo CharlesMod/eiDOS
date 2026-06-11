@@ -134,11 +134,39 @@ def _build_relevant_recall(config: Config, exclude_ids: set) -> str:
             break
     if not step:
         return ""
-    results = [r for r in search_bm25(config, step, top_k=config.knowledge_recall_top_k)
-               if r.get("id") not in exclude_ids]
+    # Hybrid retrieval (phase 7a, "BM25+semantic"): lexical BM25 catches exact term overlap,
+    # semantic catches the same MEANING in different words. When embeddings are live, fuse the two
+    # ranked lists (reciprocal-rank fusion); otherwise this is BM25-only, byte-for-byte as before.
+    bm25 = search_bm25(config, step, top_k=config.knowledge_recall_top_k)
+    merged = bm25
+    if config.knowledge_embedding_enabled:
+        try:
+            from embedding import semantic_search
+            sem = semantic_search(config, step, top_k=config.knowledge_recall_top_k)
+            if sem:
+                merged = _rrf_blend(bm25, sem, top_k=config.knowledge_recall_top_k)
+        except Exception:  # noqa: BLE001 - semantic is additive; never break BM25 recall
+            merged = bm25
+    results = [r for r in merged if r.get("id") not in exclude_ids]
     if not results:
         return ""
     return format_recalled(results, max_chars=max(300, config.context_intelligence_max_chars // 2))
+
+
+def _rrf_blend(*ranked_lists, top_k: int, k: int = 60) -> list:
+    """Reciprocal-rank fusion: combine ranked result lists by id, score = Σ 1/(k+rank). The standard
+    parameter-free way to blend two retrievers without calibrating their score scales against each
+    other. First-seen dict wins for the kept payload."""
+    score: dict = {}
+    keep: dict = {}
+    for lst in ranked_lists:
+        for rank, r in enumerate(lst):
+            rid = r.get("id")
+            if not rid:
+                continue
+            score[rid] = score.get(rid, 0.0) + 1.0 / (k + rank + 1)
+            keep.setdefault(rid, r)
+    return sorted(keep.values(), key=lambda r: -score[r["id"]])[:top_k]
 
 
 # ---------------------------------------------------------------------------

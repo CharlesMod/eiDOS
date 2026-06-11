@@ -135,8 +135,8 @@ enabled = true
 recall_top_k = 4
 dedup_threshold = 0.65
 recall_max_chars = 3000
-embedding_enabled = false
-embedding_cohost = false
+embedding_enabled = true
+embedding_cohost = true
 embedding_model_dir = "models/all-MiniLM-L6-v2"
 
 [paths]
