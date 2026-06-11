@@ -49,6 +49,12 @@ FORBIDDEN_BUILTINS = {"eval", "exec", "compile", "__import__"}
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
 _TRUST_MIN_USES = 5
 _TRUST_MIN_RATE = 0.8
+_QUARANTINE_MIN_USES = 5     # this many uses with ZERO successes → quarantined (auto-disabled)
+_DEMOTE_RATE = 0.5           # a trusted skill's active version under this rate loses trust
+
+# Statuses that mean "a live, callable skill" (brief/dup-guard/etc. must include BOTH —
+# filtering on just "active" made trusted skills invisible, the worst possible incentive).
+_LIVE_STATUSES = ("active", "trusted")
 
 
 # ---------------------------------------------------------------------------
@@ -259,10 +265,29 @@ def _record_invocation(config: Config, name: str, ok: bool) -> None:
         ent["invocations"] = ent.get("invocations", 0) + 1
         if ok:
             ent["successes"] = ent.get("successes", 0) + 1
-        inv, suc = ent["invocations"], ent.get("successes", 0)
-        if ent.get("status") == "active" and inv >= _TRUST_MIN_USES and (suc / inv) >= _TRUST_MIN_RATE:
+        # Per-VERSION stats: trust/quarantine judge the code that is actually running. Lifetime
+        # totals survive edits, so a once-good skill kept its trusted badge through a broken
+        # rewrite, and a fixed skill kept dragging its broken ancestors' zeros.
+        ver = str(ent.get("active_version") or "?")
+        vs = ent.setdefault("version_stats", {}).setdefault(ver, {"invocations": 0, "successes": 0})
+        vs["invocations"] += 1
+        if ok:
+            vs["successes"] += 1
+        inv, suc = vs["invocations"], vs["successes"]
+        status = ent.get("status")
+        if status in _LIVE_STATUSES and inv >= _QUARANTINE_MIN_USES and suc == 0:
+            # Dead on arrival: N uses, zero successes — stop offering it as a tool. The model
+            # can revive it with edit_skill (which re-activates) or rollback_skill.
+            ent["status"] = "quarantined"
+            ent["enabled"] = False
+            TOOLS.pop(name, None)
+            logger.warning("skill '%s' v%s quarantined (0/%d successes)", name, ver, inv)
+        elif status == "active" and inv >= _TRUST_MIN_USES and (suc / inv) >= _TRUST_MIN_RATE:
             ent["status"] = "trusted"
-            logger.info("skill '%s' promoted to trusted (%d/%d)", name, suc, inv)
+            logger.info("skill '%s' promoted to trusted (%d/%d on v%s)", name, suc, inv, ver)
+        elif status == "trusted" and inv >= _TRUST_MIN_USES and (suc / inv) < _DEMOTE_RATE:
+            ent["status"] = "active"
+            logger.info("skill '%s' demoted from trusted (%d/%d on v%s)", name, suc, inv, ver)
         _save_manifest(config, m)
     except Exception as e:  # noqa: BLE001
         logger.warning("could not record invocation for %s: %s", name, e)
@@ -281,8 +306,32 @@ def _activate(config: Config, name: str, version: str) -> tuple[bool, str]:
     return True, "active"
 
 
+def prune_dead_skills(config: Config) -> list[str]:
+    """Quarantine skills whose LIFETIME record is N+ uses with zero successes (catches
+    pre-existing dead weight from before per-version tracking). Returns names quarantined."""
+    out: list[str] = []
+    try:
+        m = _load_manifest(config)
+        for name, ent in m.get("skills", {}).items():
+            if (ent.get("status") in _LIVE_STATUSES
+                    and ent.get("invocations", 0) >= _QUARANTINE_MIN_USES
+                    and ent.get("successes", 0) == 0):
+                ent["status"] = "quarantined"
+                ent["enabled"] = False
+                ent["updated"] = _now()
+                TOOLS.pop(name, None)
+                out.append(name)
+        if out:
+            _save_manifest(config, m)
+            logger.warning("quarantined %d dead skill(s): %s", len(out), ", ".join(out))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("prune_dead_skills failed: %s", e)
+    return out
+
+
 def load_active_skills(config: Config) -> list[str]:
     """Hot-load every enabled skill at startup. Returns names loaded."""
+    prune_dead_skills(config)   # sweep dead weight first so it never reaches the registry
     loaded: list[str] = []
     m = _load_manifest(config)
     for name, ent in m.get("skills", {}).items():
@@ -328,7 +377,7 @@ def _similar_skills(name: str, skills: dict) -> list:
         return []
     out = []
     for ex, ent in skills.items():
-        if ex == name or ent.get("status") != "active":
+        if ex == name or ent.get("status") not in _LIVE_STATUSES:
             continue
         if _skill_subject(ex) & subj:
             out.append(ex)
@@ -339,7 +388,9 @@ def skills_brief(config: Config, max_n: int = 45) -> str:
     """Compact, recency-sorted list of active skill names for per-tick context awareness."""
     m = _load_manifest(config)
     sk = m.get("skills", {})
-    names = [n for n, e in sk.items() if e.get("status") == "active"]
+    # Both active AND trusted — filtering on just "active" made a skill DISAPPEAR from the
+    # per-tick brief the moment it earned trust (so the best skills were the invisible ones).
+    names = [n for n, e in sk.items() if e.get("status") in _LIVE_STATUSES]
     if not names:
         return ""
     names.sort(key=lambda n: sk[n].get("updated", ""), reverse=True)
@@ -426,6 +477,9 @@ def edit_skill(config: Config, name: str, code: str,
     ent["versions"] = sorted(set(ent.get("versions", []) + [version]))
     ent["active_version"] = version
     ent["enabled"] = True
+    # New code = clean slate: a quarantined skill comes back to life, and a trusted one
+    # must RE-EARN trust on the new version (trust used to survive broken rewrites).
+    ent["status"] = "active"
     ent["updated"] = _now()
     if description is not None:
         ent["description"] = description
@@ -450,6 +504,8 @@ def rollback_skill(config: Config, name: str, version: str) -> dict:
         return {"success": False, "errors": [msg]}
     ent["active_version"] = version
     ent["enabled"] = True
+    if ent.get("status") == "quarantined":
+        ent["status"] = "active"     # rolling back to a known-better version revives it
     ent["updated"] = _now()
     _save_manifest(config, m)
     return {"success": True, "skill": name, "version": version,
@@ -462,12 +518,17 @@ def list_skills(config: Config) -> dict:
     skills = {}
     for name, ent in m.get("skills", {}).items():
         inv, suc = ent.get("invocations", 0), ent.get("successes", 0)
+        ver = str(ent.get("active_version") or "?")
+        vs = (ent.get("version_stats") or {}).get(ver, {})
+        v_inv, v_suc = vs.get("invocations", 0), vs.get("successes", 0)
         skills[name] = {
             "description": ent.get("description", ""),
             "version": ent.get("active_version"),
             "status": ent.get("status"),
             "enabled": ent.get("enabled"),
             "uses": inv, "success_rate": round(suc / inv, 2) if inv else None,
+            "active_version_uses": v_inv,
+            "active_version_success_rate": round(v_suc / v_inv, 2) if v_inv else None,
         }
     builtins = sorted(n for n in RESERVED_NAMES if n not in {
         "create_skill", "edit_skill", "list_skills", "rollback_skill"})
