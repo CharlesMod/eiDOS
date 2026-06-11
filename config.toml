@@ -133,6 +133,11 @@ git_checkpoint_keep = 30
 self_edit_enabled = true
 self_edit_max_proposal_bytes = 200000
 self_edit_health_probe_s = 90
+# Stale-heartbeat watchdog: if eiDOS is alive but hasn't completed a tick (heartbeat frozen) for
+# this long, it's wedged (hung dream / persistent LLM timeout) — the watchdog restarts it. The
+# heartbeat only advances on a SUCCESSFUL tick, and the LLM timeout is 300s, so 600s clears a
+# couple of transient failures but catches a real wedge. Bounded to 3 restarts / 30 min.
+eidos_stuck_threshold_s = 600
 
 [knowledge]
 enabled = true

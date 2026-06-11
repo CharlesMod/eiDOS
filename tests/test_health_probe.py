@@ -37,6 +37,52 @@ def _set_heartbeat(config, ts):
     (config.workspace / "heartbeat.json").write_text(json.dumps({"ts": ts}))
 
 
+class TestStaleHeartbeatDetection(unittest.TestCase):
+    """_eidos_is_stuck: alive-but-not-ticking detection (the overnight-wedge fix)."""
+
+    def setUp(self):
+        self.config = _cfg()
+        self.config.eidos_stuck_threshold_s = 600
+
+    def _spawn(self, age):
+        (self.config.workspace / "eidos_spawn.ts").write_text(str(time.time() - age))
+
+    def test_fresh_heartbeat_not_stuck(self):
+        _set_heartbeat(self.config, time.time() - 10)
+        self._spawn(700)
+        self.assertFalse(dashboard._eidos_is_stuck(self.config)[0])
+
+    def test_wedged_is_stuck(self):
+        _set_heartbeat(self.config, time.time() - 900)  # no successful tick in 15 min
+        self._spawn(900)
+        stuck, stale = dashboard._eidos_is_stuck(self.config)
+        self.assertTrue(stuck)
+        self.assertGreater(stale, 600)
+
+    def test_still_booting_not_stuck(self):
+        # old pre-restart heartbeat but a RECENT spawn → boot grace, not a wedge
+        _set_heartbeat(self.config, time.time() - 5000)
+        self._spawn(30)
+        self.assertFalse(dashboard._eidos_is_stuck(self.config)[0])
+
+    def test_paused_never_stuck(self):
+        _set_heartbeat(self.config, time.time() - 900)
+        self._spawn(900)
+        (self.config.workspace / "paused").write_text("x")
+        self.assertFalse(dashboard._eidos_is_stuck(self.config)[0])
+
+    def test_threshold_zero_disables(self):
+        self.config.eidos_stuck_threshold_s = 0
+        _set_heartbeat(self.config, time.time() - 9000)
+        self._spawn(9000)
+        self.assertFalse(dashboard._eidos_is_stuck(self.config)[0])
+
+    def test_spawn_records_floor(self):
+        # _spawn_eidos writes eidos_spawn.ts; _eidos_spawn_ts reads it back
+        (self.config.workspace / "eidos_spawn.ts").write_text(str(123456.0))
+        self.assertEqual(dashboard._eidos_spawn_ts(self.config), 123456.0)
+
+
 class TestMarkerLifecycle(unittest.TestCase):
 
     def setUp(self):

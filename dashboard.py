@@ -880,6 +880,12 @@ def _spawn_eidos(config):
         except OSError:
             pass
     (config.workspace / "eidos.pid").write_text(str(proc.pid))
+    # Floor for the stale-heartbeat watchdog: a fresh process hasn't written a heartbeat yet, so the
+    # OLD heartbeat ts is stale — record spawn time so we don't flag a still-booting eidos as wedged.
+    try:
+        (config.workspace / "eidos_spawn.ts").write_text(str(time.time()))
+    except OSError:
+        pass
     _child_died.clear()
     threading.Thread(target=_watch_child, args=(proc,), daemon=True,
                          name="eidos-death-watch").start()
@@ -1003,6 +1009,29 @@ def _current_heartbeat_ts(config) -> float:
         return 0.0
 
 
+def _eidos_spawn_ts(config) -> float:
+    """When eidos was last spawned — the floor for the stale-heartbeat check, so a freshly-booting
+    process (heartbeat not yet written) isn't mistaken for a wedged one."""
+    try:
+        return float((config.workspace / "eidos_spawn.ts").read_text().strip() or 0)
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _eidos_is_stuck(config, now: float = None) -> tuple:
+    """(stuck, stale_for_seconds): True when eidos is ALIVE but not TICKING — its heartbeat (which
+    only advances on a SUCCESSFUL tick) has been frozen longer than eidos_stuck_threshold_s. Floored
+    by the spawn time so a still-booting eidos isn't flagged, and skipped while paused (a paused eidos
+    legitimately doesn't tick). Pure read; the watchdog decides what to do with it."""
+    import time as _t
+    thr = getattr(config, "eidos_stuck_threshold_s", 600)
+    if thr <= 0 or (config.workspace / "paused").exists():
+        return False, 0.0
+    last_progress = max(_current_heartbeat_ts(config), _eidos_spawn_ts(config))
+    stale_for = (now or _t.time()) - last_progress
+    return (stale_for > thr), stale_for
+
+
 def _selfedit_apply_endpoint(config, pid):
     """Operator-approved self-edit apply: checkpoint+write+commit, then restart eidos paused.
     Arms the HEALTH PROBE (a pending_apply marker) before restarting, so the watchdog can
@@ -1108,8 +1137,9 @@ def _watchdog_loop(config):
     Distinguishes an intentional Stop (eidos.should_run removed) from a crash, and backs
     off if it crash-loops so it never thrashes.
     """
-    import time
+    import time, os, subprocess
     restarts = []
+    stuck_restarts = []   # timestamps of stale-heartbeat restarts (bounded so an external cause can't thrash)
     while True:
         try:
             # Event-driven (phase 4b): a spawned child's death fires _child_died instantly;
@@ -1135,6 +1165,39 @@ def _watchdog_loop(config):
                     _selfedit_probe(config)
                 except Exception as _pe:  # noqa: BLE001 - probe must never crash the watchdog
                     _watchdog_event(config, f"health-probe error: {_pe}")
+                # STALE-HEARTBEAT watchdog: alive != ticking. If eidos should be running and isn't
+                # paused, but its heartbeat hasn't advanced in eidos_stuck_threshold_s, it's WEDGED —
+                # a hung dream, or the LLM persistently timing out (the heartbeat only advances on a
+                # SUCCESSFUL tick). Restart it: a fresh eidos recovers from the WAL and, if the LLM is
+                # the cause, cleanly waits for /health instead of staying stuck. Bounded (3/30min) so
+                # a persistent external cause (LLM down/slow) can't make it thrash.
+                try:
+                    _now = time.time()
+                    _stuck, _stale = _eidos_is_stuck(config, _now)
+                    if _stuck:
+                        stuck_restarts = [t for t in stuck_restarts if _now - t < 1800]
+                        if len(stuck_restarts) < 3:
+                            stuck_restarts.append(_now)
+                            _watchdog_note(config,
+                                f"eiDOS is alive but hasn't completed a tick in {int(_stale)}s — wedged "
+                                f"(a hung dream, or the LLM persistently timing out). Auto-restarting you; "
+                                f"recover from the WAL and note what stalled so it doesn't recur.")
+                            _watchdog_event(config, f"STALE-RESTART (heartbeat {int(_stale)}s old, pid {pid})")
+                            if os.name == "nt":
+                                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15)
+                            else:
+                                subprocess.run(["kill", "-9", str(pid)], capture_output=True, timeout=15)
+                            new_pid = _spawn_eidos(config)
+                            _child_died.clear(); _pid_cache.clear()
+                            _watchdog_event(config, f"stale-restart respawned pid {new_pid}")
+                            print(f"[watchdog] STALE-RESTART: killed wedged {pid}, respawned {new_pid} (stale {int(_stale)}s)")
+                            continue
+                        elif len(stuck_restarts) == 3:
+                            stuck_restarts.append(_now)  # log the stand-down once, then go quiet for the window
+                            _watchdog_event(config, "STALE-RESTART bound hit (3/30min) — persistent wedge, "
+                                            "likely external (LLM down/slow). Holding; eidos waits for /health.")
+                except Exception as _se:  # noqa: BLE001 - the stale check must never crash the watchdog
+                    _watchdog_event(config, f"stale-check error: {_se}")
                 # Healthy. If we auto-rolled-back earlier and eidos has since been stable
                 # for >10 min, clear the guard so a *future* unrelated break can recover too.
                 try:

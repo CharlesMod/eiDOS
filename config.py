@@ -146,6 +146,7 @@ class Config:
     self_edit_enabled: bool = False            # gated self-code-editing (opt-in)
     self_edit_max_proposal_bytes: int = 200000
     self_edit_health_probe_s: int = 90         # post-restart health window before auto-rollback
+    eidos_stuck_threshold_s: int = 600         # watchdog restarts eidos if alive but not ticking this long
     dashboard_token: str = ""                  # shared token gating state-changing POSTs ('' = off)
 
     @property
@@ -330,6 +331,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.self_edit_enabled = si.get("self_edit_enabled", config.self_edit_enabled)
         config.self_edit_max_proposal_bytes = si.get("self_edit_max_proposal_bytes", config.self_edit_max_proposal_bytes)
         config.self_edit_health_probe_s = si.get("self_edit_health_probe_s", config.self_edit_health_probe_s)
+        config.eidos_stuck_threshold_s = si.get("eidos_stuck_threshold_s", config.eidos_stuck_threshold_s)
 
         knowledge = data.get("knowledge", {})
         config.knowledge_enabled = knowledge.get("enabled", config.knowledge_enabled)
