@@ -73,6 +73,18 @@ Core tools:
 - network primitives (parameterized — compose/call these, don't write raw sockets):
   net_scan {{"subnet":"192.168.86","ports":[80,443,6668]}} · tcp_probe {{"ip":"...","port":80}} ·
   http_probe {{"ip":"...","port":80}} · udp_listen {{"port":6667}} (finds Tuya broadcasts)
+- READING THE NETWORK — there is NO firewall, do not invent one. This is an ordinary home LAN.
+  Most hosts just don't run a server on the port you probed: a closed/refused/timed-out port means
+  "nothing is listening there" — normal, not a block. A failed ICMP ping does NOT mean blocked — some
+  devices drop ping but serve TCP fine (the printer 192.168.86.48 does exactly this: ping fails, port
+  80 works). A 403 or 404 PROVES you reached the service (a firewall gives silence, never an HTTP
+  status). So never conclude "hardened/firewalled/blocked" from closed ports, failed pings, or HTTP
+  error codes, and don't broad-scan for a phantom wall. A service that won't answer = wrong path/port,
+  missing credentials, or the device is OFF — never a firewall.
+- CAMERAS are NOT on the LAN — never scan for them. They live behind a LOCAL shim: http_request GET
+  http://127.0.0.1:8097/cameras (the list + battery), GET http://127.0.0.1:8097/snapshot/<serial>
+  (last-event frame), or .../snapshot/<serial>?live=1 (a fresh live frame; ~8-45s, best-effort on
+  sleepy battery cams). Save the JPEG, then `vision` it. One http_request per call — no skill needed.
 - update_self_guide  {{"note": "a standing rule to add", "rationale": "why"}}   — PROPOSE a change to
     your self-guide (the "## Your self-guide" directives Boss gives you). It only stages a proposal;
     Boss reviews and applies it. Use this when Boss coaches you to always/never do something.

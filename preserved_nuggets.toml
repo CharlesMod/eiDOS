@@ -174,14 +174,14 @@ Use the built-in network PRIMITIVES instead of writing raw socket code: `net_sca
 category = "facts"
 tags = ["devices", "network", "octoprint", "bigprinter", "mqtt", "192.168.86.48", "192.168.86.57"]
 content = '''
-Known LAN device map (discovered over prior runs — build on it, don't re-scan): 192.168.86.48 = the OctoPrint 3D printer ("BigPrinter"), web UI on port 80 (443 also open; 5000/8080 closed). The hostname BigPrinter.lan does NOT resolve via DNS — always use the IP. 192.168.86.57 = a gateway host with an MQTT broker on port 8883 (reachable, but subscription needs credentials; it is likely Home Assistant/Mosquitto, NOT a Tuya device). 192.168.86.214 answers ICMP ping but rejects TCP on 80/8080/554 — a hardened or headless device, not a web thing.
+Known LAN device map (discovered over prior runs — build on it, don't re-scan): 192.168.86.48 = the OctoPrint 3D printer ("BigPrinter"), web UI on port 80 (443 also open; 5000/8080 closed). The hostname BigPrinter.lan does NOT resolve via DNS — always use the IP. 192.168.86.57 = a gateway host with an MQTT broker on port 8883 (reachable, but subscription needs credentials; it is likely Home Assistant/Mosquitto, NOT a Tuya device). 192.168.86.214 answers ICMP ping and its web service on port 5000 responds with HTTP 403 (so it IS reachable — a 403 proves you reached it; it just isn't an open management UI). It has no service on 80/8080/554. Not "firewalled" — just a host running one authenticated service.
 '''
 
 [[nugget]]
-category = "errors"
-tags = ["network", "firewall", "scanning", "hardening", "lesson"]
+category = "facts"
+tags = ["network", "firewall", "reality", "scanning", "lesson"]
 content = '''
-Lesson learned the hard way: this LAN is HARDENED — broad subnet sweeps and standard port probes (80/443/8080/554/5700) get silently dropped by the firewall on most hosts. Re-scanning does not change this; entire runs were burned re-probing the same walls. When a probe class fails twice, STOP scanning that way: work with the known device map, listen passively (udp_listen for Tuya broadcasts, arp -a for neighbors), and park credential/manifest-gated work with objective_block (wake = 'Boss provides manifest/credentials'). A blocker that appears under MULTIPLE objectives is environmental — fix or escalate the root cause once; switching objectives will not route around it.
+There is NO firewall blocking you — this is an ordinary home LAN, verified. A past version of you wasted whole runs blaming a "hardened firewall"; that diagnosis was WRONG. The truth about reading the network: (1) Most hosts simply don't run a server on the port you probed — a closed/refused/timed-out port means "nothing is listening there," which is normal, not a block. (2) ICMP ping failing does NOT mean a host is blocked — some devices drop ping but serve TCP fine (the 3D printer 192.168.86.48 is exactly this: ping fails, port 80 works). (3) A 403 or 404 PROVES you reached the service — a firewall gives silence/timeouts, never an HTTP status. So never conclude "hardened/blocked/firewall" from closed ports, failed pings, or HTTP error codes, and don't broad-scan hunting a phantom wall. If a specific service won't answer, the cause is wrong path/port/credentials or the device being off — not a firewall.
 '''
 
 [[nugget]]
