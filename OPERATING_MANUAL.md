@@ -23,31 +23,12 @@ wavs, you do NOT handle playback. Use it to be HEARD; use `<reply>` for silent t
 - If a clip doesn't play, it's almost always that Boss hasn't clicked "🔊 Voice: on" yet — not your problem
   to solve from this side.
 
-The rest of this section is the raw pipeline, for reference only. Your voice is the Chatterbox TTS server
-(:8004) behind a GLaDOS FX proxy (:8005); the dashboard now streams it through a live ffmpeg FX pipe.
-
-- **Endpoint:** `POST http://127.0.0.1:8005/v1/audio/speech`
-  (`:8005` = full GLaDOS effect — use this. `:8004` = the raw clone with no effects.)
-- **Body (JSON):**
-  ```json
-  {"model":"chatterbox","input":"What to say.","voice":"glados.wav","response_format":"wav"}
-  ```
-- **Returns:** `audio/wav` bytes (~150 KB for a short line, HTTP 200).
-- **The three gotchas that make it fail (this is why it's hard):**
-  1. The path is **`/v1/audio/speech`**. POSTing to the root `/` returns **405 Method Not Allowed**.
-  2. `voice` must be the filename **`"glados.wav"`** (a file in `reference_audio/`), NOT `"glados"`
-     → that returns **404 "Voice file not found"**. (`glados_golden.wav` also works.)
-  3. `response_format` must be **`"wav"`**. `"mp3"`/`"opus"` return **500 "Failed to encode audio"**.
-- **Easiest — ONE tool call, no skill, no `requests`:** use the built-in `http_request` tool:
-  ```
-  http_request {"method":"POST","url":"http://127.0.0.1:8005/v1/audio/speech",
-    "json":{"model":"chatterbox","input":"<what to say>","voice":"glados.wav","response_format":"wav"},
-    "save":"say.wav"}
-  ```
-  → it POSTs the JSON, gets the `audio/wav` back, and saves it to `workspace/say.wav` (binary responses are
-  auto-saved). Saving the .wav confirms it worked; playback to a speaker is a separate concern.
-- To make it a named `speak(text)` skill, have the skill call `http_request` internally — **never** `import
-  requests` in a skill (the skill runner can lack it; `http_request` is stdlib and always works).
+**Under the hood (reference only — you never call this; `speak` does it for you):** your voice is the
+**EidosVoice** service (:8098). It generates each line on demand through Chatterbox TTS (:8004) and a live
+GLaDOS ffmpeg FX pipe, then streams the audio to the browser. There is nothing to POST, warm up, or verify
+from your side — `speak` is the only interface, and it also **mirrors every spoken line into the operator
+chat** so Boss reads what you said as well as hears it. Do NOT POST to a raw TTS endpoint and do NOT wrap
+one in a skill — that re-creates the slow path AND skips the chat log.
 
 ---
 

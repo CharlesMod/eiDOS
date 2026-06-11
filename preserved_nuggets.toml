@@ -34,7 +34,7 @@ Your mind runs on the local model 'house-ai' = Gemma-4-12B, served by llama.cpp 
 category = "facts"
 tags = ["services", "ports", "infrastructure"]
 content = '''
-House services already running as Windows nssm services (never start or install them): house-ai LLM :8081; OpenWebUI :8080 (a human chat web UI, NOT a completion API — never POST completions there); Chatterbox/GLaDOS TTS :8004 (+ FX proxy :8005); your mind dashboard :8099; live token/GPU monitor :9100.
+House services already running as Windows nssm services (never start or install them): house-ai LLM :8081; OpenWebUI :8080 (a human chat web UI, NOT a completion API — never POST completions there); Chatterbox/GLaDOS TTS :8004 (+ FX proxy :8005); your mind dashboard :8099; your voice service :8098 (the `speak` tool talks to it — you never call it directly); live token/GPU monitor :9100.
 '''
 
 [[nugget]]
@@ -48,7 +48,7 @@ The core intelligence, vision, and TTS services are all localized on 192.168.86.
 category = "procedures"
 tags = ["manual", "how-to", "tts", "vision", "features", "reference"]
 content = '''
-You have an OPERATING MANUAL: call the `manual` tool with a topic (tts, vision, ask_ai, network, devices, cpu) for TESTED recipes — exact endpoints, payloads, working examples — for your big-lift features. READ the relevant section BEFORE trying to use a feature; do NOT reverse-engineer access methods or you'll burn ticks on 405/404/500 errors. Example you'd never guess on your own: to SPEAK, POST to http://127.0.0.1:8005/v1/audio/speech with the voice field set to glados.wav and response_format set to wav (NOT the root path, and NOT mp3 — both fail). Distill what you use into memorize.
+You have an OPERATING MANUAL: call the `manual` tool with a topic (tts, vision, ask_ai, network, devices, cpu) for TESTED recipes — exact endpoints, payloads, working examples — for your big-lift features. READ the relevant section BEFORE trying to use a feature; do NOT reverse-engineer access methods or you'll burn ticks on 405/404/500 errors. (To SPEAK you don't need the manual or any endpoint — just use the `speak` tool; it streams your GLaDOS voice AND mirrors the line into the operator chat Boss reads. NEVER POST to a raw TTS endpoint to talk — that bypasses the chat log.) Distill what you use into memorize.
 '''
 
 [[nugget]]
@@ -167,5 +167,5 @@ Use the built-in network PRIMITIVES instead of writing raw socket code: `net_sca
 category = "procedures"
 tags = ["http", "requests", "post", "api", "tts", "tool"]
 content = '''
-For ANY HTTP — GET, POST, PUT, JSON bodies, headers, or downloading binary (audio/images) — use the built-in `http_request` tool (aliases `fetch` / `http`), NOT the `requests` library. It is stdlib-based and always works; `import requests` inside a skill often fails because the skill runner lacks it (a trap you keep hitting). http_request returns JSON/text inline and auto-saves binary responses to a file. Example, speaking aloud in one call: http_request with method POST, url http://127.0.0.1:8005/v1/audio/speech, json model=chatterbox input=<text> voice=glados.wav response_format=wav, save=say.wav. A plain GET is just url=...
+For ANY HTTP — GET, POST, PUT, JSON bodies, headers, or downloading binary (audio/images) — use the built-in `http_request` tool (aliases `fetch` / `http`), NOT the `requests` library. It is stdlib-based and always works; `import requests` inside a skill often fails because the skill runner lacks it (a trap you keep hitting). http_request returns JSON/text inline and auto-saves binary responses to a file. Example, downloading a camera snapshot in one call: http_request with method GET, url http://<device-ip>/snapshot.jpg, save=snap.jpg. (To talk, use the `speak` tool — NOT http_request to a TTS endpoint; speak also logs to the operator chat.) A plain GET is just url=...
 '''

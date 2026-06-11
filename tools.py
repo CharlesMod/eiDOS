@@ -1496,6 +1496,16 @@ def tool_speak(args: dict, config: Config) -> ToolResult:
     if not text:
         return ToolResult(output="Error: provide 'text' — what to say out loud.",
                           full_output_path=None, success=False, duration_s=0)
+    # Mirror every spoken call-out into the operator chat (chat_replies.jsonl) so Boss SEES what was
+    # said aloud, not just hears it — voice and chat should never diverge. Marked spoken=True so the
+    # UI tags it with a speaker icon. Best-effort + before the POST, so it logs even if voice is down.
+    try:
+        rec = _json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                           "text": text[:2000], "spoken": True})
+        with open(config.workspace / "chat_replies.jsonl", "a", encoding="utf-8") as _cf:
+            _cf.write(rec + "\n")
+    except Exception:  # noqa: BLE001 - chat logging is best-effort; never block the voice
+        pass
     sid = str(int(time.time() * 1000))
     _vport = getattr(config, "voice_port", 8098)   # voice is its own service now (phase 8.3)
     req = urllib.request.Request(f"http://127.0.0.1:{_vport}/api/speech/say",

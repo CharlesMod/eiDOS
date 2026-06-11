@@ -337,6 +337,7 @@ def build_chat(config: Config) -> dict:
             "ts": r.get("ts", ""),
             "text": r.get("text", ""),
             "status": "delivered",
+            "spoken": bool(r.get("spoken", False)),  # spoken aloud (speak tool) vs silent <reply>
         })
 
     messages.sort(key=lambda m: m.get("ts", ""))

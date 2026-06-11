@@ -45,6 +45,27 @@ class TestTools(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("BLOCKED", result.output)
 
+    def test_speak_logs_to_operator_chat(self):
+        # Every spoken call-out must also appear in the operator chat (chat_replies.jsonl), marked
+        # spoken=True — voice and chat should never diverge. Logged BEFORE the voice POST, so a
+        # closed voice port doesn't prevent the chat entry.
+        from tools import tool_speak
+        self.config.voice_port = 9  # closed -> POST fails fast; chat-log happens regardless
+        res = tool_speak({"text": "Cutover complete, Boss."}, self.config)
+        self.assertTrue(res.success)
+        rp = self.config.workspace / "chat_replies.jsonl"
+        self.assertTrue(rp.exists())
+        entries = [json.loads(ln) for ln in rp.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["text"], "Cutover complete, Boss.")
+        self.assertTrue(entries[0]["spoken"])
+
+    def test_speak_empty_no_chat_entry(self):
+        from tools import tool_speak
+        res = tool_speak({"text": "   "}, self.config)
+        self.assertFalse(res.success)
+        self.assertFalse((self.config.workspace / "chat_replies.jsonl").exists())
+
     def test_bash_no_cmd(self):
         result = tool_bash({}, self.config)
         self.assertFalse(result.success)

@@ -1467,7 +1467,7 @@ function renderChat(messages) {
     }
     el.innerHTML = messages.map(m => {
         let dir = m.direction === 'outgoing' ? 'outgoing' : 'incoming';
-        let label = dir === 'outgoing' ? 'You \u2192' : '\u2190 eiDOS';
+        let label = dir === 'outgoing' ? 'You \u2192' : (m.spoken ? '\ud83d\udd0a eiDOS \u00b7 spoke aloud' : '\u2190 eiDOS');
         let stCls = m.status === 'delivered' ? 'chat-status-delivered' : 'chat-status-pending';
         let stTxt = m.status === 'delivered' ? '\u2713 delivered' : '\u25cc pending';
         let ts = m.ts || '';
