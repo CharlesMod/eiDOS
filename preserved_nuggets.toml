@@ -193,6 +193,13 @@ Platform pathing facts that repeatedly caused 'file not found' confusion: your s
 
 [[nugget]]
 category = "procedures"
+tags = ["cameras", "eufy", "vision", "motion", "snapshot", "security", "house"]
+content = '''
+You have eyes on the house through three Eufy cameras, reached via a local HTTP shim at http://127.0.0.1:8097 (use your `http_request` tool — never a raw socket). Cameras: "Chicken Coop" (serial T813452025150F66), "Garage" (T8170T1024492B50), "Living Room" (T8W11P4024210FC0). Endpoints: GET /cameras (list + battery + motion state), GET /snapshot/<serial> (saves a current JPEG — then look at it with your vision tool), GET /events/recent. These are battery/solar cams: a snapshot is FRESH right after a motion event but goes stale between events (it is the last event frame, not a live view), so snapshot in RESPONSE to an event. When motion or a person is detected, the shim wakes you with a "[SENSOR · camera]" note (that is a sensor event, NOT a message from Boss): fetch a fresh frame, look at it, and SPEAK one short line ONLY if the scene is genuinely notable (a person at an odd hour, someone unfamiliar, anything Boss would want flagged) — otherwise just note what you saw and carry on. Do NOT narrate routine activity, and do NOT build your own camera/TTS skill — the shim + your vision + `speak` are all you need.
+'''
+
+[[nugget]]
+category = "procedures"
 tags = ["http", "requests", "post", "api", "tts", "tool"]
 content = '''
 For ANY HTTP — GET, POST, PUT, JSON bodies, headers, or downloading binary (audio/images) — use the built-in `http_request` tool (aliases `fetch` / `http`), NOT the `requests` library. It is stdlib-based and always works; `import requests` inside a skill often fails because the skill runner lacks it (a trap you keep hitting). http_request returns JSON/text inline and auto-saves binary responses to a file. Example, downloading a camera snapshot in one call: http_request with method GET, url http://<device-ip>/snapshot.jpg, save=snap.jpg. (To talk, use the `speak` tool — NOT http_request to a TTS endpoint; speak also logs to the operator chat.) A plain GET is just url=...
