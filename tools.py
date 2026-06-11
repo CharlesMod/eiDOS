@@ -1496,14 +1496,12 @@ def tool_speak(args: dict, config: Config) -> ToolResult:
     if not text:
         return ToolResult(output="Error: provide 'text' — what to say out loud.",
                           full_output_path=None, success=False, duration_s=0)
-    # Mirror every spoken call-out into the operator chat (chat_replies.jsonl) so Boss SEES what was
-    # said aloud, not just hears it — voice and chat should never diverge. Marked spoken=True so the
-    # UI tags it with a speaker icon. Best-effort + before the POST, so it logs even if voice is down.
+    # Mirror every spoken call-out into the operator chat so Boss SEES what was said aloud, not just
+    # hears it — voice and chat should never diverge. append_chat_line dedups against a same-tick
+    # <reply> of the same line, so reply-and-speak shows as ONE entry (marked spoken), never a dup.
     try:
-        rec = _json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                           "text": text[:2000], "spoken": True})
-        with open(config.workspace / "chat_replies.jsonl", "a", encoding="utf-8") as _cf:
-            _cf.write(rec + "\n")
+        from memory import append_chat_line
+        append_chat_line(config, text, spoken=True)
     except Exception:  # noqa: BLE001 - chat logging is best-effort; never block the voice
         pass
     sid = str(int(time.time() * 1000))

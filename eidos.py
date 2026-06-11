@@ -127,15 +127,10 @@ def _pfx(persona, config):
 
 
 def _write_chat_reply(config: Config, tick_number: int, reply_text: str):
-    """Append a chat reply to chat_replies.jsonl."""
-    path = config.workspace / "chat_replies.jsonl"
-    entry = json.dumps({
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "tick": tick_number,
-        "text": reply_text[:2000],
-    })
-    with open(path, "a") as f:
-        f.write(entry + "\n")
+    """Append a chat reply to chat_replies.jsonl. Dedup-aware: if eiDOS also `speak`s this same line
+    in the tick, the two writes merge into ONE entry (marked spoken) instead of duplicating."""
+    from memory import append_chat_line
+    append_chat_line(config, reply_text, spoken=False, tick=tick_number)
 
 
 def _first_sentences(text: str, max_sentences: int = 2, max_chars: int = 200) -> str:

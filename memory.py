@@ -139,6 +139,64 @@ def append_thought(config: Config, tick, text: str) -> None:
         pass
 
 
+_CHAT_MERGE_WINDOW_S = 20.0  # a reply and its spoken twin land in the same tick → well within this
+
+
+def append_chat_line(config: Config, text: str, *, spoken: bool = False, tick=None) -> None:
+    """Append one eiDOS→operator line to chat_replies.jsonl, with same-utterance dedup.
+
+    eiDOS may both `<reply>` a line (silent, logged) AND `speak` it (voiced) in one tick — that's two
+    writes for ONE utterance, which used to show as a duplicate. So before appending, look at the
+    previous line: if it's the SAME utterance (identical, or one is a prefix of the other — e.g. a
+    spoken opener of a longer reply) and recent (within the merge window), MERGE instead of appending
+    — keep the longer text, and mark it spoken if either was. Deterministic: the model can freely
+    reply-and-speak without producing duplicates (mechanism, not a "please don't repeat yourself").
+    """
+    text = (text or "").strip()
+    if not text:
+        return
+    path = config.workspace / "chat_replies.jsonl"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    except OSError:
+        lines = []
+
+    if lines:
+        try:
+            last = json.loads(lines[-1])
+        except Exception:  # noqa: BLE001
+            last = None
+        if isinstance(last, dict):
+            lt = (last.get("text") or "").strip()
+            same_utterance = lt and (lt == text or lt.startswith(text) or text.startswith(lt))
+            recent = True
+            try:  # bound the merge so two genuinely separate identical lines don't fold together
+                import calendar
+                age = time.time() - calendar.timegm(time.strptime(last.get("ts", ""), "%Y-%m-%dT%H:%M:%SZ"))
+                recent = age <= _CHAT_MERGE_WINDOW_S
+            except (ValueError, KeyError):
+                recent = True
+            if same_utterance and recent:
+                last["text"] = (text if len(text) >= len(lt) else lt)[:2000]
+                last["spoken"] = bool(spoken or last.get("spoken"))
+                lines[-1] = json.dumps(last)
+                try:
+                    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                except OSError:
+                    pass
+                return
+
+    entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+             "text": text[:2000], "spoken": bool(spoken)}
+    if tick is not None:
+        entry["tick"] = int(tick)
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
+
+
 def read_recent_thoughts(config: Config, n: int = 6) -> list:
     """Return the last n thoughts (oldest first), each a dict with tick/ts/text."""
     try:

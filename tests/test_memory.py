@@ -35,6 +35,44 @@ class TestMemory(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def _chat(self):
+        import json as _j
+        p = self.config.workspace / "chat_replies.jsonl"
+        if not p.exists():
+            return []
+        return [_j.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+    def test_chat_line_reply_then_speak_merges_to_one_spoken(self):
+        from memory import append_chat_line
+        append_chat_line(self.config, "Hello Boss.", spoken=False, tick=5)   # <reply>
+        append_chat_line(self.config, "Hello Boss.", spoken=True)            # speak — same line
+        entries = self._chat()
+        self.assertEqual(len(entries), 1)            # ONE entry, not a duplicate
+        self.assertTrue(entries[0]["spoken"])        # upgraded to spoken
+        self.assertEqual(entries[0]["text"], "Hello Boss.")
+
+    def test_chat_line_spoken_opener_of_longer_reply_keeps_longer(self):
+        from memory import append_chat_line
+        append_chat_line(self.config, "Hello Boss.", spoken=True)                      # spoke opener
+        append_chat_line(self.config, "Hello Boss. The network looks healthy.", spoken=False)  # full reply
+        entries = self._chat()
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(entries[0]["spoken"])
+        self.assertEqual(entries[0]["text"], "Hello Boss. The network looks healthy.")  # longer kept
+
+    def test_chat_line_distinct_lines_not_merged(self):
+        from memory import append_chat_line
+        append_chat_line(self.config, "First thing.", spoken=False, tick=1)
+        append_chat_line(self.config, "Totally different thing.", spoken=True, tick=2)
+        self.assertEqual(len(self._chat()), 2)
+
+    def test_chat_line_speak_only_logs_spoken(self):
+        from memory import append_chat_line
+        append_chat_line(self.config, "Just talking out loud.", spoken=True)
+        entries = self._chat()
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(entries[0]["spoken"])
+
     def test_read_goal_missing(self):
         self.assertEqual(read_goal(self.config), "")
 
