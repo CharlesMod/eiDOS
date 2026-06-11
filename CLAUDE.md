@@ -16,17 +16,21 @@ services.
   TTS streaming + the GPU speech-gate. Split out so a native TTS/ffmpeg crash can't wound the
   watchdog. `speak`/`gpu_gate`/the browser's speech SSE all target `voice_port` (8098); only the
   control channel stays on the dashboard. nssm install: `scripts/install_voice_service.ps1`
-  (registers `HouseAI-EidosVoice`, does NOT auto-start — start it only after stopping any in-dashboard
+  (registers `EidosVoice`, does NOT auto-start — start it only after stopping any in-dashboard
   v1 voice path, so two voice services never race the GPU).
 
 ## Run / restart discipline (IMPORTANT)
-- Launch dashboard: `PYTHONUTF8=1 python dashboard.py --config config.toml --port 8099`.
-- Launch voice: `PYTHONUTF8=1 python voice.py --config config.toml` (or `Start-Service HouseAI-EidosVoice`).
-- **Restart the dashboard with `taskkill /PID <pid> /F` — NEVER `/T`.** eidos is the dashboard's
-  child; `/T` kills eidos too. `/F` alone lets eidos keep running (the watchdog covers gaps).
-- **Restart eidos** by `taskkill /PID <eidos-pid> /F`; the watchdog respawns it on fresh code.
-  Operator start and apply/restore restarts boot PAUSED (kill-switch design); a plain
-  crash-respawn resumes running (continuity). Resume via "GO" or `POST /api/control/resume`.
+- The dashboard and voice are **nssm services**: `EidosDashboard` (8099) and `EidosVoice` (8098),
+  both running from this dir via the shared venv. (`EidosTap` = the :8088 monitor tap.) So **restart
+  the dashboard with `Restart-Service EidosDashboard`** — a bare `taskkill` just makes nssm respawn it.
+  Manual run (e.g. debugging): `PYTHONUTF8=1 python dashboard.py --config config.toml --port 8099`
+  and `PYTHONUTF8=1 python voice.py --config config.toml`.
+- A code change goes live by restarting the owning service (`Restart-Service EidosDashboard` /
+  `Restart-Service EidosVoice`); both re-exec fresh code from this dir.
+- **Restart eidos** (the dashboard's CHILD) by `taskkill /PID <eidos-pid> /F` — NEVER `/T` (that
+  walks up and kills the dashboard too). The watchdog respawns eidos on fresh code. Operator start
+  and apply/restore restarts boot PAUSED (kill-switch design); a plain crash-respawn resumes running
+  (continuity). Resume via "GO" or `POST /api/control/resume`.
 - eidos boots **paused** (kill-switch design). Control endpoints: `/api/control/{start,stop,resume,pause,status}`.
 - Always `PYTHONUTF8=1` (unicode in prompts/output).
 

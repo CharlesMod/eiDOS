@@ -216,11 +216,20 @@ All in eidos.py/context.py/a new glue module + objectives gate — unit-testable
     eidos._post_speech, tools.tool_speak (control_wait stays on dashboard). Browser derives
     NX_VOICE_BASE from location.hostname (localhost AND Tailscale). CORS on voice responses.
     voice.py + dashboard.html added to PROTECT_PATHS. scripts/install_voice_service.ps1 registers
-    HouseAI-EidosVoice via nssm but does NOT auto-start (v1->v2 cutover stays deliberate so two
+    EidosVoice via nssm but does NOT auto-start (v1->v2 cutover stays deliberate so two
     voice services never race the GPU). Two-process live smoke green (gpu/wait moved off dashboard
     -> 404, served by voice; gpu_gate reaches voice; control/wait still on dashboard).
   - No separate supervisor.py: the blueprint keeps supervisor+apply+watchdog co-located with the UI
     status API, so dashboard.py IS that module now. Gates: fast 525/0, dashboard 35/35.
 
-CUTOVER TODO (when v2 is blessed to live): start HouseAI-EidosVoice (scripts/install_voice_service.ps1)
-as part of the cutover, AFTER stopping v1's in-dashboard voice path — they must not both run.
+## CUTOVER — DONE (2026-06-10): v2 is LIVE on main
+
+main fast-forwarded 544f4da -> 2a7cb24 (rollback tag `v1-pre-cutover`). Live system now runs v2:
+- `EidosDashboard` (nssm, 8099) restarted on v2 — serves static/dashboard.html, references :8098.
+- `EidosVoice` (nssm, 8098) registered + started — full TTS pipeline verified (78KB GLaDOS WAV
+  through Chatterbox+ffmpeg via the standalone service). v1's in-dashboard voice is gone (v2
+  dashboard has no voice routes), so no GPU race.
+- eidos respawned on v2, ticking healthy (failures 0); embeddings LIVE — loaded MiniLM and synced
+  272 knowledge vectors at boot. No watchdog rollback.
+- Embedding model copied into C:/Users/cmod/llm/Kairos/models/ (gitignored; onnxruntime+tokenizers
+  already in the shared venv). Restart a service to ship code: `Restart-Service EidosDashboard|EidosVoice`.

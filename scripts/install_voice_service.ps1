@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Phase 8.3 split the voice pipeline out of dashboard.py into its own process (voice.py) so a
-  native TTS/ffmpeg crash can't take the watchdog down. This registers it as "HouseAI-EidosVoice"
+  native TTS/ffmpeg crash can't take the watchdog down. This registers it as "EidosVoice"
   on config.voice_port (default 8098), separate from the dashboard (8099).
 
   Manual launch (no service needed):
@@ -13,7 +13,7 @@
   CUTOVER NOTE — do NOT start this while the live v1 dashboard still owns voice. Two voice services
   would both shell out to Chatterbox (8004) and fight the GPU. Register now (-NoStart, the default),
   then start it as part of the v2 -> live cutover, AFTER stopping v1's voice path. This script does
-  NOT auto-start the service; flip it on with `Start-Service HouseAI-EidosVoice` when ready.
+  NOT auto-start the service; flip it on with `Start-Service EidosVoice` when ready.
 
 .PARAMETER RepoDir
   The eiDOS repo the service runs from (default: this script's parent's parent).
@@ -22,7 +22,7 @@
   The python.exe to use (default: the repo's venv, falling back to the shared Kairos venv).
 
 .PARAMETER ServiceName
-  nssm service name (default: HouseAI-EidosVoice).
+  nssm service name (default: EidosVoice).
 
 .PARAMETER NoStart
   Register but do not start (DEFAULT true — see cutover note). Pass -NoStart:$false to start now.
@@ -30,7 +30,7 @@
 param(
     [string]$RepoDir     = (Split-Path -Parent (Split-Path -Parent $PSCommandPath)),
     [string]$Python      = "",
-    [string]$ServiceName = "HouseAI-EidosVoice",
+    [string]$ServiceName = "EidosVoice",
     [switch]$NoStart     = $true
 )
 
