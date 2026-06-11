@@ -7,6 +7,7 @@ transition.
 
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -143,11 +144,38 @@ def is_degenerate(text: str) -> bool:
     return False
 
 
+# A run of ≥4 byte-fallback / symbol characters — Latin-1 supplement symbols (¥=A5, ¡=A1), spacing-
+# modifier/combining marks, and the general-punct→symbols/dingbats blocks (√=221A). Real prose almost
+# never strings 4+ of these together; a degenerate generation does (the ¥¥¡¥¥¡¥√ collapse). This
+# catches the PARTIAL case is_degenerate misses: a junk PREFIX followed by recovered text — that whole
+# thought came from a degenerate generation and shouldn't be trusted or fed back. Common accented
+# letters (À-ÿ, ≥ À) are deliberately outside the class so é/ñ/ü never trip it.
+_JUNK_RUN_RE = re.compile(r"[-¿ʰ-ͯ -⯿]{4,}")
+
+
+def has_junk_run(text: str) -> bool:
+    """True if `text` contains a run of byte-fallback/symbol junk — the signature of a (possibly
+    partial) degenerate generation, even when real text surrounds it."""
+    return bool(_JUNK_RUN_RE.search(text or ""))
+
+
+def log_degeneration(config: Config, tick, raw_response: str, reason: str = "") -> None:
+    """Capture a degenerate generation (raw response + a context fingerprint) to degeneration_log.jsonl
+    for analysis — the trigger doesn't reproduce synthetically, so we record it when it happens live."""
+    try:
+        rec = {"tick": tick, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "reason": reason, "raw": (raw_response or "")[:4000]}
+        with open(config.workspace / "degeneration_log.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
+
+
 def append_thought(config: Config, tick, text: str) -> None:
     """Append one entry to the agent's train of thought (thoughts.jsonl). Degenerate output is
-    dropped (never stored or fed back) — see is_degenerate."""
+    dropped (never stored or fed back) — see is_degenerate / has_junk_run."""
     text = (text or "").strip()
-    if not text or is_degenerate(text):
+    if not text or is_degenerate(text) or has_junk_run(text):
         return
     rec = {"tick": tick,
            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -173,7 +201,7 @@ def append_chat_line(config: Config, text: str, *, spoken: bool = False, tick=No
     reply-and-speak without producing duplicates (mechanism, not a "please don't repeat yourself").
     """
     text = (text or "").strip()
-    if not text or is_degenerate(text):   # never surface a degeneration loop to the operator
+    if not text or is_degenerate(text) or has_junk_run(text):   # never surface a degeneration loop
         return
     path = config.workspace / "chat_replies.jsonl"
     try:

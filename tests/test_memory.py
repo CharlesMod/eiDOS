@@ -98,6 +98,31 @@ class TestMemory(unittest.TestCase):
         append_chat_line(self.config, "¥¥¡" * 200, spoken=True)
         self.assertEqual(self._chat(), [])
 
+    def test_junk_run_catches_partial_prefix(self):
+        from memory import has_junk_run
+        # the tick-93 case: byte-junk PREFIX then recovered real text (is_degenerate alone misses it)
+        self.assertTrue(has_junk_run("¥¥¡¥¥¡¥√%500 I've identified a web interface on .147:3000."))
+        self.assertFalse(has_junk_run("Boss, port 9100 is the raw print protocol; probing .60 next."))
+        self.assertFalse(has_junk_run("Café señor paid £5 at 20° — totally fine prose."))  # isolated symbols ok
+
+    def test_junk_prefixed_thought_dropped(self):
+        from memory import append_thought, read_recent_thoughts
+        append_thought(self.config, 93, "¥¥¡¥¥¡¥√ then some recovered-looking text that should not be trusted")
+        append_thought(self.config, 94, "A clean follow-up thought.")
+        thoughts = read_recent_thoughts(self.config, n=10)
+        self.assertEqual(len(thoughts), 1)
+        self.assertIn("clean follow-up", thoughts[0]["text"])
+
+    def test_log_degeneration_writes_record(self):
+        from memory import log_degeneration
+        log_degeneration(self.config, 90, "¥¥¡ raw response here", reason="junk_run")
+        p = self.config.workspace / "degeneration_log.jsonl"
+        self.assertTrue(p.exists())
+        import json as _j
+        rec = _j.loads(p.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(rec["tick"], 90)
+        self.assertEqual(rec["reason"], "junk_run")
+
     def test_read_goal_missing(self):
         self.assertEqual(read_goal(self.config), "")
 

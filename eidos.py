@@ -26,6 +26,9 @@ from gpu_gate import yield_to_speech, control_wait
 from memory import (
     append_observation,
     append_thought,
+    has_junk_run,
+    is_degenerate,
+    log_degeneration,
     read_goal,
     validate_observations,
     write_plan,
@@ -919,6 +922,11 @@ def run_loop(config: Config, persona=None, wal=None):
 
         # --- Capture this tick's reasoning as a thought (the continuity chain) ---
         thought = _extract_thought(response)
+        # The byte-collapse (¥¥¡…) is dropped downstream by append_thought/append_chat_line, but it
+        # doesn't reproduce synthetically — so log the RAW response that triggered it for analysis.
+        if is_degenerate(response) or has_junk_run(response):
+            log_degeneration(config, tick_number, response,
+                             reason="junk_run" if has_junk_run(response) else "loop")
         if thought:
             append_thought(config, tick_number, thought)
 
