@@ -58,6 +58,34 @@ class TestRecallDecision(unittest.TestCase):
         episodes.record_episode(self.config, tick=1, tool="bash", sig=sig,
                                 fail_kind=fail_kind, success=success, summary=summary, key=key)
 
+    def test_proven_success_recalled_without_failures(self):
+        # 2+ successes and zero failures → proactive "reuse what worked", not silence
+        self._ep("bash:arp", True, summary="arp -a got 25 hosts")
+        self._ep("bash:arp", True, summary="arp -a got 25 hosts")
+        rec = episodes.recall(self.config, key="objA|map the lan")
+        self.assertEqual(rec["failures"], [])
+        self.assertTrue(rec.get("proven"))
+        self.assertEqual(rec["worked"][0]["oks"], 2)
+        text = episodes.render_recall(rec)
+        self.assertIn("reuse what worked", text)
+        self.assertIn("×2", text)
+
+    def test_single_success_stays_silent(self):
+        # one success could be luck — recalling it every tick would be noise
+        self._ep("bash:arp", True)
+        rec = episodes.recall(self.config, key="objA|map the lan")
+        self.assertEqual(rec["worked"], [])
+        self.assertEqual(episodes.render_recall(rec), "")
+
+    def test_episodes_survive_objective_change(self):
+        # Same normalized step filed under a DEAD objective id — recall under the new
+        # objective id still finds it (the step is the stable part of the situation).
+        for _ in range(2):
+            self._ep("bash:scan", False, "network", key="objOLD|map the lan")
+        rec = episodes.recall(self.config, key="objNEW|map the lan")
+        self.assertEqual(len(rec["failures"]), 1)
+        self.assertEqual(rec["failures"][0]["fails"], 2)
+
     def test_repeated_failure_surfaces_with_count(self):
         for _ in range(3):
             self._ep("bash:scan", False, "network")

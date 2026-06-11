@@ -330,12 +330,21 @@ def count_observation_chars(config: Config) -> int:
         return 0
 
 
+_OBS_ARCHIVE_MAX_BYTES = 4 * 1024 * 1024   # per archive file; ~weeks of compactions
+
+
 def truncate_observations(config: Config) -> int:
     """Clear observations.jsonl after successful compaction.
 
     The distilled content now lives in memory/plan, so the raw
-    observations are no longer needed.  Without this, the file grows
-    monotonically and should_compact() fires every tick.
+    observations are no longer needed for the loop.  Without this, the
+    file grows monotonically and should_compact() fires every tick.
+
+    The cleared lines are first appended to a dated archive
+    (state/observations_archive_YYYYMM.jsonl) — dream extraction is
+    lossy, and before this the raw record of what actually happened was
+    gone forever the moment the dream finished.  Archives are for
+    forensics/recovery only; nothing on the hot path reads them.
 
     Returns the number of lines removed.
     """
@@ -346,6 +355,16 @@ def truncate_observations(config: Config) -> int:
         return 0
 
     removed = len(lines)
+    # Archive before clearing — best-effort: an archive failure must never block compaction.
+    try:
+        import time as _t
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        arc = config.state_dir / f"observations_archive_{_t.strftime('%Y%m')}.jsonl"
+        if not arc.exists() or arc.stat().st_size < _OBS_ARCHIVE_MAX_BYTES:
+            with open(arc, "a", encoding="utf-8", errors="replace") as f:
+                f.writelines(lines)
+    except Exception:  # noqa: BLE001 - archive is best-effort
+        pass
     # Atomic rewrite: empty the file
     with open(config.observations_path, "w") as f:
         pass

@@ -17,9 +17,50 @@ from memory import (
     read_recent_observations,
     count_observation_chars,
     count_observation_lines,
+    truncate_observations,
     validate_observations,
     read_interventions,
 )
+
+
+class TestObservationArchive(unittest.TestCase):
+    """Compaction clears observations.jsonl — the raw lines must land in a dated archive
+    first (dream extraction is lossy; before this the raw record was gone forever)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.config = Config()
+        self.config.workspace_dir = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.config.workspace_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_truncate_archives_then_clears(self):
+        for i in range(3):
+            append_observation(self.config, {"tick": i, "tool": "bash", "success": True,
+                                             "output": f"obs {i}"})
+        removed = truncate_observations(self.config)
+        self.assertEqual(removed, 3)
+        self.assertEqual(count_observation_lines(self.config), 0)
+        arcs = list(self.config.state_dir.glob("observations_archive_*.jsonl"))
+        self.assertEqual(len(arcs), 1)
+        rows = [json.loads(ln) for ln in arcs[0].read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([r["tick"] for r in rows], [0, 1, 2])
+
+    def test_archive_appends_across_compactions(self):
+        append_observation(self.config, {"tick": 1, "tool": "bash", "success": True, "output": "a"})
+        truncate_observations(self.config)
+        append_observation(self.config, {"tick": 2, "tool": "bash", "success": True, "output": "b"})
+        truncate_observations(self.config)
+        arcs = list(self.config.state_dir.glob("observations_archive_*.jsonl"))
+        self.assertEqual(len(arcs), 1)
+        self.assertEqual(len(arcs[0].read_text(encoding="utf-8").splitlines()), 2)
+
+    def test_empty_observations_no_archive(self):
+        self.assertEqual(truncate_observations(self.config), 0)
+        self.assertEqual(list(self.config.state_dir.glob("observations_archive_*.jsonl")), [])
 
 
 class TestMemory(unittest.TestCase):

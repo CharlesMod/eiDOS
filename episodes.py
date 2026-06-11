@@ -26,8 +26,9 @@ from __future__ import annotations
 import json
 import re
 
-_MAX_EPISODES = 600          # self-bounding ring (no separate rotation needed)
-_RECALL_WINDOW = 400         # how far back recall scans
+_MAX_EPISODES = 2400         # self-bounding ring (no separate rotation needed) — at ~1 episode per
+                             # acting tick this is days of memory, not hours; ~600 KB, ms to scan
+_RECALL_WINDOW = 1200        # how far back recall scans
 _MISFIRE = ("system", "watchdog", "dream", "")   # tools that aren't real "actions"
 
 # Phase 7a-2: semantic situation similarity. Vectors are stored per DISTINCT situation key (not per
@@ -221,22 +222,27 @@ def _nearest_situation(config, key: str) -> str:
 
 
 def recall(config, key: str = None, *, max_items: int = 4) -> dict:
-    """State-triggered recall for the CURRENT situation, triggered by past FAILURE. Returns the
-    episodes that should change the next decision: the actions that FAILED here and never worked
-    (don't re-try), and — as the alternative — the actions that WORKED here (reuse them, even if
-    a different approach). Empty when this situation has no failures (no warning needed → no
-    noise). Exact situation-key match first, else same-objective. Pure read; cheap."""
+    """State-triggered recall for the CURRENT situation. Returns the episodes that should change
+    the next decision: the actions that FAILED here and never worked (don't re-try), the actions
+    that WORKED here (reuse them), and — when nothing failed but an approach has proven reliable
+    (2+ successes) — that known-good approach, so success is recalled too, not only pain.
+    Match order: exact situation key → same normalized STEP under any objective (episodes survive
+    an objective being parked/killed/re-cut — the work is the same even when the goal bookkeeping
+    changed) → same objective → semantic resemblance. Pure read; cheap."""
     if key is None:
         key = situation_key(config)
     obj = key.split("|", 1)[0]
+    step = _step_of(key)
     eps = _read(config)
     if not eps:
         return {"failures": [], "worked": []}
 
-    # Prefer episodes in the exact situation; fall back to the same objective if the exact key
-    # has no history yet (a slightly different step under the same goal is still relevant).
+    # Prefer episodes in the exact situation; fall back to the same STEP regardless of which
+    # objective it was filed under (objective ids churn — park/kill/re-cut — but the normalized
+    # step is the stable part of the situation); then to the same objective.
     exact = [e for e in eps if e.get("key") == key]
-    pool = exact if exact else [e for e in eps if e.get("key", "").split("|", 1)[0] == obj and obj]
+    pool = exact or [e for e in eps if step and _step_of(e.get("key", "")) == step]
+    pool = pool or [e for e in eps if e.get("key", "").split("|", 1)[0] == obj and obj]
     similar_via = ""
     if not pool:
         # Novel situation deterministically — but is it LIKE a past one? (phase 7a-2). Cross-situation
@@ -248,15 +254,16 @@ def recall(config, key: str = None, *, max_items: int = 4) -> dict:
     if not pool:
         return {"failures": [], "worked": []}
 
-    # Per signature: failure count + last fail_kind/summary, and whether it ever SUCCEEDED here.
+    # Per signature: failure/success counts + last fail_kind/summary.
     by_sig: dict[str, dict] = {}
     for e in pool:
         sig = e.get("sig") or e.get("tool")
-        d = by_sig.setdefault(sig, {"sig": sig, "tool": e.get("tool"), "fails": 0,
+        d = by_sig.setdefault(sig, {"sig": sig, "tool": e.get("tool"), "fails": 0, "oks": 0,
                                     "fail_kind": "", "succeeded": False,
                                     "fail_summary": "", "ok_summary": ""})
         if e.get("success"):
             d["succeeded"] = True
+            d["oks"] += 1
             d["ok_summary"] = e.get("summary", "") or d["ok_summary"]
         else:
             d["fails"] += 1
@@ -264,11 +271,22 @@ def recall(config, key: str = None, *, max_items: int = 4) -> dict:
             d["fail_summary"] = e.get("summary", "") or d["fail_summary"]
 
     failures = [d for d in by_sig.values() if d["fails"] >= 1 and not d["succeeded"]]
+    worked = [d for d in by_sig.values() if d["succeeded"]]
     if not failures:
-        return {"failures": [], "worked": []}   # only fire when something failed here
-    worked = [d for d in by_sig.values() if d["succeeded"]]   # the alternatives that DID work
+        # Nothing failed here — but if an approach has PROVEN itself (2+ successes), recall it
+        # proactively: "you have done this before, reuse that" instead of re-deriving from
+        # scratch. Single successes stay silent (could be luck; would be noise every tick).
+        proven = [d for d in worked if d["oks"] >= 2]
+        if not proven:
+            return {"failures": [], "worked": []}
+        proven.sort(key=lambda d: -d["oks"])
+        out = {"failures": [], "worked": proven[:max_items], "proven": True}
+        if similar_via:
+            out["similar"] = True
+            out["via_step"] = _step_of(similar_via)
+        return out
     failures.sort(key=lambda d: -d["fails"])
-    worked.sort(key=lambda d: -d.get("fails", 0))             # a recovered approach ranks first
+    worked.sort(key=lambda d: (-d.get("fails", 0), -d["oks"]))  # recovered approaches rank first
     out = {"failures": failures[:max_items], "worked": worked[:max_items]}
     if similar_via:                              # matched by resemblance, not exact situation
         out["similar"] = True
@@ -279,6 +297,14 @@ def recall(config, key: str = None, *, max_items: int = 4) -> dict:
 def render_recall(rec: dict) -> str:
     """Render recall() output as a compact context block, or '' if nothing relevant."""
     failures, worked = rec.get("failures", []), rec.get("worked", [])
+    if not failures and rec.get("proven") and worked:
+        # Success-only recall: a known-good approach for this situation. One compact line per
+        # approach — reuse beats re-derivation (the observed skill-reuse gap).
+        lines = ["## Episodic recall — you have done this before; reuse what worked:"]
+        for d in worked:
+            what = f": {d['ok_summary']}" if d.get("ok_summary") else ""
+            lines.append(f"  ✓ `{d['tool']}` worked here ×{d['oks']}{what}. Use it — don't re-derive.")
+        return "\n".join(lines)
     if not failures:
         return ""
     if rec.get("similar"):
