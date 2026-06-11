@@ -71,11 +71,15 @@ class TestBriefingModel(unittest.TestCase):
                                      goal_start_time=time.time())
 
     def test_message_structure(self):
+        # [system, durable, situation, tick] — the volatile situation message rides AFTER
+        # the (empty here) history thread so per-tick churn never invalidates history KV.
         messages = self._assemble()
-        self.assertEqual(len(messages), 3)
+        self.assertEqual(len(messages), 4)
         self.assertEqual(messages[0]["role"], "system")
-        self.assertEqual(messages[1]["role"], "user")
-        self.assertEqual(messages[2]["role"], "user")
+        for m in messages[1:]:
+            self.assertEqual(m["role"], "user")
+        self.assertIn("## Right now", messages[-2]["content"])     # situation before tick prompt
+        self.assertNotIn("## Right now", messages[1]["content"])   # not in the stable durable blob
 
     def test_uses_compressed_system_prompt(self):
         messages = self._assemble()
@@ -108,8 +112,8 @@ class TestBriefingModel(unittest.TestCase):
         with patch("context.generate_env_alerts", return_value=_CANNED_ENV_WITH_ALERT):
             messages = assemble_context(self.config, tick_number=1,
                                          goal_start_time=time.time())
-        content = messages[1]["content"]
-        self.assertIn("DISK LOW", content)  # alerts render in the presence block
+        # alerts render in the presence block, which lives in the situation message
+        self.assertIn("DISK LOW", messages[-2]["content"])
 
     def test_observations_in_history_thread(self):
         """Observations replay as real assistant/user turns (the history thread),
@@ -163,9 +167,37 @@ class TestBriefingModel(unittest.TestCase):
     def test_interventions_in_briefing(self):
         (self.config.interventions_dir / "001_hint.md").write_text("Check the logs")
         messages = self._assemble()
-        content = messages[1]["content"]
-        self.assertIn("## Conversation with Boss", content)
-        self.assertIn("Check the logs", content)
+        full = "\n".join(m["content"] for m in messages)
+        self.assertIn("## Conversation with Boss", full)
+        self.assertIn("Check the logs", full)
+        # and the conversation lives in the volatile situation message, not the stable blob
+        self.assertNotIn("## Conversation with Boss", messages[1]["content"])
+
+    def test_history_window_anchored_not_sliding(self):
+        # KV-stability: the history window's HEAD must not move every tick. Build 40 ticks
+        # of observations and assemble at consecutive tick numbers — the first history turn
+        # must be identical across a step window (it only advances every n_ticks/2 ticks).
+        from context import _build_history_thread
+
+        def _cmd(i):
+            # distinct WORDS per tick — digits are normalized out of the collapse
+            # signature, so numbered commands would all merge into one counted turn
+            return f"run_{chr(97 + i % 26)}{chr(97 + (i // 26) % 26)} --once"
+
+        for i in range(40):
+            append_observation(self.config, {
+                "tick": i, "tool": "bash", "args": {"cmd": _cmd(i)},
+                "success": True, "output": f"out{i}",
+            })
+        first = _build_history_thread(self.config)[0]["content"]
+        # one more tick lands — the head must NOT slide
+        append_observation(self.config, {
+            "tick": 40, "tool": "bash", "args": {"cmd": _cmd(40)},
+            "success": True, "output": "out40",
+        })
+        thread = _build_history_thread(self.config)
+        self.assertEqual(thread[0]["content"], first)      # head stable (append-only between cuts)
+        self.assertIn("out40", thread[-1]["content"])      # new turn appended
 
     def test_loop_detection_in_briefing(self):
         with patch("context.generate_env_alerts", return_value=""):

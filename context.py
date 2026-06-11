@@ -187,7 +187,7 @@ def assemble_context(
     Returns a list of {"role": ..., "content": ...} dicts ready for llm.complete().
     Each variable section is budget-capped; overruns are logged to ctx_overruns.jsonl.
 
-    Briefing structure: Standing Orders → durable blob → history thread → salience → tick prompt.
+    Briefing structure: Standing Orders → durable blob → history thread → situation → salience → tick prompt.
     """
     return _assemble_briefing(config, tick_number, goal_start_time,
                               loop_detected, repeat_count, max_ticks, tension)
@@ -265,17 +265,18 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
     )
 
 
-def _enforce_ceiling(config, messages, tick_number):
+def _enforce_ceiling(config, messages, tick_number, n_situation: int = 0):
     """Hard-enforce the total context ceiling, briefing-message-shape aware.
 
-    The briefing shape is: [system, durable, *history_turns, whats_new?, tick_prompt].
-    The system prompt and the trailing decision-point messages (the tick prompt and an
-    optional "New since last tick" salience block) are NEVER trimmed — that is exactly
-    what the model must read to act. We free space by dropping the OLDEST history turns
-    first, then, only if still over, trimming the durable blob's tail lines. (The old
-    code assumed a fixed 3-message shape: it took overhead from messages[2] — a history
-    turn, not the tick prompt — and trimmed messages[1] alone, so the history thread and
-    tick prompt were untrimmable and the math was wrong.)"""
+    The briefing shape is: [system, durable, *history_turns, situation?, whats_new?, tick_prompt].
+    The system prompt and the trailing decision-point messages (the tick prompt, an optional
+    "New since last tick" salience block, and the situation message) are trimmed LAST — that is
+    exactly what the model must read to act. We free space by dropping the OLDEST history turns
+    first, then trimming the durable blob's tail lines (static identity material), and only if
+    STILL over, trimming the situation message's tail lines.
+
+    `n_situation` is 1 when the caller appended a situation message before the whats_new/tick
+    tail (briefing mode always does), else 0."""
     total = sum(len(m["content"]) for m in messages)
     if total <= config.context_max_total_chars or len(messages) < 2:
         return total
@@ -289,7 +290,11 @@ def _enforce_ceiling(config, messages, tick_number):
         n_tail = 2
     head = messages[0]
     tail = messages[-n_tail:]
-    middle = messages[1:-n_tail]                      # durable blob + history turns
+    middle = messages[1:-n_tail]                      # durable blob + history turns + situation?
+    situation = None
+    if n_situation and len(middle) >= 2:
+        situation = middle[-1]
+        middle = middle[:-1]
     durable = middle[0] if middle else None
     history = middle[1:] if len(middle) > 1 else []
 
@@ -297,20 +302,30 @@ def _enforce_ceiling(config, messages, tick_number):
     avail = budget - fixed
 
     def middle_len():
-        return (len(durable["content"]) if durable else 0) + sum(len(m["content"]) for m in history)
+        return ((len(durable["content"]) if durable else 0)
+                + (len(situation["content"]) if situation else 0)
+                + sum(len(m["content"]) for m in history))
 
-    # 1) drop oldest history turns first (the durable blob is more load-bearing than old turns)
+    def _trim_tail_lines(msg, allowed):
+        lines = msg["content"].splitlines(keepends=True)
+        while lines and len("".join(lines)) > allowed:
+            lines.pop()
+        return {"role": "user", "content": "".join(lines) + "\n... [context trimmed to fit budget]"}
+
+    # 1) drop oldest history turns first (the blobs are more load-bearing than old turns)
     while history and middle_len() > avail:
         history.pop(0)
-    # 2) still over → trim the durable blob's tail lines (the volatile tail goes first)
+    # 2) still over → trim the durable blob's tail lines (static identity material)
     if durable and middle_len() > avail:
-        db = max(0, avail - sum(len(m["content"]) for m in history))
-        lines = durable["content"].splitlines(keepends=True)
-        while lines and len("".join(lines)) > db:
-            lines.pop()
-        durable = {"role": "user", "content": "".join(lines) + "\n... [context trimmed to fit budget]"}
+        db = max(0, avail - middle_len() + len(durable["content"]))
+        durable = _trim_tail_lines(durable, db)
+    # 3) still over → trim the situation message last (presence/chat are decision-critical)
+    if situation and middle_len() > avail:
+        sb = max(0, avail - middle_len() + len(situation["content"]))
+        situation = _trim_tail_lines(situation, sb)
 
-    messages[:] = [head] + ([durable] if durable else []) + history + list(tail)
+    messages[:] = ([head] + ([durable] if durable else []) + history
+                   + ([situation] if situation else []) + list(tail))
     return sum(len(m["content"]) for m in messages)
 
 
@@ -509,13 +524,29 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
 def _build_history_thread(config: Config, n_ticks: int = 14) -> list[dict]:
     """Recreate the recent past as a real assistant/user conversation so the model
     experiences its own thought -> action -> result flow, not a flattened blob.
-    Consecutive identical actions collapse into one turn with a count."""
+    Consecutive identical actions collapse into one turn with a count.
+
+    KV-stability: the window is ANCHORED, not sliding. A naive "last N ticks" window
+    drops its oldest turn every tick, so the first history byte changes every tick and
+    the llama.cpp prefix cache dies right where the expensive part begins. Instead the
+    window start snaps to a tick boundary that only advances every n_ticks/2 ticks —
+    between advances the thread is append-only (old turns byte-stable, new turns appended)
+    and the cached prefix extends through it. Window length breathes between n_ticks and
+    ~1.5×n_ticks; the char ceiling still applies as a hard guard."""
     import json
     obs = read_recent_observations(config, max_chars=config.context_obs_max_chars,
-                                   max_count=n_ticks * 2)
+                                   max_count=n_ticks * 3)
     if not obs:
         return []
     obs = list(reversed(obs))  # oldest -> newest
+    try:
+        newest_tick = max(int(o.get("tick", 0)) for o in obs)
+        step = max(1, n_ticks // 2)
+        anchor = max(0, (newest_tick - n_ticks) // step) * step
+        if anchor > 0:
+            obs = [o for o in obs if int(o.get("tick", 0)) >= anchor]
+    except Exception:  # noqa: BLE001 - anchoring is an optimization, never required
+        pass
     thoughts = {t.get("tick"): (t.get("text") or "")
                 for t in read_recent_thoughts(config, n=n_ticks * 3)}
 
@@ -587,16 +618,15 @@ def _assemble_briefing(
     system = SYSTEM_PROMPT_BRIEFING.format(workspace=str(config.workspace))
     messages.append({"role": "system", "content": system})
 
-    # --- Durable context in THREE KV tiers (BIBLE §2.11: stable cached prefix + delta prompting).
+    # --- Durable context in KV tiers (BIBLE §2.11: stable cached prefix + delta prompting).
     #     The llama.cpp prefix cache reuses the KV up to the first byte that changes. So the order is
     #     load-bearing: a STABLE head (self-guide / skills / mission — change only on a Dean edit, a new
     #     skill, or a goal change) sits right after the system prompt and is reused across ticks; the
-    #     SEMI tier (plan / world-model / backlog — change every few ticks) follows; the VOLATILE tail
-    #     (focus gauge / one-shot banners / presence / conversation — change most ticks) goes LAST,
-    #     which also places the most action-relevant content closest to the decision point (the history
-    #     thread + salience + tick prompt that follow this message). Earlier this block led with the
-    #     rotation banner + frustration gauge, so any tension change invalidated the KV of everything
-    #     below — exactly when ticks are most frequent. ---
+    #     SEMI tier (plan / world-model / backlog / notebook — change every few ticks) follows. The
+    #     VOLATILE material (focus gauge / banners / recall / presence / conversation — changes most
+    #     ticks) is NOT in this message at all: it rides in its own "situation" message AFTER the
+    #     history thread, so per-tick churn never invalidates the history turns' KV (it used to sit at
+    #     this blob's tail, re-prefilling all ~14 turns every tick). ---
     durable = []
 
     # ===== STABLE HEAD (byte-identical across most ticks → the cached prefix extends through here) =====
@@ -662,20 +692,30 @@ def _assemble_briefing(
     except Exception:  # noqa: BLE001
         pass
 
-    # ===== VOLATILE TAIL (changes most ticks; sits closest to the decision point) =====
+    messages.append({"role": "user", "content": "\n\n".join(durable)})
+
+    # --- Recent past AS A REAL THREAD: your thoughts/actions and the results they got ---
+    messages.extend(_build_history_thread(config, n_ticks=14))
+
+    # ===== SITUATION (volatile; changes most ticks) — its OWN message, AFTER the history thread.
+    # KV-load-bearing: presence changes every tick (clock + tick number), recall re-keys per step,
+    # chat moves on every exchange. When these lived at the tail of the durable blob they sat
+    # BEFORE the history thread, so every tick re-prefilled all ~14 history turns. Down here the
+    # cached prefix runs system → durable → history, and only this short tail re-prefills.
+    # It is also the right place for salience: closest to the decision point.
+    situation = []
     # Ventral Striatum / Action Gate: the ACTIVE objective (+ WHY + next step + frustration gauge),
     # and — once, right after a rotation — a "focus changed" banner. The gate GOVERNS pivoting; this
-    # is how the model perceives it. The gauge re-renders as frustration climbs, so it lives here in
-    # the volatile tail rather than poisoning the cached prefix above.
+    # is how the model perceives it.
     rot = _rotation_banner(config)        # consumed once; highest salience when present
     if rot:
-        durable.append(rot)
+        situation.append(rot)
     esc = _escalation_note(config)        # one-shot "whole backlog stuck — ask Boss" (rare)
     if esc:
-        durable.append("## Backlog is fully blocked\n" + esc)
+        situation.append("## Backlog is fully blocked\n" + esc)
     focus_block = _objective_focus_block(config)
     if focus_block:
-        durable.append(focus_block)
+        situation.append(focus_block)
 
     # Episodic recall (phase 7b, BIBLE §2.4): state-triggered — if the agent has been in THIS
     # situation before, surface the actions that FAILED (don't repeat) and any that WORKED (reuse).
@@ -684,12 +724,12 @@ def _assemble_briefing(
         import episodes
         _recall = episodes.render_recall(episodes.recall(config))
         if _recall:
-            durable.append(_recall)
+            situation.append(_recall)
     except Exception:  # noqa: BLE001
         pass
 
     # Presence (time / tick / still-running jobs / alerts) — changes EVERY tick.
-    durable.append(_build_presence(config, tick_number, goal_start_time))
+    situation.append(_build_presence(config, tick_number, goal_start_time))
 
     # Boss's messages + the messages YOU already sent him. Surfacing your own standing messages stops
     # the "ask Boss for the MQTT creds again" re-ping loop: if you already asked and he hasn't
@@ -706,12 +746,9 @@ def _assemble_briefing(
         for r in recent_replies:
             chat_parts.append(f"  • [you @ {r.get('ts', '?')}] {(r.get('text', '') or '')[:170]}")
     if chat_parts:
-        durable.append("## Conversation with Boss\n" + "\n".join(chat_parts))
+        situation.append("## Conversation with Boss\n" + "\n".join(chat_parts))
 
-    messages.append({"role": "user", "content": "\n\n".join(durable)})
-
-    # --- Recent past AS A REAL THREAD: your thoughts/actions and the results they got ---
-    messages.extend(_build_history_thread(config, n_ticks=14))
+    messages.append({"role": "user", "content": "\n\n".join(situation)})
 
     # Salience: surface what's NEW (Boss messages, fresh arrivals) right at the decision point,
     # so the model handles them first instead of talking past Boss buried up in the durable block.
@@ -727,7 +764,7 @@ def _assemble_briefing(
     messages.append({"role": "user", "content": tick_msg})
 
     # Hard-enforce total context ceiling
-    total_chars = _enforce_ceiling(config, messages, tick_number)
+    total_chars = _enforce_ceiling(config, messages, tick_number, n_situation=1)
 
     est_tokens = estimate_tokens(str(total_chars), config.chars_per_token)
     logger.info("tick=%d ctx_chars=%d est_tokens=%d (conversation mode) messages=%d",

@@ -1078,7 +1078,7 @@ class TestContextEdgeCases(SimulationTestBase):
         self.config.goal_path.unlink(missing_ok=True)
         messages = assemble_context(self.config, tick_number=1,
                                      goal_start_time=time.time())
-        self.assertEqual(len(messages), 3)
+        self.assertEqual(len(messages), 4)  # [system, durable, situation, tick]
         self.assertIn("No goal set", messages[1]["content"])
 
     def test_empty_memory(self):
@@ -1086,7 +1086,7 @@ class TestContextEdgeCases(SimulationTestBase):
         self.config.plan_path.unlink(missing_ok=True)
         messages = assemble_context(self.config, tick_number=1,
                                      goal_start_time=time.time())
-        self.assertEqual(len(messages), 3)
+        self.assertEqual(len(messages), 4)  # [system, durable, situation, tick]
 
     def test_huge_observation_history(self):
         """Context assembly handles 10k observations without OOM."""
@@ -1132,8 +1132,9 @@ class TestContextEdgeCases(SimulationTestBase):
             "API moved to port 8080")
         messages = assemble_context(self.config, tick_number=1,
                                      goal_start_time=time.time())
-        content = messages[1]["content"]
-        self.assertIn("API moved to port 8080", content)
+        # chat lives in the volatile situation message (after history), not the durable blob
+        full = "\n".join(m["content"] for m in messages)
+        self.assertIn("API moved to port 8080", full)
 
     def test_context_ceiling_enforced_when_sections_exceed_total(self):
         """Hard ceiling trims assembled context when per-section budgets sum to more
@@ -1510,8 +1511,8 @@ class TestInterventionsOverTime(SimulationTestBase):
         # First tick should see all interventions
         messages = assemble_context(self.config, tick_number=1,
                                      goal_start_time=time.time())
-        content = messages[1]["content"]
-        self.assertIn("Intervention", content)
+        full = "\n".join(m["content"] for m in messages)
+        self.assertIn("Intervention", full)
 
         # After reading, all should be .done
         done_files = list(self.config.interventions_dir.glob("*.done"))
