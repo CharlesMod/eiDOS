@@ -163,5 +163,15 @@ pi_path = ""            # '' = resolve 'pi' from PATH
 pi_provider = "house-tap"
 pi_model = "house-ai"
 
+[ide]
+# Browser mini-IDE over the pi coding agent (EidosCodeIDE service, :8100). Each
+# "stint" is a persistent interactive `pi --mode rpc` process + working dir + chat.
+enabled = true
+port = 8100
+pi_provider = "house-tap"   # route via :8088 monitor tap so IDE tokens show on :9100
+pi_model = "house-ai"
+max_stints = 8
+stint_idle_timeout_s = 1800
+
 [paths]
 workspace = "C:/Users/cmod/llm/Kairos/workspace"

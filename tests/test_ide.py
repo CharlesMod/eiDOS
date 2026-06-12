@@ -1,0 +1,86 @@
+"""IDE backend (ide.py StintManager) — spawn contract, turn gating, caps.
+
+Mocks Popen + the reader Thread so no real pi is launched (the live end-to-end is
+the manual smoke in workspace/ide). Pins the RPC invocation shape and the
+one-turn-at-a-time backpressure the interactive protocol requires.
+"""
+
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import ide
+from config import Config
+
+
+class TestStintManager(unittest.TestCase):
+
+    def setUp(self):
+        self.config = Config()
+        self.config.workspace_dir = tempfile.mkdtemp()
+
+    def _mgr_with_mock_pi(self):
+        proc = MagicMock(pid=4321)
+        proc.stdin = MagicMock()
+        ctx = (patch.object(ide.subprocess, "Popen", return_value=proc),
+               patch.object(ide.threading, "Thread"),
+               patch.object(ide, "_resolve_pi", return_value="pi.cmd"))
+        return ide.StintManager(self.config), proc, ctx
+
+    def test_create_spawn_contract(self):
+        mgr, proc, ctx = self._mgr_with_mock_pi()
+        with ctx[0] as popen, ctx[1], ctx[2]:
+            stint, err = mgr.create("scraper")
+        self.assertIsNotNone(stint)
+        self.assertIsNone(err)
+        (argv,), kw = popen.call_args
+        self.assertIs(kw["stdin"], ide.subprocess.PIPE)
+        self.assertEqual(kw["env"]["PYTHONUTF8"], "1")
+        for flag in ("--mode", "rpc", "--provider", "--session-dir", "-a"):
+            self.assertIn(flag, argv)
+        self.assertNotIn("-p", argv)               # interactive, not one-shot
+        self.assertIn("ide", str(kw["cwd"]))       # sandbox under workspace/ide/stints
+        self.assertEqual(stint.status, "running")
+
+    def test_prompt_turn_gating(self):
+        mgr, proc, ctx = self._mgr_with_mock_pi()
+        with ctx[0], ctx[1], ctx[2]:
+            stint, _ = mgr.create("t")
+            ok, err = mgr.prompt(stint.sid, "build a CLI")
+            self.assertTrue(ok)
+            self.assertTrue(stint.turn_active)
+            ok2, err2 = mgr.prompt(stint.sid, "and tests")   # turn in flight
+            self.assertFalse(ok2)
+            self.assertIn("turn", err2)
+        written = "".join(c.args[0] for c in proc.stdin.write.call_args_list)
+        self.assertIn('"type": "prompt"', written)
+        self.assertIn("build a CLI", written)
+
+    def test_unresolvable_pi(self):
+        with patch.object(ide, "_resolve_pi", return_value=""):
+            stint, err = ide.StintManager(self.config).create("t")
+        self.assertIsNone(stint)
+        self.assertIn("pi", err)
+
+    def test_max_stints_cap(self):
+        self.config.ide_max_stints = 2
+        mgr, proc, ctx = self._mgr_with_mock_pi()
+        with ctx[0], ctx[1], ctx[2]:
+            self.assertIsNotNone(mgr.create("a")[0])
+            self.assertIsNotNone(mgr.create("b")[0])
+            stint, err = mgr.create("c")
+        self.assertIsNone(stint)
+        self.assertIn("too many", err)
+
+    def test_prompt_unknown_stint(self):
+        ok, err = ide.StintManager(self.config).prompt("nope", "hi")
+        self.assertFalse(ok)
+        self.assertIn("no such", err)
+
+
+if __name__ == "__main__":
+    unittest.main()

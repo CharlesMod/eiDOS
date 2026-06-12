@@ -158,6 +158,14 @@ class Config:
     delegate_pi_provider: str = "house"        # pi provider name ("house-tap" routes via :8088 monitor)
     delegate_pi_model: str = "house-ai"
 
+    # --- Code IDE (browser GUI over the pi coding agent — interactive pi --mode rpc) ---
+    ide_enabled: bool = True
+    ide_port: int = 8100
+    ide_pi_provider: str = "house-tap"
+    ide_pi_model: str = "house-ai"
+    ide_max_stints: int = 8                     # concurrent live pi rpc processes
+    ide_stint_idle_timeout_s: float = 1800.0    # close a quiet stint after this
+
     @property
     def workspace(self) -> Path:
         return Path(self.workspace_dir)
@@ -358,6 +366,15 @@ def load_config(path: str = "config.toml") -> Config:
         config.delegate_pi_path = dlg.get("pi_path", config.delegate_pi_path)
         config.delegate_pi_provider = dlg.get("pi_provider", config.delegate_pi_provider)
         config.delegate_pi_model = dlg.get("pi_model", config.delegate_pi_model)
+
+        ide = data.get("ide", {})
+        config.ide_enabled = ide.get("enabled", config.ide_enabled)
+        config.ide_port = ide.get("port", config.ide_port)
+        config.ide_pi_provider = ide.get("pi_provider", config.ide_pi_provider)
+        config.ide_pi_model = ide.get("pi_model", config.ide_pi_model)
+        config.ide_max_stints = ide.get("max_stints", config.ide_max_stints)
+        config.ide_stint_idle_timeout_s = float(
+            ide.get("stint_idle_timeout_s", config.ide_stint_idle_timeout_s))
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)
