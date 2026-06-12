@@ -205,6 +205,64 @@ class TestGuardianRestructure(unittest.TestCase):
         self.assertEqual(len(guard["tail"]["cells"]), 2)
 
 
+class TestTerrarium(unittest.TestCase):
+
+    def _garden(self, **over):
+        g = {"facts": [0] * 14, "trees": [0] * 4, "moss": [0] * 7,
+             "stones": [0] * 7, "titles": 0, "done": 0, "mail": False}
+        g.update(over)
+        return g
+
+    def test_rows_are_23_wide_and_whitelisted(self):
+        for seed in range(40):
+            g = cg.genome_from_seed(seed)
+            t = cg.compose_terrarium(g, self._garden(
+                facts=[i for i in range(14)], trees=[1, 4, 16, 0],
+                moss=[1, 4, 16, 0, 0, 0, 0], stones=[1, 4, 16, 0, 0, 0, 0],
+                titles=3, done=2, mail=True))
+            self.assertEqual(t["frame_w"], 23)
+            for row in (t["sky"], t["ground"], t["under"]):
+                self.assertEqual(len(row), 23)
+                for ch in row:
+                    self.assertIn(ch, cg.APPROVED_GLYPHS)
+
+    def test_fact_ladder_rungs(self):
+        g = cg.genome_from_seed(0)  # style 0 = .,vwY✦◆
+        cases = [(0, " "), (1, "."), (2, ","), (4, "v"), (8, "w"),
+                 (16, "Y"), (32, "✦"), (64, "◆"), (200, "◆")]
+        for count, glyph in cases:
+            facts = [0] * 14
+            facts[5] = count
+            row = cg.compose_terrarium(g, self._garden(facts=facts))["ground"]
+            self.assertEqual(row[4 + 5], glyph, f"count {count}")
+
+    def test_mailbox_and_cairn(self):
+        g = cg.genome_from_seed(1)
+        empty = cg.compose_terrarium(g, self._garden(mail=False))["ground"]
+        full = cg.compose_terrarium(g, self._garden(mail=True, titles=3))["ground"]
+        self.assertEqual(empty[:2], "|_")
+        self.assertEqual(full[:2], "|>")
+        self.assertEqual(full[20:23], "◆◆◆")
+
+    def test_done_cairn_base_and_overflow(self):
+        g = cg.genome_from_seed(2)
+        two = cg.compose_terrarium(g, self._garden(done=2))["under"]
+        self.assertEqual(two[19:23], "==  ")
+        many = cg.compose_terrarium(g, self._garden(done=7))["under"]
+        self.assertEqual(many[19:23], "=x7 ")
+
+    def test_deterministic_and_style_varies(self):
+        g0 = cg.genome_from_seed(0)
+        self.assertEqual(cg.compose_terrarium(g0, self._garden(facts=[4] * 14)),
+                         cg.compose_terrarium(g0, self._garden(facts=[4] * 14)))
+        # the two flora styles render the same count differently
+        styles = set()
+        for seed in range(20):
+            g = cg.genome_from_seed(seed)
+            styles.add(cg.compose_terrarium(g, self._garden(facts=[4] * 14))["ground"][4])
+        self.assertGreaterEqual(len(styles), 2)
+
+
 class TestStageFor(unittest.TestCase):
 
     def test_table(self):

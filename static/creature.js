@@ -31,6 +31,18 @@ const Creature = (() => {
 
     function el() { return document.getElementById('creature-art'); }
 
+    function frameRows(rows) {
+        // Wrap the w-wide creature in the 23-col terrarium frame (Phase C): one sky
+        // row above, the body centered, ground + under rows below. No terrarium in
+        // the payload (older server / legacy) → just the bare creature, unchanged.
+        const terr = spec && spec.terrarium;
+        if (!terr) return rows.map(r => r.join(''));
+        const fw = terr.frame_w;
+        const off = Math.max(0, Math.floor((fw - spec.w) / 2));
+        const pad = (s) => (' '.repeat(off) + s + ' '.repeat(fw)).slice(0, fw);
+        return [terr.sky, ...rows.map(r => pad(r.join(''))), terr.ground, terr.under];
+    }
+
     /* ---------------- expression resolution ---------------- */
 
     function effectiveState() {
@@ -175,7 +187,7 @@ const Creature = (() => {
             const rows = spec.base[phase].map(line => line.split(''));
             const shim = Math.floor(t / 700) % 3;
             if (shim !== 2) stamp(rows, 1, shim ? 1 : spec.w - 2, '✦');
-            const text = rows.map(r => r.join('')).join('\n');
+            const text = frameRows(rows).join('\n');
             if (text !== lastDrawn) { el().textContent = text; lastDrawn = text; }
             el().style.color = spec.accent || '';
             el().classList.remove('cr-tremble', 'cr-dead', 'cr-listening');
@@ -234,7 +246,7 @@ const Creature = (() => {
             rows = rows.slice(1).concat([rows[0].map(() => ' ')]);
         }
 
-        const text = rows.map(r => r.join('')).join('\n');
+        const text = frameRows(rows).join('\n');
         if (text !== lastDrawn) { el().textContent = text; lastDrawn = text; }
 
         // STRAINED trembles in intermittent ~2-3s bursts every ~20s, not continuously

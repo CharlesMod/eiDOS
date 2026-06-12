@@ -349,6 +349,77 @@ def compose_cocoon(genome: Genome, stage: str) -> dict:
             "appendages": []}
 
 
+# --- Terrarium memory-garden (Phase C) ----------------------------------
+# The creature box becomes a tiny world: every glyph renders one-or-2^k REAL
+# learned records (knowledge store), titles, done objectives, unconsumed mail.
+# Placement is by stable hash of record id (done dashboard-side), so the garden
+# never reshuffles; maturity climbs powers-of-2 ladders so a column visibly
+# grows over an incarnation's life. Pure renderer of a precomputed `garden`.
+
+TERRARIUM_W = 23
+FACT_SLOTS = 14
+TREE_SLOTS = 4
+MOSS_SLOTS = 7
+STONE_SLOTS = 7
+
+# Two genome-seeded flora alphabets so each incarnation's garden looks distinct.
+# Both are count-preserving (descending thresholds → rung glyph); all whitelisted.
+_FACT_LADDERS = (
+    [(64, "◆"), (32, "✦"), (16, "Y"), (8, "w"), (4, "v"), (2, ","), (1, ".")],
+    [(64, "◆"), (32, "✦"), (16, "T"), (8, "I"), (4, "i"), (2, ":"), (1, ".")],
+)
+_TREE_LADDER = [(16, "Y"), (4, "Y"), (1, "!")]
+_MOSS_LADDER = [(16, "°"), (4, "°"), (1, "·")]
+_STONE_LADDER = [(16, "O"), (4, "n"), (1, "o")]
+
+
+def _rung(count: int, ladder) -> str:
+    for thresh, glyph in ladder:
+        if count >= thresh:
+            return glyph
+    return " "
+
+
+def compose_terrarium(genome: Genome, garden: dict) -> dict:
+    """Render the 23-col garden rows from precomputed per-slot counts.
+    `garden` = {facts:[14], trees:[4], moss:[7], stones:[7], titles:int,
+    done:int, mail:bool}. Returns {frame_w, sky, ground, under}."""
+    w = TERRARIUM_W
+    fact_ladder = _FACT_LADDERS[genome.get("seed", 0) % len(_FACT_LADDERS)]
+    ground = [" "] * w
+    under = [" "] * w
+    sky = " " * w   # reserved for dream wisps (Phase C2)
+
+    # Ground: mailbox(0-1) · trees(2-3,18-19) · 14 fact columns(4-17) · cairn(20-22)
+    ground[0] = "|"
+    ground[1] = ">" if garden.get("mail") else "_"
+    trees = garden.get("trees", [])
+    for i, c in enumerate((2, 3, 18, 19)):
+        ground[c] = _rung(trees[i] if i < len(trees) else 0, _TREE_LADDER)
+    facts = garden.get("facts", [])
+    for i in range(FACT_SLOTS):
+        ground[4 + i] = _rung(facts[i] if i < len(facts) else 0, fact_ladder)
+    for i in range(min(int(garden.get("titles", 0)), 3)):
+        ground[20 + i] = "◆"
+
+    # Under: moss(even 0-12) · stones(odd 1-13) · gap(14) · mini bench(15-18) · cairn base(19-22)
+    moss = garden.get("moss", [])
+    stones = garden.get("stones", [])
+    for i in range(7):
+        under[i * 2] = _rung(moss[i] if i < len(moss) else 0, _MOSS_LADDER)
+        under[i * 2 + 1] = _rung(stones[i] if i < len(stones) else 0, _STONE_LADDER)
+    done = int(garden.get("done", 0))
+    if done <= 4:
+        for i in range(done):
+            under[19 + i] = "="
+    else:
+        for i, ch in enumerate(("=x%d" % done)[:4]):
+            under[19 + i] = ch
+
+    return {"frame_w": w, "sky": sky,
+            "ground": "".join(ground), "under": "".join(under)}
+
+
 def build_spec(genome: Genome, stage: str, hatch: dict, expr: dict) -> dict:
     """The full payload /api/status ships to the client compositor."""
     parts = compose_egg(genome, hatch.get("progress", 0.0)) if stage == "egg" \

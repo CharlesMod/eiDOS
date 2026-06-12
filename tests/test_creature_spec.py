@@ -54,6 +54,78 @@ class Base(unittest.TestCase):
             heartbeat or {}, goal)
 
 
+def _iso(ts):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+class TestTerrarium(Base):
+
+    def _lay_hatched(self, hatched_ago=3600):
+        import creature_gen
+        seed = 12345
+        now = time.time()
+        doc = {"v": 1, "seed": seed, "genome": creature_gen.genome_from_seed(seed),
+               "born_ts": now - hatched_ago - 100, "hatched": True, "hatch_xp": 25,
+               "events": [{"ts": now - hatched_ago, "kind": "hatched"}],
+               "last_stage": "adult"}
+        (self.ws / "creature.json").write_text(json.dumps(doc))
+        return doc, now
+
+    def _write_index(self, records):
+        (self.ws / "knowledge").mkdir(parents=True, exist_ok=True)
+        (self.ws / "knowledge" / "index.json").write_text(
+            json.dumps(records), encoding="utf-8")
+
+    def test_spec_includes_terrarium(self):
+        self._lay_hatched()
+        s = self._spec(persona={"level": 5, "xp": 600, "titles": ["A"]})
+        t = s["terrarium"]
+        self.assertEqual(t["frame_w"], 23)
+        for row in (t["sky"], t["ground"], t["under"]):
+            self.assertEqual(len(row), 23)
+
+    def test_seed_and_incarnation_filters(self):
+        doc, now = self._lay_hatched(hatched_ago=3600)
+        self._write_index([
+            {"id": "seed1", "category": "facts", "source_goal": "seed",
+             "created": _iso(now)},                       # excluded: seed
+            {"id": "old1", "category": "facts", "source_goal": "g",
+             "created": _iso(now - 7200)},                # excluded: pre-hatch
+            {"id": "f1", "category": "facts", "source_goal": "g", "created": _iso(now)},
+            {"id": "f2", "category": "facts", "source_goal": "g", "created": _iso(now)},
+            {"id": "f3", "category": "facts", "source_goal": "g", "created": _iso(now)},
+            {"id": "p1", "category": "procedures", "source_goal": "g", "created": _iso(now)},
+            {"id": "p2", "category": "procedures", "source_goal": "g", "created": _iso(now)},
+            {"id": "r1", "category": "reflections", "source_goal": "g", "created": _iso(now)},
+            {"id": "e1", "category": "errors", "source_goal": "g", "created": _iso(now)},
+        ])
+        g = dashboard._build_garden(self.config, doc,
+                                    {"titles": ["A", "B"]})
+        self.assertEqual(sum(g["facts"]), 3)     # seed + pre-hatch dropped
+        self.assertEqual(sum(g["trees"]), 2)
+        self.assertEqual(sum(g["moss"]), 1)
+        self.assertEqual(sum(g["stones"]), 1)
+        self.assertEqual(g["titles"], 2)
+
+    def test_mail_and_done(self):
+        doc, now = self._lay_hatched()
+        self._write_index([])
+        # done objectives
+        (self.ws / "objectives.json").write_text(json.dumps(
+            {"objectives": [{"state": "done"}, {"state": "done"},
+                            {"state": "blocked"}]}))
+        # an unconsumed intervention
+        idir = self.ws / "interventions"
+        idir.mkdir(parents=True, exist_ok=True)
+        (idir / "msg.md").write_text("hi")
+        g = dashboard._build_garden(self.config, doc, {})
+        self.assertTrue(g["mail"])
+        self.assertEqual(g["done"], 2)
+        # consumed → renamed .done → mailbox empties
+        (idir / "msg.md").rename(idir / "msg.md.done")
+        self.assertFalse(dashboard._build_garden(self.config, doc, {})["mail"])
+
+
 class TestLifecycle(Base):
 
     def test_created_once_then_stable(self):

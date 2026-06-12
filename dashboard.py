@@ -280,6 +280,88 @@ def _creature_path(config: Config) -> Path:
     return config.workspace / "creature.json"
 
 
+# --- Terrarium garden builder (read-only; reflects eiDOS's real growth) ---
+import calendar  # noqa: E402
+import hashlib   # noqa: E402
+
+_GARDEN_CACHE = {}   # path -> (mtime, parsed_index)
+
+
+def _iso_epoch(s: str) -> float:
+    try:
+        return float(calendar.timegm(time.strptime(s, "%Y-%m-%dT%H:%M:%SZ")))
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _slot(record_id: str, n: int) -> int:
+    """Stable per-record slot — md5, NOT Python hash() (salted per process)."""
+    return int(hashlib.md5(str(record_id).encode("utf-8")).hexdigest(), 16) % n
+
+
+def _hatched_ts(doc: dict) -> float:
+    for e in reversed(doc.get("events", [])):
+        if e.get("kind") == "hatched":
+            return float(e.get("ts", 0)) or float(doc.get("born_ts", 0) or 0)
+    return float(doc.get("born_ts", 0) or 0)
+
+
+def _read_index_cached(config: Config) -> list:
+    p = config.workspace / "knowledge" / "index.json"
+    try:
+        mtime = p.stat().st_mtime
+    except OSError:
+        return []
+    cached = _GARDEN_CACHE.get(p)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        data = data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError, ValueError):
+        data = []
+    _GARDEN_CACHE[p] = (mtime, data)
+    return data
+
+
+def _build_garden(config: Config, doc: dict, persona: dict) -> dict:
+    """Per-slot counts of THIS incarnation's lived experience. Two filters make
+    the garden a biography: drop seed (bootstrap) records, and drop anything
+    created before this creature hatched (the knowledge store outlives a wipe)."""
+    hatched = _hatched_ts(doc)
+    buckets = {"facts": [0] * creature_gen.FACT_SLOTS, "procedures": [0] * creature_gen.TREE_SLOTS,
+               "reflections": [0] * creature_gen.MOSS_SLOTS, "errors": [0] * creature_gen.STONE_SLOTS}
+    for rec in _read_index_cached(config):
+        if rec.get("source_goal") == "seed":
+            continue
+        if _iso_epoch(rec.get("created", "")) < hatched:
+            continue
+        slots = buckets.get(rec.get("category"))
+        if slots is None:
+            continue
+        slots[_slot(rec.get("id", ""), len(slots))] += 1
+    # done objectives
+    done = 0
+    try:
+        obj = _read_json(config.workspace / "objectives.json")
+        done = sum(1 for o in obj.get("objectives", []) if o.get("state") == "done")
+    except Exception:  # noqa: BLE001
+        pass
+    # unconsumed interventions (consumed ones are renamed *.md.done)
+    mail = False
+    try:
+        idir = config.interventions_dir
+        mail = idir.exists() and any(idir.glob("*.md"))
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "facts": buckets["facts"], "trees": buckets["procedures"],
+        "moss": buckets["reflections"], "stones": buckets["errors"],
+        "titles": len(persona.get("titles") or []),
+        "done": done, "mail": bool(mail),
+    }
+
+
 def _save_creature(config: Config, doc: dict) -> None:
     config.workspace.mkdir(parents=True, exist_ok=True)
     tmp = _creature_path(config).with_suffix(".tmp")
@@ -390,6 +472,11 @@ def build_creature_spec(config: Config, persona: dict, heartbeat: dict,
         spec.update(creature_gen.compose_cocoon(doc["genome"], stage))
         spec["interlude"] = {"kind": "cocoon", "until_ts": until}
     spec["events"] = doc.get("events", [])[-5:]
+    try:
+        spec["terrarium"] = creature_gen.compose_terrarium(
+            doc["genome"], _build_garden(config, doc, persona))
+    except Exception:  # noqa: BLE001 — the garden must never break the page
+        logger.exception("terrarium build failed")
     return spec
 
 
