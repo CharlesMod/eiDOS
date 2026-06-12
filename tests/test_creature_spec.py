@@ -189,6 +189,75 @@ class TestPendingAndBeats(Base):
         self.assertNotEqual(beats3[-1]["id"], first_id)
 
 
+class TestBondLedger(Base):
+
+    def _consume(self, n):
+        idir = self.ws / "interventions"
+        idir.mkdir(parents=True, exist_ok=True)
+        existing = len(list(idir.glob("*.md.done")))
+        for i in range(n):
+            (idir / f"c{existing + i}.md.done").write_text("x")
+
+    def test_tier_thresholds(self):
+        self.assertEqual(dashboard._bond_tier(0), 0)
+        self.assertEqual(dashboard._bond_tier(24), 0)
+        self.assertEqual(dashboard._bond_tier(25), 1)
+        self.assertEqual(dashboard._bond_tier(60), 2)
+        self.assertEqual(dashboard._bond_tier(120), 3)
+        self.assertEqual(dashboard._bond_tier(400), 5)
+
+    def test_consume_baseline_then_accrual_with_cap(self):
+        self._consume(5)                 # historical backlog
+        doc = {}
+        b = dashboard._accrue_bond(self.config, doc)
+        self.assertEqual(b["score"], 0)  # baseline, backlog earns nothing
+        self._consume(3)                 # 3 new consumes → +6
+        b = dashboard._accrue_bond(self.config, doc)
+        self.assertEqual(b["score"], 6)
+        self.assertEqual(b["counts"]["exchanges"], 3)
+        # daily cap: 10 more consumes only credits up to +10/day total for chat
+        self._consume(10)
+        b = dashboard._accrue_bond(self.config, doc)
+        self.assertEqual(b["by_kind"]["chat"], 10)   # capped at 10/day
+
+    def test_listening_accrues_one_per_minute(self):
+        (self.ws / "state").mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        (self.ws / "state" / "chat_hold.json").write_text(json.dumps(
+            {"held": True, "ts": now, "first_held_ts": now - 5}))
+        doc = {}
+        dashboard._accrue_bond(self.config, doc)            # baseline poll, credits minute 1
+        first = doc["bond"]["by_kind"].get("hold_min", 0)
+        self.assertEqual(first, 1)
+        dashboard._accrue_bond(self.config, doc)            # immediate re-poll: <60s, no credit
+        self.assertEqual(doc["bond"]["by_kind"]["hold_min"], 1)
+        doc["bond"]["last_listen_credit_ts"] = now - 120    # simulate a minute passing
+        dashboard._accrue_bond(self.config, doc)
+        self.assertEqual(doc["bond"]["by_kind"]["hold_min"], 2)
+
+    def test_selfedit_survived_credits_once(self):
+        pdir = self.ws / "proposals"
+        pdir.mkdir(parents=True, exist_ok=True)
+        old = time.time() - 2000        # applied > 30 min ago → survived
+        (pdir / "se1.json").write_text(json.dumps(
+            {"id": "se1", "kind": "self_edit", "status": "applied", "applied_ts": old}))
+        (pdir / "se2.json").write_text(json.dumps(   # too recent → not yet credited
+            {"id": "se2", "kind": "self_edit", "status": "applied",
+             "applied_ts": time.time()}))
+        doc = {}
+        b = dashboard._accrue_bond(self.config, doc)
+        self.assertEqual(b["by_kind"].get("selfedits"), 12)
+        self.assertEqual(b["counts"]["approvals"], 1)
+        # idempotent — the same survived edit isn't credited twice
+        b = dashboard._accrue_bond(self.config, doc)
+        self.assertEqual(b["by_kind"]["selfedits"], 12)
+
+    def test_spec_emits_bond_expr_and_hover(self):
+        s = self._spec()
+        self.assertIn("tier", s["bond_expr"])
+        self.assertIn("exchanges", s["bond_hover"])
+
+
 class TestLifecycle(Base):
 
     def test_created_once_then_stable(self):

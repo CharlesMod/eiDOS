@@ -40,6 +40,8 @@ const Creature = (() => {
     let beatHigh = parseInt(localStorage.getItem('eidosBeatSeq') || '0', 10) || 0;
     let beatUntil = 0, beatKind = '';
     const TABLET_PRESENT_MS = 60000;
+    let bondTier = 0;
+    let greetedThisLoad = false;    // greeting fires at most once per page load
 
     const now = () => Date.now();
     const rand = (a, b) => a + Math.random() * (b - a);
@@ -53,7 +55,10 @@ const Creature = (() => {
         const terr = spec && spec.terrarium;
         if (!terr) return rows.map(r => r.join(''));
         const fw = terr.frame_w;
-        const off = Math.max(0, Math.floor((fw - spec.w) / 2));
+        // B3 (bond ≥ "settles near you"): resting position drifts toward the
+        // mailbox (left) edge — 1 char at B3, 2 at B5.
+        const drift = bondTier >= 5 ? 2 : bondTier >= 3 ? 1 : 0;
+        const off = Math.max(0, Math.floor((fw - spec.w) / 2) - drift);
         const pad = (s) => (' '.repeat(off) + s + ' '.repeat(fw)).slice(0, fw);
         const under = terr.under.split('');
         stampMini(under);
@@ -104,6 +109,31 @@ const Creature = (() => {
         const on = !!(p && (p.self_guide || (p.selfedits || 0) > 0));
         if (on && !pendingOn) { tabletVisibleMs = 0; tabletDown = false; }
         pendingOn = on;
+    }
+
+    function applyBond(s) {
+        bondTier = (s.bond_expr && s.bond_expr.tier) || 0;
+        // B2 greeting ("it saw me"): on a fresh load after a >=4h gap, a bonded
+        // creature brightens and smiles once. lastSeen marks "the page was alive";
+        // a quick tab-switch (recent lastSeen) earns nothing.
+        const last = parseFloat(localStorage.getItem('eidosLastSeen') || '0');
+        const t = now();
+        if (bondTier >= 2 && !greetedThisLoad && last && (t - last) > 4 * 3600 * 1000) {
+            smileUntil = t + 1800;          // reuse the smile channel: bright eyes + smile
+            greetedThisLoad = true;
+        }
+        localStorage.setItem('eidosLastSeen', String(t));
+        // hover line — a diegetic ledger, never a meter
+        const box = document.getElementById('creature-box');
+        const h = s.bond_hover;
+        if (box && h) {
+            const parts = [];
+            if (h.exchanges) parts.push(h.exchanges + ' exchange' + (h.exchanges > 1 ? 's' : ''));
+            if (h.hold_min) parts.push('sat with you ' +
+                (h.hold_min >= 60 ? (h.hold_min / 60).toFixed(1) + 'h' : h.hold_min + 'm'));
+            if (h.approvals) parts.push(h.approvals + ' idea' + (h.approvals > 1 ? 's' : '') + ' approved');
+            box.title = parts.join(' · ');
+        }
     }
 
     function stampBeatTablet(rows, t) {
@@ -332,6 +362,11 @@ const Creature = (() => {
         if (t < beatUntil && beatKind === 'consume' && state !== 'dead') {
             saccadeDir = -1; saccadeUntil = beatUntil;
         }
+        // B1 (bond ≥ "notices you"): the gaze parks on the mailbox while it's
+        // actively listening to Dean — sustained attention, not a random glance.
+        if (bondTier >= 1 && state !== 'dead' && listeningOverlay(state)) {
+            saccadeDir = -1; saccadeUntil = t + 300;
+        }
 
         if (spec.eyes) {
             // micro: look_around chain overrides saccade direction
@@ -444,6 +479,7 @@ const Creature = (() => {
             updateMini(s.delegates);
             applyPending(s.pending);
             applyBeats(s.beats);
+            applyBond(s);
             checkEvents(s);
             if (!masterTimer) masterTimer = setInterval(render, 100);
             render();

@@ -480,6 +480,9 @@ def build_creature_spec(config: Config, persona: dict, heartbeat: dict,
     spec["delegates"] = _delegates_payload(config)
     spec["pending"] = _build_pending(config)
     spec["beats"] = _update_beats(config, doc)
+    bond = _accrue_bond(config, doc)
+    spec["bond_expr"] = {"tier": int(bond.get("tier", 0))}
+    spec["bond_hover"] = dict(bond.get("counts", {}))
     return spec
 
 
@@ -550,6 +553,96 @@ def _update_beats(config: Config, doc: dict) -> list:
             except OSError:
                 logger.exception("creature.json beat update failed")
     return beats[-5:]
+
+
+# Provisional bond tiers (recalibrated from real telemetry after ~2 weeks — the
+# ledger carries by_kind so the thresholds can be tuned without code changes).
+BOND_TIERS = [(400, 5), (220, 4), (120, 3), (60, 2), (25, 1)]
+
+
+def _bond_tier(score: float) -> int:
+    for thresh, n in BOND_TIERS:
+        if score >= thresh:
+            return n
+    return 0
+
+
+def _accrue_bond(config: Config, doc: dict) -> dict:
+    """Monotonic ledger of shared work. Accrues from the poll-detectable signals
+    (consume / listening minutes / self-edit-that-survived), each rarity-weighted
+    and daily-capped so it can't be farmed. Resets with the incarnation; never
+    decays. Persists only when a point is actually credited."""
+    now = time.time()
+    b = doc.setdefault("bond", {})
+    b.setdefault("score", 0.0)
+    b.setdefault("by_kind", {})
+    counts = b.setdefault("counts", {"exchanges": 0, "hold_min": 0, "approvals": 0})
+    day = b.setdefault("day", {})
+    today = time.strftime("%Y-%m-%d", time.gmtime(now))
+    if day.get("date") != today:
+        day = b["day"] = {"date": today}
+    changed = False
+
+    def credit(kind, pts, day_key=None, cap=None):
+        nonlocal changed
+        if day_key is not None and cap is not None:
+            pts = min(pts, max(0, cap - day.get(day_key, 0)))
+        if pts <= 0:
+            return 0
+        if day_key is not None:
+            day[day_key] = day.get(day_key, 0) + pts
+        b["score"] = round(b.get("score", 0) + pts, 2)
+        b["by_kind"][kind] = b["by_kind"].get(kind, 0) + pts
+        changed = True
+        return pts
+
+    # S1 consume +2 each, cap 10/day — baseline skips the historical backlog
+    consumed = _count_consumed(config)
+    if not b.get("baseline_set"):
+        b["credited_consumed"] = consumed
+        b["baseline_set"] = True
+        changed = True
+    elif consumed > b.get("credited_consumed", 0):
+        delta = consumed - b["credited_consumed"]
+        credit("chat", delta * 2, "chat", 10)
+        counts["exchanges"] += delta
+        b["credited_consumed"] = consumed
+        changed = True
+
+    # S3 listening +1/min, cap 4/day (presence with intent)
+    if _listening_hold_fresh(config) and now - b.get("last_listen_credit_ts", 0) >= 60:
+        if credit("hold_min", 1, "hold", 4):
+            counts["hold_min"] += 1
+        b["last_listen_credit_ts"] = now
+        changed = True
+
+    # S5 self-edit applied AND survived 30 min without rollback, +12 (real coaching)
+    try:
+        import selfedit
+        seen = set(b.get("credited_selfedits", []))
+        before = len(seen)
+        for m in selfedit.list_proposals(config, kind="self_edit"):
+            mid = m.get("id")
+            if (m.get("status") == "applied" and mid not in seen
+                    and m.get("applied_ts") and now - float(m["applied_ts"]) >= 1800):
+                credit("selfedits", 12)
+                counts["approvals"] += 1
+                seen.add(mid)
+        if len(seen) != before:
+            b["credited_selfedits"] = sorted(seen)
+            changed = True
+    except Exception:  # noqa: BLE001
+        pass
+
+    b["tier"] = _bond_tier(b.get("score", 0))
+    b["tiers_provisional"] = True
+    if changed:
+        with _CREATURE_LOCK:
+            try:
+                _save_creature(config, doc)
+            except OSError:
+                logger.exception("creature.json bond update failed")
+    return b
 
 
 def build_status(config: Config) -> dict:
