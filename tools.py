@@ -901,7 +901,7 @@ def _write_jobs(config: Config, jobs: list[dict]) -> None:
     config.jobs_path.write_text(json.dumps(jobs, indent=2))
 
 
-_JOB_DONE = ("completed", "timed_out", "reaped")
+_JOB_DONE = ("completed", "failed", "timed_out", "reaped")
 
 
 def _prune_jobs(jobs: list[dict], keep_delivered: int = 15) -> list[dict]:
@@ -1007,8 +1007,14 @@ def collect_finished_jobs(config: Config) -> list[dict]:
             if j.get("status") == "running":
                 started_ts = j.get("started_ts")
                 manual_cap = float(getattr(config, "bg_job_max_age_s", 1800.0))
-                over_ceiling = (j.get("kind") in ("async", "auto")
-                                and started_ts and (now - started_ts) > ceiling)
+                if j.get("kind") == "delegate":
+                    # Delegates get their own (longer) watchdog ceiling — a coding-agent
+                    # run is supposed to take minutes; bg_job_max_age_s stays the backstop.
+                    dlg_cap = float(getattr(config, "delegate_timeout_s", 600.0))
+                    over_ceiling = bool(started_ts and (now - started_ts) > dlg_cap)
+                else:
+                    over_ceiling = (j.get("kind") in ("async", "auto")
+                                    and started_ts and (now - started_ts) > ceiling)
                 over_manual = (started_ts and manual_cap > 0 and (now - started_ts) > manual_cap)
                 if over_ceiling or over_manual:
                     # Lifetime caps apply to every route (a kill on an already-dead pid is a
@@ -1023,9 +1029,13 @@ def collect_finished_jobs(config: Config) -> list[dict]:
                 else:
                     _finish_dead_job(j)
                     changed = True
-            # Deliver finished async/auto jobs exactly once.
-            if (j.get("kind") in ("async", "auto")
-                    and j.get("status") in ("completed", "failed", "timed_out")
+            # Deliver finished async/auto/delegate jobs exactly once. Delegates are also
+            # delivered when "reaped" (a restart killed them mid-run) so the model learns
+            # the session survived and can continue_job — instead of the job silently vanishing.
+            _deliver = ("completed", "failed", "timed_out", "reaped") \
+                if j.get("kind") == "delegate" else ("completed", "failed", "timed_out")
+            if (j.get("kind") in ("async", "auto", "delegate")
+                    and j.get("status") in _deliver
                     and not j.get("notified")):
                 finished.append({**j, "tail": _read_job_tail(j.get("output_path", ""))})
                 j["notified"] = True
@@ -1526,7 +1536,7 @@ def tool_speak(args: dict, config: Config) -> ToolResult:
 
 def tool_manual(args: dict, config: Config) -> ToolResult:
     """Read your OPERATING MANUAL — tested how-to (exact endpoints, payloads, working examples) for your
-    big-lift features. Pass 'topic' (tts/vision/ask_ai/network/devices/cpu) for one section, or nothing
+    big-lift features. Pass 'topic' (tts/vision/ask_ai/network/devices/cpu/delegate) for one section, or nothing
     for the whole thing. READ THIS before reverse-engineering a feature — the recipes are verified, so
     you skip the 405/404/500 dead-ends. e.g. manual {"topic":"tts"} before you try to speak."""
     import re
@@ -1546,7 +1556,9 @@ def tool_manual(args: dict, config: Config) -> ToolResult:
            "scan": "network", "lan": "network", "discover": "network",
            "device": "devices", "camera": "devices", "cameras": "devices", "tuya": "devices",
            "plug": "devices", "printer": "devices", "octoprint": "devices",
-           "background": "cpu", "worker": "cpu", "script": "cpu", "bash": "cpu"}
+           "background": "cpu", "worker": "cpu", "script": "cpu", "bash": "cpu",
+           "pi": "delegate", "coder": "delegate", "agent": "delegate",
+           "offload": "delegate", "handoff": "delegate", "coding": "delegate"}
     want = syn.get(topic, topic)
     sections = re.split(r"\n(?=## )", text)
     for s in sections:
@@ -1557,7 +1569,7 @@ def tool_manual(args: dict, config: Config) -> ToolResult:
         if want in s.lower():
             return ToolResult(output=s.strip(), full_output_path=None, success=True, duration_s=0)
     return ToolResult(output=f"No manual section matched '{topic}'. Topics: tts, vision, ask_ai, network, "
-                      f"devices, cpu. Call manual {{}} (no topic) for the whole manual.",
+                      f"devices, cpu, delegate. Call manual {{}} (no topic) for the whole manual.",
                       full_output_path=None, success=True, duration_s=0)
 
 
@@ -1650,6 +1662,18 @@ def tool_objective_list(args: dict, config: Config) -> ToolResult:
     return ToolResult(output="\n".join(lines), full_output_path=None, success=True, duration_s=0)
 
 
+def tool_delegate(args: dict, config: Config) -> ToolResult:
+    """HAND OFF a hard multi-step job to your CODING AGENT (a full read/bash/edit/write agent
+    running on your own mind, with its own large context). It works in the BACKGROUND for
+    minutes and the result returns tagged [↩ delegate N]. Use it when a task needs more than
+    2-3 ticks of real work, when the same approach keeps failing, or for multi-file edits and
+    real investigations. args: {"task": "<self-contained brief: goal + constraints + what you
+    tried>", "mode": "research"|"code", "cwd"?: path, "name"?: short_id, "continue_job"?: id}.
+    The agent has NONE of your context — write the task like a brief to a contractor."""
+    import delegate
+    return delegate.tool_delegate(args, config)
+
+
 TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "bash": tool_bash,
     "write_file": tool_write_file,
@@ -1695,6 +1719,9 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "net_scan": tool_net_scan,
     "http_probe": tool_http_probe,
     "udp_listen": tool_udp_listen,
+    # Delegate — hand a long-horizon coding/investigation task to the pi coding agent
+    # (background job on the shared ledger; result returns tagged [↩ delegate N])
+    "delegate": tool_delegate,
 }
 
 

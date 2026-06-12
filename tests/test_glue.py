@@ -173,5 +173,25 @@ class TestPersistence(unittest.TestCase):
         self.assertEqual(glue.recent_outcomes(self.config), [])
 
 
+class TestEscalationHint(unittest.TestCase):
+    """The STRAINED pivot-steer: fires only on a trailing run of the SAME failure
+    signature, and points at the delegate instead of another retry."""
+
+    def test_three_same_sig_fires_and_mentions_delegate(self):
+        hint = glue.escalation_hint([F(sig="a"), F(sig="a"), F(sig="a")])
+        self.assertTrue(hint)
+        self.assertIn("delegate", hint)
+
+    def test_mixed_signatures_do_not_fire(self):
+        self.assertEqual(glue.escalation_hint([F(sig="a"), F(sig="b"), F(sig="a")]), "")
+
+    def test_trailing_success_clears(self):
+        self.assertEqual(
+            glue.escalation_hint([F(sig="a"), F(sig="a"), F(sig="a"), OK()]), "")
+
+    def test_two_in_a_row_not_enough(self):
+        self.assertEqual(glue.escalation_hint([F(sig="a"), F(sig="a")]), "")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -709,6 +709,25 @@ def run_loop(config: Config, persona=None, wal=None):
         try:
             for fin in collect_finished_jobs(config):
                 status = fin.get("status")
+                if fin.get("kind") == "delegate":
+                    # Delegate (pi coding agent) results get their own compact formatting:
+                    # digest + files touched + resume hint, not a raw output tail.
+                    try:
+                        import delegate as _dlg
+                        d_out, d_ok = _dlg.format_result_observation(config, fin)
+                    except Exception:  # noqa: BLE001 — formatting must never lose the result
+                        d_out = (f"[↩ delegate {fin.get('name')}] (result formatting failed)\n"
+                                 f"{(fin.get('tail') or '')[:1200]}")
+                        d_ok = status == "completed"
+                    append_observation(config, {
+                        "tick": tick_number,
+                        "tool": "async_result",
+                        "args": {"job": fin.get("name")},
+                        "fail_kind": "" if d_ok else ("timeout" if status == "timed_out" else "exec"),
+                        "success": d_ok,
+                        "output": d_out,
+                    })
+                    continue
                 if status == "completed":
                     ok, f_kind = "OK", ""
                 elif status == "timed_out":

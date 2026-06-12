@@ -148,5 +148,20 @@ embedding_enabled = true
 embedding_cohost = true
 embedding_model_dir = "models/all-MiniLM-L6-v2"
 
+[delegate]
+# Hand long-horizon coding/investigation tasks to the pi coding agent (background job,
+# result returns tagged [↩ delegate N]). Brain = same house-ai model, own 32k context.
+enabled = true
+timeout_s = 600
+# Extra roots the delegate may use as cwd. The Kairos repo itself is HARD-DENIED in code
+# regardless of this list (only the workspace/delegate sandbox inside it is allowed).
+allowed_dirs = ["C:/Users/cmod/llm"]
+max_sessions = 12
+pi_path = ""            # '' = resolve 'pi' from PATH
+# Route pi through the :8088 monitor tap so delegate tokens show on the :9100 dashboard,
+# same as the mind. Set to "house" for a direct :8081 connection.
+pi_provider = "house-tap"
+pi_model = "house-ai"
+
 [paths]
 workspace = "C:/Users/cmod/llm/Kairos/workspace"

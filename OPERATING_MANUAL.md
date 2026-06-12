@@ -73,6 +73,34 @@ one in a skill — that re-creates the slow path AND skips the chat log.
 - One tick dispatches the worker; later ticks read what it found. Don't grind slow work inline tick-by-
   tick. **The GPU is your mind; the CPU is your hands — use both.** Your CPU is underused.
 
+## delegate — HAND OFF a hard multi-step job to your coding agent
+Your big sibling to the CPU-worker pattern: a full coding AGENT (read/bash/edit/write tools, your own
+house-ai mind, its own large context) that holds ONE problem for minutes — investigations, multi-file
+edits, environment repair, robust script-writing. It runs in the BACKGROUND; you are never blocked.
+
+- Investigate (read-only): `delegate {"task": "Find out why the OctoPrint API at 192.168.86.48 returns
+  404 on /api/* despite port 80 serving the login page. I tried /api/jobs, /api/printer, /api/version
+  with and without auth headers. Identify the actual API base path or what service this really is.",
+  "mode": "research"}`
+- Build/fix (full tools): `delegate {"task": "Write a robust Python script that polls the Tuya plug
+  states every 60s and appends changes to state_log.jsonl. Handle network timeouts. Test it runs.",
+  "mode": "code"}`
+- Follow up in the SAME session: `delegate {"continue_job": "dlg_tuya_poller", "task": "Also track
+  the printer plug, and add a --once flag."}`
+
+Mechanics and rules:
+- Dispatch returns instantly: `⟳ delegated [job dlg_X]`. The result arrives minutes later as
+  `[↩ delegate dlg_X · OK] <digest> files: ... full: <result.md path>`. ONE delegate at a time.
+- **The agent has NONE of your context.** Write the task like a brief to a contractor: the goal,
+  the constraints, exact IPs/paths/credname hints, and EVERYTHING you already tried with the exact
+  errors. A vague task wastes the whole run.
+- WHEN to delegate: more than 2-3 ticks of real work · the same approach failed repeatedly ·
+  multi-file edits · real investigations · fixing a broken dependency/tool. Stay hands-on for
+  one-shot commands, single probes, quick reads.
+- It works in a sandbox under workspace/delegate/<job>/ by default (pass "cwd" for another allowed
+  project dir). It cannot touch your own source — that stays propose_self_edit territory.
+- If it TIMED OUT or was INTERRUPTED, the session survived: continue_job picks up where it stopped.
+
 ---
 
 _When something here turns out to be wrong or incomplete, that's a real limitation in your own tooling —

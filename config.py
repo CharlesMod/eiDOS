@@ -149,6 +149,15 @@ class Config:
     eidos_stuck_threshold_s: int = 600         # watchdog restarts eidos if alive but not ticking this long
     dashboard_token: str = ""                  # shared token gating state-changing POSTs ('' = off)
 
+    # --- Delegate (hand long-horizon tasks to the pi coding agent as a background job) ---
+    delegate_enabled: bool = False             # config.toml flips this on
+    delegate_timeout_s: float = 600.0          # watchdog ceiling for one delegate run
+    delegate_allowed_dirs: List[str] = dataclasses.field(default_factory=list)  # extra cwd roots
+    delegate_max_sessions: int = 12            # retained job sandboxes (oldest pruned at dispatch)
+    delegate_pi_path: str = ""                 # '' = resolve 'pi' from PATH
+    delegate_pi_provider: str = "house"        # pi provider name ("house-tap" routes via :8088 monitor)
+    delegate_pi_model: str = "house-ai"
+
     @property
     def workspace(self) -> Path:
         return Path(self.workspace_dir)
@@ -340,6 +349,15 @@ def load_config(path: str = "config.toml") -> Config:
         config.knowledge_embedding_enabled = knowledge.get("embedding_enabled", config.knowledge_embedding_enabled)
         config.knowledge_embedding_cohost = knowledge.get("embedding_cohost", config.knowledge_embedding_cohost)
         config.embedding_model_dir = knowledge.get("embedding_model_dir", config.embedding_model_dir)
+
+        dlg = data.get("delegate", {})
+        config.delegate_enabled = dlg.get("enabled", config.delegate_enabled)
+        config.delegate_timeout_s = float(dlg.get("timeout_s", config.delegate_timeout_s))
+        config.delegate_allowed_dirs = dlg.get("allowed_dirs", config.delegate_allowed_dirs)
+        config.delegate_max_sessions = dlg.get("max_sessions", config.delegate_max_sessions)
+        config.delegate_pi_path = dlg.get("pi_path", config.delegate_pi_path)
+        config.delegate_pi_provider = dlg.get("pi_provider", config.delegate_pi_provider)
+        config.delegate_pi_model = dlg.get("pi_model", config.delegate_pi_model)
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

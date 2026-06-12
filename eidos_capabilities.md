@@ -98,6 +98,21 @@ check here and with `check_tools` to confirm it doesn't already exist. It almost
 - Slow/auto jobs are time-capped and reaped for you; orphans are cleaned on restart.
 - → Never build a job queue, process manager, or infinite poll loop.
 
+## Delegate — your coding agent (hand off, don't grind)
+- `delegate {"task": "<self-contained brief>", "mode": "research"|"code"}` hands a hard multi-step
+  job to a FULL coding agent (read/bash/edit/write tools, your own house-ai mind, its own large
+  context) running in the background for minutes. Result returns tagged `[↩ delegate N]` with a
+  digest, the files it touched, and a `result.md` path. One delegate at a time.
+- WHEN: a task needs more than 2-3 ticks of real work · the same approach keeps failing (the
+  STRAINED nudge will remind you) · multi-file edits · real investigations · repairing a broken
+  dependency or tool. Stay hands-on for one-shots, single probes, quick reads.
+- The agent has NONE of your context: the task must carry the goal, constraints, exact addresses/
+  paths, and everything you already tried with the exact errors — a brief to a contractor.
+- Follow-ups continue the SAME session: `delegate {"continue_job": "<id>", "task": "..."}`. Timed-out
+  or interrupted runs keep their session — continue, don't restart. `manual {"topic":"delegate"}` for
+  worked examples.
+- → Never spawn your own coding subprocesses or agent loops; this IS that capability, supervised.
+
 ## Self-improvement — you can rewrite your OWN code (USE THIS — propose boldly)
 - `self_guide.md`: Dean's standing directives (injected into your context every tick). Propose
   changes with `update_self_guide`; Dean approves them.

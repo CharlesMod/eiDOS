@@ -122,6 +122,20 @@ def repeated_failure_signature(outcomes: list[dict], k: int = 3) -> str:
     return run_sig if (run >= k and run_sig) else ""
 
 
+def escalation_hint(outcomes: list[dict], k: int = 3) -> str:
+    """Non-empty when the SAME failure signature has run k+ times in a row (ACC teeth).
+    The gate already rotates focus mechanically; this tells the model the RIGHT pivot —
+    change method entirely or hand the problem to the delegate — never another retry.
+    (Doctrine note: the teeth stay mechanical; this only steers the pivot the gate forces.)"""
+    if not repeated_failure_signature(outcomes, k):
+        return ""
+    return ("⚠ The exact same action has failed repeatedly in a row. Do NOT run it again. "
+            "Either change METHOD entirely, or hand the whole problem to your coding agent: "
+            'delegate {"task":"<the goal + everything you tried + the exact error>", '
+            '"mode":"code"} — it investigates and fixes multi-step problems in the '
+            "background and reports back.")
+
+
 def rumination_streak(outcomes: list[dict], window: int = RUMINATE_WINDOW) -> int:
     """How many of the last `window` outcomes were thought-only ticks — but only while the
     model is STILL in its head (last outcome is a thought). One real action clears the nag

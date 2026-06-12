@@ -485,7 +485,8 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
     # XP-only persona mood. STRAINED is also when the gate's strain teeth are biting (faster park).
     try:
         import glue
-        cond = glue.compute_condition(glue.recent_outcomes(config))
+        _outs = glue.recent_outcomes(config)
+        cond = glue.compute_condition(_outs)
         _desc = {
             "STABLE": "steady — pick the next useful thing and do it",
             "FOCUSED": "on a roll — keep advancing the current objective",
@@ -494,6 +495,12 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
             "RUMINATING": "you've been thinking without acting — take ONE CONCRETE action this tick (probe, build, memorize a fact); more narration burns patience",
         }.get(cond, "")
         lines.append(f"Condition: {cond}" + (f" — {_desc}" if _desc else ""))
+        # When the same dead end keeps repeating AND the delegate exists, steer the pivot
+        # the gate is already forcing toward the actually-useful escape hatch.
+        if cond == "STRAINED" and getattr(config, "delegate_enabled", False):
+            _hint = glue.escalation_hint(_outs)
+            if _hint:
+                lines.append(_hint)
     except Exception:  # noqa: BLE001
         pass
     # (The single objective is rendered as its own high-salience "## Current focus" block, not here —
@@ -506,11 +513,15 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
         # A job that has outlived the async ceiling (plus slack) but still says "running" is a
         # zombie record (crashed runner / stale jobs.json) — showing it forever as "still
         # running, don't re-run" misleads every subsequent tick. Drop it from presence.
-        stale_after = float(getattr(config, "cmd_async_ceiling_s", 180) or 180) * 2
+        base_stale = float(getattr(config, "cmd_async_ceiling_s", 180) or 180) * 2
         running = []
         for j in jobs:
-            if j.get("status") != "running" or j.get("kind") not in ("async", "auto", "manual"):
+            if j.get("status") != "running" or j.get("kind") not in ("async", "auto", "manual", "delegate"):
                 continue
+            # Delegates legitimately run for minutes — judge staleness by THEIR ceiling,
+            # or a 10-minute delegate vanishes from presence mid-run and gets re-dispatched.
+            stale_after = (float(getattr(config, "delegate_timeout_s", 600) or 600) * 1.5
+                           if j.get("kind") == "delegate" else base_stale)
             age = int(now - j["started_ts"]) if j.get("started_ts") else None
             if age is not None and age > stale_after:
                 continue

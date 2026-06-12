@@ -379,6 +379,7 @@ class TestTools(unittest.TestCase):
         self.assertIn("update_plan", TOOLS)
         self.assertIn("memorize", TOOLS)
         self.assertIn("recall", TOOLS)
+        self.assertIn("delegate", TOOLS)
 
 
 class TestSkillWatchdog(unittest.TestCase):
