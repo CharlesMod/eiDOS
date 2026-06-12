@@ -82,5 +82,69 @@ class TestStintManager(unittest.TestCase):
         self.assertIn("no such", err)
 
 
+class TestCodeSurfaces(unittest.TestCase):
+
+    def setUp(self):
+        self.config = Config()
+        self.config.workspace_dir = tempfile.mkdtemp()
+
+    def _stint(self):
+        proc = MagicMock(pid=1)
+        proc.stdin = MagicMock()
+        with patch.object(ide.subprocess, "Popen", return_value=proc), \
+             patch.object(ide.threading, "Thread"), \
+             patch.object(ide, "_resolve_pi", return_value="pi.cmd"):
+            mgr = ide.StintManager(self.config)
+            stint, _ = mgr.create("t")
+        return mgr, stint
+
+    def test_tree_lists_and_skips(self):
+        mgr, stint = self._stint()
+        (stint.work / "main.py").write_text("print('hi')")
+        (stint.work / "pkg").mkdir()
+        (stint.work / "pkg" / "a.txt").write_text("A")
+        (stint.work / "node_modules").mkdir()
+        (stint.work / "node_modules" / "junk.js").write_text("x")
+        names = {i["name"] for i in mgr.tree(stint.sid, "")}
+        self.assertIn("main.py", names)
+        self.assertIn("pkg", names)
+        self.assertNotIn("node_modules", names)
+        self.assertEqual({i["name"] for i in mgr.tree(stint.sid, "pkg")}, {"a.txt"})
+
+    def test_read_file(self):
+        mgr, stint = self._stint()
+        (stint.work / "main.py").write_text("print('hi')")
+        res, err = mgr.read_file(stint.sid, "main.py")
+        self.assertIsNone(err)
+        self.assertIn("hi", res["content"])
+
+    def test_sandbox_escape_blocked(self):
+        mgr, stint = self._stint()
+        self.assertIsNone(ide._safe_path(stint.work, "../../../etc/passwd"))
+        res, err = mgr.read_file(stint.sid, "../../../config.toml")
+        self.assertIsNone(res)
+        self.assertIn("no such", err)
+
+    def test_binary_file_rejected(self):
+        mgr, stint = self._stint()
+        (stint.work / "b.bin").write_bytes(b"\x00\x01\x02ELF")
+        res, err = mgr.read_file(stint.sid, "b.bin")
+        self.assertIsNone(res)
+        self.assertIn("binary", err)
+
+    def test_zip_excludes_skip_dirs(self):
+        mgr, stint = self._stint()
+        (stint.work / "main.py").write_text("x")
+        (stint.work / ".git").mkdir()
+        (stint.work / ".git" / "HEAD").write_text("ref")
+        data, err = mgr.zip_work(stint.sid)
+        self.assertIsNone(err)
+        import io as _io
+        import zipfile as _zf
+        names = _zf.ZipFile(_io.BytesIO(data)).namelist()
+        self.assertTrue(any("main.py" in n for n in names))
+        self.assertFalse(any(".git" in n for n in names))
+
+
 if __name__ == "__main__":
     unittest.main()

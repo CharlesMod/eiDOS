@@ -19,6 +19,7 @@ or Tailscale. The IDE writes only under workspace/ide/; the Kairos repo is off-l
 """
 
 import argparse
+import io
 import json
 import logging
 import os
@@ -27,9 +28,27 @@ import shutil
 import subprocess
 import threading
 import time
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+
+# Dirs never shown in the tree or included in a repo zip (noise / huge / internal).
+_TREE_SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv",
+              "sessions", ".pytest_cache", ".mypy_cache", "dist", "build"}
+
+
+def _safe_path(work: Path, rel: str):
+    """Resolve `rel` under the stint's work dir, or None if it escapes (sandbox)."""
+    rel = (rel or "").lstrip("/\\")
+    try:
+        wr = work.resolve()
+        p = (wr / rel).resolve()
+        if p == wr or str(p).startswith(str(wr) + os.sep):
+            return p
+    except OSError:
+        pass
+    return None
 
 logger = logging.getLogger("eidos.ide")
 
@@ -219,38 +238,100 @@ class StintManager:
         for sid in list(self.stints):
             self.close(sid)
 
+    # --- read-only code surfaces (sandboxed to the stint's work dir) ---
+
+    def tree(self, sid: str, rel: str):
+        stint = self.stints.get(sid)
+        if not stint:
+            return None
+        base = _safe_path(stint.work, rel)
+        if not base or not base.is_dir():
+            return []
+        out = []
+        try:
+            for e in sorted(base.iterdir(), key=lambda e: (e.is_file(), e.name.lower())):
+                if e.name in _TREE_SKIP:
+                    continue
+                out.append({"name": e.name,
+                            "path": str(e.relative_to(stint.work)).replace("\\", "/"),
+                            "type": "dir" if e.is_dir() else "file"})
+        except OSError:
+            pass
+        return out
+
+    def read_file(self, sid: str, rel: str, cap: int = 262144):
+        stint = self.stints.get(sid)
+        if not stint:
+            return None, "no such stint"
+        p = _safe_path(stint.work, rel)
+        if not p or not p.is_file():
+            return None, "no such file"
+        try:
+            data = p.read_bytes()
+        except OSError as exc:
+            return None, str(exc)
+        if b"\x00" in data[:4096]:
+            return None, "binary file"
+        return {"path": rel, "truncated": len(data) > cap,
+                "content": data[:cap].decode("utf-8", errors="replace")}, None
+
+    def zip_work(self, sid: str):
+        stint = self.stints.get(sid)
+        if not stint:
+            return None, "no such stint"
+        buf = io.BytesIO()
+        try:
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                for root, dirs, files in os.walk(stint.work):
+                    dirs[:] = [d for d in dirs if d not in _TREE_SKIP]
+                    for f in files:
+                        fp = Path(root) / f
+                        z.write(fp, fp.relative_to(stint.work))
+        except OSError as exc:
+            return None, str(exc)
+        return buf.getvalue(), None
+
 
 MANAGER: StintManager = None   # set in main()
 
 
-# --- minimal D1 chat page (D2 adds tree/tabs/viewer, D3 adds download) ---
+# --- mini-IDE page: stints · chat · code (tree + tabs + viewer) + repo download ---
 _PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>EidosCodeIDE</title>
 <style>
  :root{--bg:#0a0a0a;--fg:#00ff41;--amber:#ffb000;--blue:#33bbff;--dim:#1a3a1a;--mut:#888}
  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);
    font:14px 'Courier New',monospace;height:100vh;display:flex;flex-direction:column}
  header{padding:6px 12px;border-bottom:1px solid var(--dim);color:var(--amber);
-   display:flex;gap:12px;align-items:center}
+   display:flex;gap:10px;align-items:center}
  header b{letter-spacing:2px} .grow{flex:1}
  main{flex:1;display:flex;min-height:0}
- #stints{width:200px;border-right:1px solid var(--dim);overflow:auto;padding:6px}
+ #stints{width:180px;border-right:1px solid var(--dim);overflow:auto;padding:6px}
  .stint{padding:6px;cursor:pointer;border:1px solid transparent;border-radius:4px;
    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
  .stint:hover{border-color:var(--dim)} .stint.active{background:var(--dim);color:var(--amber)}
- #chatwrap{flex:1;display:flex;flex-direction:column;min-width:0}
+ #chatwrap{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--dim)}
  #log{flex:1;overflow:auto;padding:10px;white-space:pre-wrap;line-height:1.4}
  .msg-user{color:var(--blue);margin:8px 0} .msg-pi{color:var(--fg);margin:8px 0}
  .tool{color:var(--amber);margin:4px 0 4px 8px;font-size:13px}
  .sys{color:var(--mut);font-size:12px;margin:4px 0}
  #composer{display:flex;border-top:1px solid var(--dim)}
  #inp{flex:1;background:#000;color:var(--fg);border:none;padding:10px;font:14px monospace;resize:none}
+ #code{width:420px;display:flex;flex-direction:column;min-width:0}
+ #tree{height:38%;overflow:auto;padding:6px;border-bottom:1px solid var(--dim);font-size:13px}
+ .row{padding:1px 4px;cursor:pointer;white-space:nowrap} .row:hover{background:var(--dim)}
+ .row.dir{color:var(--amber)} .row.file{color:var(--fg)}
+ #tabs{display:flex;flex-wrap:wrap;gap:2px;padding:4px;border-bottom:1px solid var(--dim);min-height:28px}
+ .tab{padding:2px 8px;cursor:pointer;border:1px solid var(--dim);font-size:12px;color:var(--mut)}
+ .tab.active{color:var(--amber);border-color:var(--amber)}
+ #viewer{flex:1;overflow:auto;padding:8px;white-space:pre;font-size:13px;tab-size:4}
  button{background:var(--dim);color:var(--fg);border:1px solid var(--fg);padding:6px 12px;
    cursor:pointer;font:13px monospace} button:hover{background:var(--fg);color:#000}
  button:disabled{opacity:.4;cursor:default} input.ti{background:#000;color:var(--fg);
-   border:1px solid var(--dim);padding:4px;font:13px monospace}
+   border:1px solid var(--dim);padding:4px;font:13px monospace;width:130px}
 </style></head><body>
-<header><b>&lt; EidosCodeIDE &gt;</b><span class="grow"></span>
- <input class="ti" id="newtitle" placeholder="new stint name"><button onclick="newStint()">+ stint</button>
+<header><b>&lt; EidosCodeIDE &gt;</b><span id="curname" class="mut"></span><span class="grow"></span>
+ <button id="dl" onclick="dl()" disabled>download .zip</button>
+ <input class="ti" id="newtitle" placeholder="new stint"><button onclick="newStint()">+ stint</button>
 </header>
 <main>
  <div id="stints"></div>
@@ -258,43 +339,75 @@ _PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>EidosCodeIDE
    <div id="log"><div class="sys">pick or create a stint to start coding with pi.</div></div>
    <div id="composer">
      <textarea id="inp" rows="3" placeholder="describe what to build… (Ctrl+Enter to send)"></textarea>
-     <button id="send" onclick="send()">send</button>
+     <button id="send" onclick="send()" disabled>send</button>
    </div>
+ </div>
+ <div id="code">
+   <div id="tree"></div><div id="tabs"></div><pre id="viewer"></pre>
  </div>
 </main>
 <script>
-let cur=null, es=null, turnActive=false, curText=null;
+let cur=null, es=null, turnActive=false, curText=null, pendWrite=null;
+let tabs=[], active=null;
 const log=document.getElementById('log');
+const $=id=>document.getElementById(id);
 function add(cls,txt){const d=document.createElement('div');d.className=cls;d.textContent=txt;
   log.appendChild(d);log.scrollTop=log.scrollHeight;return d;}
-async function listStints(){const r=await fetch('/api/stints');const j=await r.json();
-  const box=document.getElementById('stints');box.innerHTML='';
+async function listStints(){const j=await (await fetch('/api/stints')).json();
+  const box=$('stints');box.innerHTML='';
   j.stints.forEach(s=>{const d=document.createElement('div');
     d.className='stint'+(s.id===cur?' active':'');d.textContent=(s.status==='running'?'● ':'○ ')+s.title;
-    d.onclick=()=>open(s.id);box.appendChild(d);});}
-async function newStint(){const t=document.getElementById('newtitle').value||'';
-  const r=await fetch('/api/stints',{method:'POST',body:JSON.stringify({title:t})});
-  const j=await r.json();if(j.id){document.getElementById('newtitle').value='';await listStints();open(j.id);}
+    d.onclick=()=>open(s.id,s.title);box.appendChild(d);});}
+async function newStint(){const t=$('newtitle').value||'';
+  const j=await (await fetch('/api/stints',{method:'POST',body:JSON.stringify({title:t})})).json();
+  if(j.id){$('newtitle').value='';await listStints();open(j.id,t||j.id);}
   else add('sys','could not create stint: '+(j.error||'?'));}
-function open(id){cur=id;curText=null;log.innerHTML='';turnActive=false;document.getElementById('send').disabled=false;
-  listStints();if(es)es.close();es=new EventSource('/api/stints/'+id+'/events');
-  es.onmessage=e=>handle(JSON.parse(e.data));}
+function open(id,title){cur=id;curText=null;log.innerHTML='';turnActive=false;
+  tabs=[];active=null;renderTabs();$('viewer').textContent='';
+  $('send').disabled=false;$('dl').disabled=false;$('curname').textContent='· '+(title||id);
+  listStints();loadTree();if(es)es.close();
+  es=new EventSource('/api/stints/'+id+'/events');es.onmessage=e=>handle(JSON.parse(e.data));}
 function handle(ev){const t=ev.type;
-  if(t==='user_prompt'){add('msg-user','you ▸ '+ev.message);curText=null;turnActive=true;document.getElementById('send').disabled=true;}
+  if(t==='user_prompt'){add('msg-user','you ▸ '+ev.message);curText=null;turnActive=true;$('send').disabled=true;}
   else if(t==='message_update'&&ev.assistantMessageEvent){const a=ev.assistantMessageEvent;
     if(a.type==='text_delta'){if(!curText)curText=add('msg-pi','pi ▸ ');curText.textContent+=a.delta||'';log.scrollTop=log.scrollHeight;}}
   else if(t==='tool_execution_start'){const ar=ev.args||{};const d=ar.path||ar.command||ar.pattern||'';
-    add('tool','⚙ '+ev.toolName+(d?' '+String(d).slice(0,80):''));curText=null;}
-  else if(t==='tool_execution_end'){if(ev.isError)add('tool','  ✗ error');}
-  else if(t==='agent_end'){turnActive=false;document.getElementById('send').disabled=false;curText=null;}
-  else if(t==='stint_exit'){add('sys','— stint exited —');document.getElementById('send').disabled=true;}
+    add('tool','⚙ '+ev.toolName+(d?' '+String(d).slice(0,80):''));curText=null;
+    if((ev.toolName==='write'||ev.toolName==='edit')&&ar.path)pendWrite=ar.path;}
+  else if(t==='tool_execution_end'){if(ev.isError)add('tool','  ✗ error');
+    else if(pendWrite){loadTree();openFile(pendWrite);pendWrite=null;}}
+  else if(t==='agent_end'){turnActive=false;$('send').disabled=false;curText=null;}
+  else if(t==='stint_exit'){add('sys','— stint exited —');$('send').disabled=true;}
 }
-async function send(){const inp=document.getElementById('inp');const m=inp.value.trim();
-  if(!m||!cur||turnActive)return;inp.value='';
-  const r=await fetch('/api/stints/'+cur+'/prompt',{method:'POST',body:JSON.stringify({message:m})});
-  const j=await r.json();if(!j.ok)add('sys','✗ '+(j.error||'send failed'));}
-document.getElementById('inp').addEventListener('keydown',e=>{
-  if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();send();}});
+async function send(){const m=$('inp').value.trim();if(!m||!cur||turnActive)return;$('inp').value='';
+  const j=await (await fetch('/api/stints/'+cur+'/prompt',{method:'POST',body:JSON.stringify({message:m})})).json();
+  if(!j.ok)add('sys','✗ '+(j.error||'send failed'));}
+$('inp').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();send();}});
+// --- code tree ---
+async function loadTree(){if(!cur){$('tree').innerHTML='';return;}
+  $('tree').innerHTML='';await renderDir($('tree'),'');}
+async function renderDir(parent,path){
+  const j=await (await fetch('/api/stints/'+cur+'/tree?path='+encodeURIComponent(path))).json();
+  (j.items||[]).forEach(it=>{const r=document.createElement('div');r.className='row '+it.type;
+    r.textContent=(it.type==='dir'?'▸ ':'  ')+it.name;parent.appendChild(r);
+    if(it.type==='dir'){let open=false,kids=null;
+      r.onclick=async()=>{open=!open;if(open){r.textContent='▾ '+it.name;
+        kids=document.createElement('div');kids.style.marginLeft='12px';parent.insertBefore(kids,r.nextSibling);
+        await renderDir(kids,it.path);}else{r.textContent='▸ '+it.name;if(kids)kids.remove();}};}
+    else r.onclick=()=>openFile(it.path);});}
+async function openFile(path){
+  const j=await (await fetch('/api/stints/'+cur+'/file?path='+encodeURIComponent(path))).json();
+  if(j.error){add('sys','('+path+': '+j.error+')');return;}
+  const ex=tabs.find(t=>t.path===path);const body=j.content+(j.truncated?'\n\n… [truncated]':'');
+  if(ex)ex.body=body;else tabs.push({path:path,body:body});active=path;renderTabs();renderViewer();}
+function renderTabs(){const box=$('tabs');box.innerHTML='';
+  tabs.forEach(t=>{const d=document.createElement('span');d.className='tab'+(t.path===active?' active':'');
+    d.textContent=t.path.split('/').pop()+' ✕';
+    d.onclick=ev=>{if(ev.offsetX>d.offsetWidth-16){tabs=tabs.filter(x=>x!==t);
+      if(active===t.path)active=tabs.length?tabs[tabs.length-1].path:null;}
+      else active=t.path;renderTabs();renderViewer();};box.appendChild(d);});}
+function renderViewer(){const t=tabs.find(t=>t.path===active);$('viewer').textContent=t?t.body:'';}
+function dl(){if(cur)window.open('/api/stints/'+cur+'/download?zip=1');}
 listStints();
 </script></body></html>"""
 
@@ -347,8 +460,48 @@ class IDEHandler(BaseHTTPRequestHandler):
             self._respond(200, "application/json", json.dumps({"stints": stints}))
         elif path.startswith("/api/stints/") and path.endswith("/events"):
             self._sse(self._stint_id("/api/stints/"))
+        elif path.startswith("/api/stints/") and path.endswith("/tree"):
+            rel = (parse_qs(urlparse(self.path).query).get("path") or [""])[0]
+            items = MANAGER.tree(self._stint_id("/api/stints/"), rel)
+            self._respond(200, "application/json", json.dumps({"items": items or []}))
+        elif path.startswith("/api/stints/") and path.endswith("/file"):
+            rel = (parse_qs(urlparse(self.path).query).get("path") or [""])[0]
+            res, err = MANAGER.read_file(self._stint_id("/api/stints/"), rel)
+            self._respond(200, "application/json", json.dumps(res or {"error": err}))
+        elif path.startswith("/api/stints/") and path.endswith("/download"):
+            self._download(self._stint_id("/api/stints/"),
+                           parse_qs(urlparse(self.path).query))
         else:
             self._respond(404, "text/plain", "not found")
+
+    def _download(self, sid: str, q: dict):
+        if (q.get("zip") or ["0"])[0] in ("1", "true"):
+            data, err = MANAGER.zip_work(sid)
+            if data is None:
+                self._respond(404, "text/plain", err or "not found")
+                return
+            self._respond_file(200, "application/zip", data, f"{sid}.zip")
+            return
+        rel = (q.get("path") or [""])[0]
+        res, err = MANAGER.read_file(sid, rel, cap=10_000_000)
+        if not res:
+            self._respond(404, "text/plain", err or "not found")
+            return
+        name = rel.rsplit("/", 1)[-1] or "file.txt"
+        self._respond_file(200, "application/octet-stream",
+                           res["content"].encode("utf-8"), name)
+
+    def _respond_file(self, code, ctype, data, filename):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def _sse(self, sid: str):
         stint = MANAGER.stints.get(sid)
