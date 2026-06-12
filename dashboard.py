@@ -328,12 +328,39 @@ def _update_hatch(config: Config, doc: dict, persona: dict) -> dict:
     return {"hatched": bool(doc.get("hatched")), "progress": round(progress, 3)}
 
 
+_METAMORPHOSIS_S = 60.0   # how long the cocoon interlude lasts
+
+
+def _update_stage_events(config: Config, doc: dict, stage: str) -> None:
+    """Phase B: record stage transitions. A non-egg UPGRADE (juvenile→adult etc.)
+    triggers a metamorphosis event + cocoon interlude; hatching, downgrades, and
+    the first-ever record (pre-Phase-B creatures) pass silently."""
+    last = doc.get("last_stage")
+    if stage == last:
+        return
+    order = creature_gen.STAGES
+    is_upgrade = (last in order and stage in order
+                  and last != "egg" and stage != "egg"
+                  and order.index(stage) > order.index(last))
+    doc["last_stage"] = stage
+    if is_upgrade:
+        doc["interlude_until"] = time.time() + _METAMORPHOSIS_S
+        doc.setdefault("events", []).append(
+            {"ts": time.time(), "kind": "metamorphosis", "stage": stage})
+    with _CREATURE_LOCK:
+        try:
+            _save_creature(config, doc)
+        except OSError:
+            logger.exception("creature.json stage update failed")
+
+
 def build_creature_spec(config: Config, persona: dict, heartbeat: dict,
                         goal: str) -> dict:
     """The living-creature payload: genome morphology + v2 truth expression."""
     doc = _load_or_create_creature(config)
     hatch = _update_hatch(config, doc, persona)
     stage = creature_gen.stage_for(persona.get("level", 1), hatch["hatched"])
+    _update_stage_events(config, doc, stage)
     try:
         condition = glue.compute_condition(glue.recent_outcomes(config))
     except Exception:  # noqa: BLE001 — truth display must not break the page
@@ -347,6 +374,11 @@ def build_creature_spec(config: Config, persona: dict, heartbeat: dict,
         "has_goal": bool(goal.strip()),
     }
     spec = creature_gen.build_spec(doc["genome"], stage, hatch, expr)
+    until = float(doc.get("interlude_until") or 0)
+    if stage != "egg" and until > time.time():
+        # Mid-metamorphosis: the body is wrapped — swap in the chrysalis grids.
+        spec.update(creature_gen.compose_cocoon(doc["genome"], stage))
+        spec["interlude"] = {"kind": "cocoon", "until_ts": until}
     spec["events"] = doc.get("events", [])[-5:]
     return spec
 

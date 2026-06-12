@@ -139,6 +139,11 @@ body::after {
     margin-top: 4px;
 }
 #creature-banner.show { opacity: 1; }
+@keyframes cr-emerge {
+    0% { filter: brightness(3); text-shadow: 0 0 18px rgba(255,176,0,0.9); }
+    100% { filter: brightness(1); text-shadow: none; }
+}
+#creature-art.cr-emerge { animation: cr-emerge 2.5s ease-out; }
 .title-badge {
     display: inline-block;
     color: #ffd700;

@@ -209,24 +209,42 @@ def _anchors(w: int, h: int) -> dict:
     }
 
 
+# Guardian-stage appendages RESTRUCTURE, not just persist (Phase B metamorphosis):
+# ears grow a second vertical cell, tails gain a tip segment.
+_TAIL_TIPS = {"curl": "~", "spike": "|", "wisp": "·"}
+
+
 def _appendages(genome: Genome, stage: str, w: int, h: int) -> list[dict]:
     """Appendage overlay records. Their cells are SPACES in the base frames.
-    Progression: hatchling = none; juvenile = ears+tail; adult+ = ears+tail+limbs."""
+    Progression: hatchling = none; juvenile = ears+tail; adult+ = ears+tail+limbs;
+    guardian = taller ears + two-segment tail (visible metamorphosis payoff)."""
     if stage == "hatchling":
         return []
     a = _anchors(w, h)
     rng = random.Random(genome["seed"] + 7)   # deterministic per-appendage periods
+    guardian = stage == "guardian"
     out: list[dict] = []
     if genome["ears"] != "none":
         fr = _EAR_FRAMES[genome["ears"]]
-        out.append({"name": "ear_l", "cells": [a["ear_l"][0]],
-                    "frames": [[f[0]] for f in fr], "period_ms": rng.randint(1500, 2400)})
-        out.append({"name": "ear_r", "cells": [a["ear_r"][1]],
-                    "frames": [[f[1]] for f in fr], "period_ms": rng.randint(1500, 2400)})
+        lc, rc = a["ear_l"][0], a["ear_r"][1]
+        l_cells = [lc] + ([[0, lc[1]]] if guardian else [])
+        r_cells = [rc] + ([[0, rc[1]]] if guardian else [])
+        out.append({"name": "ear_l", "cells": l_cells,
+                    "frames": [[f[0]] * len(l_cells) for f in fr],
+                    "period_ms": rng.randint(1500, 2400)})
+        out.append({"name": "ear_r", "cells": r_cells,
+                    "frames": [[f[1]] * len(r_cells) for f in fr],
+                    "period_ms": rng.randint(1500, 2400)})
     if genome["tail"] != "none":
         fr = _TAIL_FRAMES[genome["tail"]]
-        out.append({"name": "tail", "cells": [a["tail"]],
-                    "frames": fr, "period_ms": rng.randint(1900, 2800)})
+        cells = [a["tail"]]
+        frames = [list(f) for f in fr]
+        if guardian:
+            cells.append([a["tail"][0] - 1, a["tail"][1]])
+            tip = _TAIL_TIPS[genome["tail"]]
+            frames = [f + [tip] for f in frames]
+        out.append({"name": "tail", "cells": cells, "frames": frames,
+                    "period_ms": rng.randint(1900, 2800)})
     if stage in ("adult", "guardian") and genome["limbs"] != "none":
         fr = _LIMB_FRAMES[genome["limbs"]]
         row = a["limb_row"]
@@ -297,6 +315,35 @@ def compose_egg(genome: Genome, progress: float) -> dict:
         for i in range(k):
             r, c = cracks[i]
             grid[r][c] = crack_glyphs[i]
+        frames.append(_grid_to_lines(grid))
+    return {"w": w, "h": h, "base": frames, "eyes": None, "mouth": None,
+            "appendages": []}
+
+
+def compose_cocoon(genome: Genome, stage: str) -> dict:
+    """The chrysalis a creature wraps into during a stage metamorphosis. Sized to
+    the NEW stage's canvas so emergence doesn't jump the layout; patterned like
+    the creature's egg (same genome fills) — lineage shows in the silk."""
+    base_w, h = CANVAS[stage]
+    w = max(9, base_w + 2 * genome["size"])
+    rng = random.Random(genome["seed"] + 53)
+    fills = {"speckle": "·.", "zigzag": "^v", "band": "=-", "swirl": "@·"}[genome["egg_pattern"]]
+    top, bot = 1, h - 1
+    left = max(2, w // 2 - 3)
+    right = min(w - 3, w // 2 + 3)
+    interior = [(r, c) for r in range(top + 1, bot) for c in range(left + 1, right)]
+    marks = rng.sample(interior, k=min(7, len(interior)))
+    frames = []
+    for wob in (0, 1):
+        grid = _blank(w, h)
+        grid[0][w // 2] = "|"                     # silk thread
+        _stamp(grid, top, left, "." + "=" * (right - left - 1) + ".")
+        for r in range(top + 1, bot):
+            grid[r][left] = "("
+            grid[r][right] = ")"
+        _stamp(grid, bot, left, "'" + "-" * (right - left - 1) + "'")
+        for i, (r, c) in enumerate(marks):
+            grid[r][c] = fills[(i + wob) % len(fills)]
         frames.append(_grid_to_lines(grid))
     return {"w": w, "h": h, "base": frames, "eyes": None, "mouth": None,
             "appendages": []}

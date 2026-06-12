@@ -100,6 +100,67 @@ class TestHatching(Base):
         self.assertEqual(sum(1 for e in doc["events"] if e["kind"] == "hatched"), 1)
 
 
+class TestMetamorphosis(Base):
+
+    def _doc(self):
+        return json.loads((self.ws / "creature.json").read_text())
+
+    def test_upgrade_triggers_cocoon_interlude_once(self):
+        # establish a hatched juvenile baseline
+        s = self._spec(persona={"level": 3, "xp": 400})
+        self.assertEqual(s["stage"], "juvenile")
+        self.assertNotIn("interlude", s)
+        # level up → metamorphosis: cocoon body, no eyes, one event
+        s = self._spec(persona={"level": 5, "xp": 900})
+        self.assertEqual(s["stage"], "adult")
+        self.assertIn("interlude", s)
+        self.assertEqual(s["interlude"]["kind"], "cocoon")
+        self.assertIsNone(s["eyes"])
+        # repeated polls mid-interlude: still cocooned, still exactly one event
+        s = self._spec(persona={"level": 5, "xp": 900})
+        self.assertIn("interlude", s)
+        doc = self._doc()
+        self.assertEqual(
+            sum(1 for e in doc["events"] if e["kind"] == "metamorphosis"), 1)
+        # emergence: expire the interlude → normal adult body, eyes back
+        doc["interlude_until"] = time.time() - 1
+        (self.ws / "creature.json").write_text(json.dumps(doc))
+        s = self._spec(persona={"level": 5, "xp": 900})
+        self.assertNotIn("interlude", s)
+        self.assertIsNotNone(s["eyes"])
+
+    def test_hatch_is_not_a_metamorphosis(self):
+        self._spec(persona={"level": 1, "xp": 0})       # egg
+        s = self._spec(persona={"level": 1, "xp": 30})  # hatch
+        self.assertEqual(s["stage"], "hatchling")
+        self.assertNotIn("interlude", s)
+        self.assertEqual(sum(1 for e in self._doc()["events"]
+                             if e["kind"] == "metamorphosis"), 0)
+
+    def test_first_record_on_existing_creature_is_silent(self):
+        # pre-Phase-B creature.json has no last_stage (the live adult's case)
+        self._spec(persona={"level": 5, "xp": 900})
+        doc = self._doc()
+        doc.pop("last_stage", None)
+        doc.pop("interlude_until", None)
+        (self.ws / "creature.json").write_text(json.dumps(doc))
+        s = self._spec(persona={"level": 5, "xp": 900})
+        self.assertNotIn("interlude", s)
+        self.assertEqual(self._doc()["last_stage"], "adult")
+
+    def test_downgrade_is_silent(self):
+        self._spec(persona={"level": 3, "xp": 400})   # juvenile baseline
+        self._spec(persona={"level": 5, "xp": 900})   # upgrade → 1 metamorphosis
+        doc = self._doc()
+        doc.pop("interlude_until", None)              # clear the cocoon window
+        (self.ws / "creature.json").write_text(json.dumps(doc))
+        s = self._spec(persona={"level": 3, "xp": 100})
+        self.assertEqual(s["stage"], "juvenile")
+        self.assertNotIn("interlude", s)
+        self.assertEqual(sum(1 for e in self._doc()["events"]
+                             if e["kind"] == "metamorphosis"), 1)  # only the upgrade's
+
+
 class TestExpression(Base):
 
     def test_delegating_from_jobs_array(self):

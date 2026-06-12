@@ -169,6 +169,23 @@ const Creature = (() => {
     function render() {
         if (!spec || !spec.base || !el()) return;
         const t = now();
+
+        // Metamorphosis interlude: the body is a chrysalis — slow pulse, soft
+        // shimmer, every other behavior suspended until emergence.
+        if (spec.interlude) {
+            const phase = Math.floor(t / 1600) % 2;
+            const rows = spec.base[phase].map(line => line.split(''));
+            const shim = Math.floor(t / 700) % 3;
+            if (shim !== 2) stamp(rows, 1, shim ? 1 : spec.w - 2, '✦');
+            const text = rows.map(r => r.join('')).join('\n');
+            if (text !== lastDrawn) { el().textContent = text; lastDrawn = text; }
+            el().style.color = spec.accent || '';
+            el().classList.remove('cr-tremble', 'cr-dead', 'cr-listening');
+            el().classList.add('cr-dreaming');   // chrysalis glow rides the dream tint
+            return;
+        }
+        el().classList.remove('cr-dreaming');
+
         const state = effectiveState();
         const a = spec.anim || {};
 
@@ -266,8 +283,16 @@ const Creature = (() => {
         applyStatus(s) {
             const fresh = !spec || spec.id !== s.id || spec.stage !== s.stage;
             const prevCond = spec && spec.expr ? spec.expr.condition : '';
+            const emerged = spec && spec.interlude && !s.interlude;
             spec = s;
             if (fresh) { lastDrawn = ''; }
+            if (emerged) {                       // metamorphosis complete — flash
+                const pre = el();
+                if (pre) {
+                    pre.classList.add('cr-emerge');
+                    setTimeout(() => pre.classList.remove('cr-emerge'), 2600);
+                }
+            }
             if (prevCond !== 'RECOVERY' && s.expr && s.expr.condition === 'RECOVERY'
                     && lastCondition !== 'RECOVERY') {
                 recoveryUntil = now() + 3000;

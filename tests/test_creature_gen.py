@@ -152,6 +152,59 @@ class TestEgg(unittest.TestCase):
         self.assertEqual(cg.compose_egg(g, 0.5), cg.compose_egg(g, 0.5))
 
 
+class TestCocoon(unittest.TestCase):
+
+    def test_invariants(self):
+        for seed in range(30):
+            g = cg.genome_from_seed(seed)
+            for stage in ("juvenile", "adult", "guardian"):
+                c = cg.compose_cocoon(g, stage)
+                self.assertEqual(len(c["base"]), 2)
+                self.assertIsNone(c["eyes"])
+                self.assertIsNone(c["mouth"])
+                self.assertEqual(c["appendages"], [])
+                for frame in c["base"]:
+                    self.assertEqual(len(frame), c["h"])
+                    for line in frame:
+                        self.assertEqual(len(line), c["w"])
+                        for ch in line:
+                            self.assertIn(ch, cg.APPROVED_GLYPHS)
+
+    def test_deterministic_and_sized_to_stage(self):
+        g = cg.genome_from_seed(5)
+        self.assertEqual(cg.compose_cocoon(g, "adult"), cg.compose_cocoon(g, "adult"))
+        spec_w = cg.compose(g, "adult")["w"]
+        self.assertEqual(cg.compose_cocoon(g, "adult")["w"], spec_w)
+
+
+class TestGuardianRestructure(unittest.TestCase):
+    """Metamorphosis payoff: guardian appendages restructure, not just persist."""
+
+    def _with(self, **genes):
+        # find a seed with the wanted genes, then assert restructuring
+        for seed in range(3000):
+            g = cg.genome_from_seed(seed)
+            if all(g[k] == v for k, v in genes.items()):
+                return g
+        self.fail(f"no seed with {genes} in 3000 — variety regression?")
+
+    def test_guardian_ears_grow_taller(self):
+        g = self._with(ears="cat")
+        adult = {a["name"]: a for a in cg.compose(g, "adult")["appendages"]}
+        guard = {a["name"]: a for a in cg.compose(g, "guardian")["appendages"]}
+        self.assertEqual(len(adult["ear_l"]["cells"]), 1)
+        self.assertEqual(len(guard["ear_l"]["cells"]), 2)
+        for fr in guard["ear_l"]["frames"]:
+            self.assertEqual(len(fr), 2)
+
+    def test_guardian_tail_two_segments(self):
+        g = self._with(tail="curl")
+        adult = {a["name"]: a for a in cg.compose(g, "adult")["appendages"]}
+        guard = {a["name"]: a for a in cg.compose(g, "guardian")["appendages"]}
+        self.assertEqual(len(adult["tail"]["cells"]), 1)
+        self.assertEqual(len(guard["tail"]["cells"]), 2)
+
+
 class TestStageFor(unittest.TestCase):
 
     def test_table(self):
