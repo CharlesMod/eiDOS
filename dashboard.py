@@ -255,15 +255,25 @@ def _delegate_running(config: Config) -> bool:
 
 
 def _listening_hold_fresh(config: Config) -> bool:
-    """Mirror eidos._chat_hold_active's freshness check (held + within TTL)."""
+    """Mirror eidos._chat_hold_active's freshness RULES (eidos.py:255-261): held, within the
+    TTL, AND under the continuous ceiling. eiDOS stops honoring a hold after
+    chat_hold_max_continuous_s, so a forgotten focused tab must stop rendering as listening
+    too — TTL alone let it show ~5 min of false listening."""
     hold = _read_json(config.workspace / "state" / "chat_hold.json")
     if not hold.get("held"):
         return False
     try:
-        age = time.time() - float(hold.get("ts", 0))
+        now = time.time()
+        ts = float(hold.get("ts", 0))
+        age = now - ts
+        if age < 0 or age > float(getattr(config, "chat_hold_ttl_s", 60.0)):
+            return False
+        first = float(hold.get("first_held_ts", ts) or ts)
+        if now - first > float(getattr(config, "chat_hold_max_continuous_s", 300.0)):
+            return False
     except (TypeError, ValueError):
         return False
-    return 0 <= age <= float(getattr(config, "chat_hold_ttl_s", 60.0))
+    return True
 
 
 def _creature_path(config: Config) -> Path:

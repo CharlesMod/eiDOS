@@ -180,6 +180,21 @@ class TestExpression(Base):
         hold.write_text(json.dumps({"held": True, "ts": time.time() - 120}))
         self.assertFalse(self._spec()["expr"]["listening"])
 
+    def test_listening_honors_continuous_ceiling(self):
+        # A tab refreshed within the TTL but held past chat_hold_max_continuous_s is no
+        # longer honored by eiDOS — so it must stop rendering as listening (the bug: TTL
+        # alone showed ~5 min of false listening on a forgotten focused tab).
+        (self.ws / "state").mkdir(parents=True, exist_ok=True)
+        hold = self.ws / "state" / "chat_hold.json"
+        now = time.time()
+        ceiling = self.config.chat_hold_max_continuous_s
+        hold.write_text(json.dumps({"held": True, "ts": now,
+                                    "first_held_ts": now - ceiling - 10}))
+        self.assertFalse(self._spec()["expr"]["listening"])
+        # fresh ts AND fresh first_held_ts → still honored
+        hold.write_text(json.dumps({"held": True, "ts": now, "first_held_ts": now - 5}))
+        self.assertTrue(self._spec()["expr"]["listening"])
+
     def test_dead_from_heartbeat(self):
         self.assertTrue(
             self._spec(heartbeat={"consecutive_failures": 6})["expr"]["dead"])

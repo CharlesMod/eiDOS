@@ -23,6 +23,7 @@ const Creature = (() => {
     let nextSaccade = 0, saccadeUntil = 0, saccadeDir = 0;
     let nextMicro = 0, microUntil = 0, microKind = null, microStart = 0;
     let recoveryUntil = 0, smileUntil = 0, lastCondition = '';
+    let nextTremble = 0, trembleUntil = 0;
     let bannerTimer = null;
 
     const now = () => Date.now();
@@ -37,7 +38,9 @@ const Creature = (() => {
         const act = activity.state || '';
         if (x.dead) return 'dead';
         if (act === 'dreaming') return 'dreaming';
-        if (x.delegating) return 'delegating';
+        // A running delegate is a BACKGROUND job, not the creature's own state — it must
+        // NOT mask thinking/executing/strained (that was a rendered falsehood). Phase C
+        // shows it as a separate mini-me sprite; until then a delegate isn't a mood.
         const cond = x.condition || 'STABLE';
         if (cond === 'STRAINED') return 'strained';
         if (cond === 'RUMINATING') return 'ruminating';
@@ -103,7 +106,6 @@ const Creature = (() => {
         if (state === 'dead') return m.frown;
         if (state === 'sleeping' || state === 'dreaming') return m.sleep;
         if (state === 'strained') return m.grit;
-        if (state === 'delegating') return Math.floor(t / 1000) % 2 ? m.grit : m.idle;
         if (state === 'ruminating') return m.frown;
         if (microKind === 'groom' && now() < microUntil)
             return m.speak[Math.floor(t / 300) % m.speak.length];
@@ -126,10 +128,6 @@ const Creature = (() => {
             const F = state === 'dreaming' ? '·' : 'Z';
             stamp(rows, 1, w - 4, step % 2 ? f : ' ');
             stamp(rows, 0, w - 3, step % 2 ? ' ' : F);
-        } else if (state === 'delegating') {
-            const spin = ['|', '/', '-', '\\'];
-            stamp(rows, 1, w - 2, spin[Math.floor(t / 250) % 4]);
-            stamp(rows, 1, w - 4, '·');
         } else if (state === 'thinking') {
             stamp(rows, 0, Math.floor(w / 2) - 1, '...'.slice(0, 1 + (step % 3)));
         } else if (state === 'recovery' && now() < recoveryUntil) {
@@ -239,9 +237,22 @@ const Creature = (() => {
         const text = rows.map(r => r.join('')).join('\n');
         if (text !== lastDrawn) { el().textContent = text; lastDrawn = text; }
 
+        // STRAINED trembles in intermittent ~2-3s bursts every ~20s, not continuously
+        // (the steady sweat drop in stampFx is the always-on tell). Onset bursts at once.
+        let tremble = false;
+        if (state === 'strained') {
+            if (t >= nextTremble) {
+                trembleUntil = t + rand(2000, 3000);
+                nextTremble = t + rand(18000, 24000);
+            }
+            tremble = t < trembleUntil;
+        } else {
+            nextTremble = 0; trembleUntil = 0;
+        }
+
         const pre = el();
         pre.style.color = spec.accent || '';
-        pre.classList.toggle('cr-tremble', state === 'strained');
+        pre.classList.toggle('cr-tremble', tremble);
         pre.classList.toggle('cr-dead', state === 'dead');
         pre.classList.toggle('cr-dreaming', state === 'dreaming');
         pre.classList.toggle('cr-listening', listeningOverlay(state));
@@ -249,6 +260,7 @@ const Creature = (() => {
 
     /* ---------------- events banner ---------------- */
 
+    // FROZEN at these 4 milestone beats — anti-annoyance rule: no new banner clients.
     const EVENT_TEXT = {
         laid: 'a new egg appears…', crack: 'the egg is cracking!',
         hatched: '✦ the egg hatched! ✦', metamorphosis: '✦ metamorphosis! ✦',
@@ -274,7 +286,7 @@ const Creature = (() => {
         b.textContent = msg;
         b.classList.add('show');
         clearTimeout(bannerTimer);
-        bannerTimer = setTimeout(() => b.classList.remove('show'), 8000);
+        bannerTimer = setTimeout(() => b.classList.remove('show'), 5000);
     }
 
     /* ---------------- public API ---------------- */
