@@ -33,6 +33,12 @@ from ascii_art import get_creature
 from persona import load_persona, compute_level
 from telemetry import get_cpu_pct
 
+import os
+
+import creature_gen
+import glue
+from atomicio import replace_with_retry
+
 
 def _read_json(path: Path) -> dict:
     try:
@@ -228,6 +234,123 @@ def _disk_total_gb() -> float:
         return 0.0
 
 
+# --- Procedural creature (workspace/creature.json; dashboard is sole writer) ---
+
+_CREATURE_LOCK = threading.Lock()   # ThreadingHTTPServer → concurrent /api/status
+_HATCH_XP = 25                      # persona awards +1 XP per successful tick
+
+
+def _jobs_list(config: Config) -> list:
+    """jobs.json is a JSON ARRAY (unlike the dict files _read_json serves)."""
+    try:
+        data = json.loads((config.workspace / "jobs.json").read_text())
+        return data if isinstance(data, list) else []
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+
+
+def _delegate_running(config: Config) -> bool:
+    return any(j.get("kind") == "delegate" and j.get("status") == "running"
+               for j in _jobs_list(config))
+
+
+def _listening_hold_fresh(config: Config) -> bool:
+    """Mirror eidos._chat_hold_active's freshness check (held + within TTL)."""
+    hold = _read_json(config.workspace / "state" / "chat_hold.json")
+    if not hold.get("held"):
+        return False
+    try:
+        age = time.time() - float(hold.get("ts", 0))
+    except (TypeError, ValueError):
+        return False
+    return 0 <= age <= float(getattr(config, "chat_hold_ttl_s", 60.0))
+
+
+def _creature_path(config: Config) -> Path:
+    return config.workspace / "creature.json"
+
+
+def _save_creature(config: Config, doc: dict) -> None:
+    config.workspace.mkdir(parents=True, exist_ok=True)
+    tmp = _creature_path(config).with_suffix(".tmp")
+    tmp.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    replace_with_retry(tmp, _creature_path(config))
+
+
+def _load_or_create_creature(config: Config) -> dict:
+    """Read creature.json, or lay a brand-new egg (fresh incarnation = new genome)."""
+    with _CREATURE_LOCK:
+        doc = _read_json(_creature_path(config))
+        genome = doc.get("genome") or {}
+        if doc.get("seed") and genome.get("v") == creature_gen.GENOME_VERSION:
+            return doc
+        seed = int.from_bytes(os.urandom(8), "big")
+        doc = {
+            "v": 1,
+            "seed": seed,
+            "genome": creature_gen.genome_from_seed(seed),
+            "born_ts": time.time(),
+            "hatched": False,
+            "hatch_xp": _HATCH_XP,
+            "events": [{"ts": time.time(), "kind": "laid"}],
+        }
+        try:
+            _save_creature(config, doc)
+        except OSError:
+            logger.exception("creature.json save failed (continuing in-memory)")
+        return doc
+
+
+def _update_hatch(config: Config, doc: dict, persona: dict) -> dict:
+    """Hatch progress from persona XP. Persists ONLY on threshold crossings
+    (cracks at 1/3 and 2/3, hatch at 1.0) — never churns disk on a plain poll."""
+    if doc.get("hatched"):
+        return {"hatched": True, "progress": 1.0}
+    xp = persona.get("xp", 0)
+    progress = min(1.0, xp / max(1, doc.get("hatch_xp", _HATCH_XP)))
+    events = doc.setdefault("events", [])
+    have_cracks = sum(1 for e in events if e.get("kind") == "crack")
+    want_cracks = (1 if progress >= 0.34 else 0) + (1 if progress >= 0.67 else 0)
+    changed = False
+    for n in range(have_cracks + 1, want_cracks + 1):
+        events.append({"ts": time.time(), "kind": "crack", "n": n})
+        changed = True
+    if progress >= 1.0:
+        doc["hatched"] = True
+        events.append({"ts": time.time(), "kind": "hatched"})
+        changed = True
+    if changed:
+        with _CREATURE_LOCK:
+            try:
+                _save_creature(config, doc)
+            except OSError:
+                logger.exception("creature.json hatch update failed")
+    return {"hatched": bool(doc.get("hatched")), "progress": round(progress, 3)}
+
+
+def build_creature_spec(config: Config, persona: dict, heartbeat: dict,
+                        goal: str) -> dict:
+    """The living-creature payload: genome morphology + v2 truth expression."""
+    doc = _load_or_create_creature(config)
+    hatch = _update_hatch(config, doc, persona)
+    stage = creature_gen.stage_for(persona.get("level", 1), hatch["hatched"])
+    try:
+        condition = glue.compute_condition(glue.recent_outcomes(config))
+    except Exception:  # noqa: BLE001 — truth display must not break the page
+        condition = "STABLE"
+    expr = {
+        "condition": condition,
+        "delegating": _delegate_running(config),
+        "listening": _listening_hold_fresh(config),
+        "dead": heartbeat.get("consecutive_failures", 0) >= 5,
+        "paused": (config.workspace / "paused").exists(),
+        "has_goal": bool(goal.strip()),
+    }
+    spec = creature_gen.build_spec(doc["genome"], stage, hatch, expr)
+    spec["events"] = doc.get("events", [])[-5:]
+    return spec
+
+
 def build_status(config: Config) -> dict:
     """Assemble full status from workspace files."""
     heartbeat = _read_json(config.workspace / "heartbeat.json")
@@ -257,8 +380,15 @@ def build_status(config: Config) -> dict:
 
     creature = get_creature(level, mood, traits, special=special)
 
+    creature_spec = None
+    try:
+        creature_spec = build_creature_spec(config, persona, heartbeat, goal)
+    except Exception:  # noqa: BLE001 — the spec must never kill /api/status
+        logger.exception("creature spec build failed (client falls back to legacy)")
+
     return {
         "heartbeat": heartbeat,
+        "creature_spec": creature_spec,
         "persona": {
             "name": persona.get("name", "eiDOS"),
             "level": level,
@@ -512,6 +642,14 @@ def _make_handler(config: Config):
         def do_GET(self):
             if self.path == "/":
                 self._respond(200, "text/html; charset=utf-8", _render_html(config))
+
+            elif self.path == "/static/creature.js":
+                # Explicit whitelist (no generic static serving = no traversal surface).
+                try:
+                    body = (_STATIC_DIR / "creature.js").read_text(encoding="utf-8")
+                    self._respond(200, "application/javascript; charset=utf-8", body)
+                except OSError:
+                    self.send_error(404)
 
             elif self.path == "/api/status":
                 status = build_status(config)
@@ -893,10 +1031,27 @@ def _spawn_eidos(config):
 
 
 def _ctrl_start(config):
+    import subprocess, os
     pidfile, pausefile, kdir = _ctrl_paths(config)
     st = _ctrl_status(config)
     if st["running"]:
         return {"ok": False, "message": f"already running (pid {st['pid']})", **st}
+    # Ensure GPU services are running before spawning eidos (may have been freed by STOP).
+    llama_note = ""
+    if os.name == "nt":
+        svc_list = ",".join(f"'{s}'" for s in _GPU_SERVICES_START)
+        ps = (
+            f"foreach ($s in @({svc_list})) "
+            "{ Start-Service $s -ErrorAction SilentlyContinue }"
+        )
+        try:
+            r = subprocess.run(
+                ["powershell", "-NonInteractive", "-Command", ps],
+                capture_output=True, text=True, timeout=60)
+            if r.returncode == 0:
+                llama_note = " (GPU services starting — wait ~20s before clicking GO)"
+        except Exception:  # noqa: BLE001
+            pass
     pausefile.write_text("paused on start - click GO to begin")  # boot PAUSED
     _eidos_should_run_path(config).write_text("1")   # arm the watchdog
     try:
@@ -904,8 +1059,44 @@ def _ctrl_start(config):
     except OSError:
         pass
     pid = _spawn_eidos(config)
-    return {"ok": True, "message": f"started PAUSED (pid {pid}) - click GO to wake it",
+    return {"ok": True, "message": f"started PAUSED (pid {pid}) - click GO to wake it{llama_note}",
             **_ctrl_status(config)}
+
+
+_GPU_SERVICES_STOP = (
+    # Stopped in order; -Force cascades HouseAI-OpenWebUI via its dependency on HouseAI-Llama
+    "EidosVoice",
+    "HouseAI-Chatterbox",
+    "HouseAI-Llama",
+)
+_GPU_SERVICES_START = (
+    # Started in reverse order so the model is resident before voice/webui come up
+    "HouseAI-Llama",
+    "HouseAI-Chatterbox",
+    "EidosVoice",
+    "HouseAI-OpenWebUI",
+)
+
+
+def _free_llama_vram():
+    """Stop all GPU-resident services to fully free VRAM. Returns a status string."""
+    import subprocess, os
+    if os.name != "nt":
+        return ""
+    svc_list = ",".join(f"'{s}'" for s in _GPU_SERVICES_STOP)
+    ps = (
+        f"foreach ($s in @({svc_list})) "
+        "{ Stop-Service $s -Force -ErrorAction SilentlyContinue }"
+    )
+    try:
+        r = subprocess.run(
+            ["powershell", "-NonInteractive", "-Command", ps],
+            capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            return "; VRAM freed (GPU services stopped)"
+        return f"; GPU services stop failed (rc={r.returncode}): {r.stderr.strip()}"
+    except Exception as e:  # noqa: BLE001
+        return f"; GPU services stop err: {e}"
 
 
 def _ctrl_stop(config):
@@ -921,7 +1112,8 @@ def _ctrl_stop(config):
             pidfile.unlink()
         except OSError:
             pass
-        return {"ok": True, "message": "not running", **_ctrl_status(config)}
+        vram_msg = _free_llama_vram()
+        return {"ok": True, "message": f"not running{vram_msg}", **_ctrl_status(config)}
     pid = st["pid"]
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
@@ -939,7 +1131,8 @@ def _ctrl_stop(config):
         reaped = tools.reap_jobs(config, kill_all=True)
     except Exception:  # noqa: BLE001
         pass
-    msg = f"force-killed pid {pid} (and children)" + (f"; reaped {reaped} bg job(s)" if reaped else "")
+    vram_msg = _free_llama_vram()
+    msg = f"force-killed pid {pid} (and children)" + (f"; reaped {reaped} bg job(s)" if reaped else "") + vram_msg
     return {"ok": True, "message": msg, **_ctrl_status(config)}
 
 

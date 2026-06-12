@@ -118,6 +118,27 @@ body::after {
     margin: 2px;
     border-radius: 2px;
 }
+/* Procedural creature (creature.js compositor) */
+@keyframes cr-tremble {
+    0% { transform: translate(0, 0); }
+    25% { transform: translate(1px, 0); }
+    50% { transform: translate(-1px, 1px); }
+    75% { transform: translate(0, -1px); }
+    100% { transform: translate(0, 0); }
+}
+#creature-art.cr-tremble { animation: cr-tremble 0.11s infinite; }
+#creature-art.cr-dead { filter: grayscale(0.9) brightness(0.6); }
+#creature-art.cr-dreaming { color: #aa88ff !important; text-shadow: 0 0 8px rgba(170,136,255,0.5); }
+#creature-art.cr-listening { text-shadow: 0 0 8px rgba(51,187,255,0.55); }
+#creature-banner {
+    font-size: 11px;
+    color: #ffb000;
+    letter-spacing: 1px;
+    opacity: 0;
+    transition: opacity 0.6s;
+    margin-top: 4px;
+}
+#creature-banner.show { opacity: 1; }
 .title-badge {
     display: inline-block;
     color: #ffd700;
@@ -664,7 +685,7 @@ async function nxCtl(action){
   nxStatus();
 }
 async function nxStop(){
-  if(!confirm('Authoritative STOP: force-kill the consciousness loop and its children?'))return;
+  if(!confirm('Authoritative STOP: force-kill the consciousness loop and free VRAM (stops HouseAI-Llama)?'))return;
   await nxCtl('stop');
 }
 async function nxStatus(){
@@ -704,6 +725,16 @@ function toggleVoice(){
   }
   nxLabel('');
 }
+// Mouth-sync: the creature's mouth animates exactly while real speech is playing.
+// The "blessing" trick plays a silent data: URI — ignore those events.
+(function(){
+  const a=document.getElementById('nx-audio');
+  if(!a) return;
+  const real=()=>a.src&&!a.src.startsWith('data:');
+  a.addEventListener('playing',()=>{ if(real()&&window.Creature) Creature.setSpeaking(true); });
+  ['pause','ended','error','emptied'].forEach(ev=>
+    a.addEventListener(ev,()=>{ if(window.Creature) Creature.setSpeaking(false); }));
+})();
 </script>
 <div class="container">
     <div class="header">
@@ -861,6 +892,7 @@ function toggleVoice(){
     </div>
 </div>
 
+<script src="/static/creature.js"></script>
 <script>
 let creatureFrames = [];
 let creatureIdx = 0;
@@ -1156,6 +1188,7 @@ async function pollActivity() {
         if (resp.ok) {
             let data = await resp.json();
             _lastActivity = data;
+            if (window.Creature) Creature.applyActivity(data);
             updateThoughtBubble(data);
             updateToolBubble(data);
             if (data.gpu && typeof data.gpu.util === 'number') {
@@ -1364,12 +1397,8 @@ function animateCreature() {
     if (el) el.textContent = creatureFrames[creatureIdx];
 }
 
-function update(data) {
-    let p = data.persona || {};
-    let hb = data.heartbeat || {};
-    let cr = data.creature || {};
-
-    // Creature
+function legacyCreature(cr) {
+    // Pre-spec fallback: server-fixed frames on a simple flip timer.
     creatureFrames = cr.frames || [];
     creatureInterval = cr.interval_ms || 1500;
     particleChars = cr.particles || '';
@@ -1380,11 +1409,33 @@ function update(data) {
     if (creatureInterval > 0 && creatureFrames.length > 1) {
         animTimer = setInterval(animateCreature, creatureInterval);
     }
+}
+
+function update(data) {
+    let p = data.persona || {};
+    let hb = data.heartbeat || {};
+    let cr = data.creature || {};
+
+    // Creature: procedural compositor when the spec is present; legacy frames otherwise.
+    let spec = data.creature_spec;
+    if (spec && window.Creature) {
+        if (animTimer) { clearInterval(animTimer); animTimer = null; }  // kill legacy flip
+        Creature.applyStatus(spec);
+        particleChars = spec.particles || '';
+    } else {
+        legacyCreature(cr);
+    }
 
     // Persona info
     document.getElementById('name-level').textContent =
-        (p.name || 'eiDOS') + ' ✦ Lv.' + (p.level || 1) + ' ' + (cr.stage || '');
-    document.getElementById('mood-display').textContent = p.mood || 'unknown';
+        (p.name || 'eiDOS') + ' ✦ Lv.' + (p.level || 1) + ' ' + ((spec && spec.stage) || cr.stage || '');
+    let moodEl = document.getElementById('mood-display');
+    if (spec && spec.expr && spec.expr.condition) {
+        moodEl.textContent = spec.expr.condition.toLowerCase();
+        moodEl.title = 'legacy mood: ' + (p.mood || 'unknown');
+    } else {
+        moodEl.textContent = p.mood || 'unknown';
+    }
 
     let xpPct = p.xp_next > 0 ? Math.min(100, (p.xp / p.xp_next) * 100) : 0;
     document.getElementById('xp-fill').style.width = xpPct + '%';
