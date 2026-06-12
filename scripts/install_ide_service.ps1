@@ -27,8 +27,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-if (-not (Get-Command nssm -ErrorAction SilentlyContinue)) {
-    throw "nssm not found on PATH. Install it (e.g. 'winget install nssm') and re-run."
+$nssm = (Get-Command nssm -ErrorAction SilentlyContinue).Source
+if (-not $nssm) {
+    $fallback = "C:\Users\cmod\llm\bin\nssm\nssm.exe"   # where the other eiDOS services' nssm lives
+    if (Test-Path $fallback) { $nssm = $fallback }
+    else { throw "nssm not found on PATH or at $fallback. Install it and re-run." }
 }
 
 if (-not $Python) {
@@ -49,25 +52,24 @@ Write-Host "  script : $ide"
 Write-Host "  workdir: $RepoDir"
 
 # Idempotent: remove a stale registration first.
-$existing = & nssm status $ServiceName 2>$null
+$existing = & $nssm status $ServiceName 2>$null
 if ($LASTEXITCODE -eq 0) {
     Write-Host "  (service exists - removing and re-creating)"
-    & nssm stop $ServiceName 2>$null | Out-Null
-    & nssm remove $ServiceName confirm | Out-Null
+    & $nssm stop $ServiceName 2>$null | Out-Null
+    & $nssm remove $ServiceName confirm | Out-Null
 }
 
-& nssm install $ServiceName $Python $ide "--config" "config.toml"
-& nssm set $ServiceName AppDirectory $RepoDir
-& nssm set $ServiceName AppEnvironmentExtra "PYTHONUTF8=1" "PYTHONIOENCODING=utf-8"
-& nssm set $ServiceName Start SERVICE_AUTO_START
-& nssm set $ServiceName AppStdout (Join-Path $RepoDir "workspace\logs\ide.out.log")
-& nssm set $ServiceName AppStderr (Join-Path $RepoDir "workspace\logs\ide.err.log")
-& nssm set $ServiceName AppRotateFiles 1
+& $nssm install $ServiceName $Python $ide "--config" "config.toml"
+& $nssm set $ServiceName AppDirectory $RepoDir
+& $nssm set $ServiceName AppEnvironmentExtra "PYTHONUTF8=1" "PYTHONIOENCODING=utf-8"
+& $nssm set $ServiceName Start SERVICE_AUTO_START
+& $nssm set $ServiceName AppStdout (Join-Path $RepoDir "workspace\logs\ide.out.log")
+& $nssm set $ServiceName AppStderr (Join-Path $RepoDir "workspace\logs\ide.err.log")
+& $nssm set $ServiceName AppRotateFiles 1
 
 if ($NoStart) {
     Write-Host "Registered (NOT started). Start with: Start-Service $ServiceName"
 } else {
     Start-Service $ServiceName
-    Write-Host "Registered and started on http://0.0.0.0:$((Get-Content (Join-Path $RepoDir 'config.toml') | Select-String 'port = 8100' | Select-Object -First 1))"
-    Write-Host "Open http://127.0.0.1:8100"
+    Write-Host "Registered and started. Open http://127.0.0.1:8100 (config [ide] port)."
 }
