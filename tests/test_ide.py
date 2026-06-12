@@ -82,6 +82,57 @@ class TestStintManager(unittest.TestCase):
         self.assertIn("no such", err)
 
 
+class TestColdResume(unittest.TestCase):
+
+    def setUp(self):
+        self.config = Config()
+        self.config.workspace_dir = tempfile.mkdtemp()
+
+    def _make(self):
+        proc = MagicMock(pid=1)
+        proc.stdin = MagicMock()
+        with patch.object(ide.subprocess, "Popen", return_value=proc), \
+             patch.object(ide.threading, "Thread"), \
+             patch.object(ide, "_resolve_pi", return_value="pi.cmd"):
+            mgr = ide.StintManager(self.config)
+            stint, _ = mgr.create("persist")
+        return mgr, stint
+
+    def test_close_makes_cold_then_load_and_resume(self):
+        mgr, stint = self._make()
+        sid = stint.sid
+        mgr.close(sid)
+        self.assertEqual(stint.status, "cold")
+        # a brand-new manager (service restart) rediscovers it from disk as cold
+        mgr2 = ide.StintManager(self.config)
+        mgr2.load_cold()
+        self.assertIn(sid, mgr2.stints)
+        self.assertEqual(mgr2.stints[sid].status, "cold")
+        # resume re-spawns pi --continue
+        with patch.object(ide.subprocess, "Popen", return_value=MagicMock(pid=2)) as popen, \
+             patch.object(ide.threading, "Thread"), \
+             patch.object(ide, "_resolve_pi", return_value="pi.cmd"):
+            ok, err = mgr2.resume(sid)
+        self.assertTrue(ok, err)
+        self.assertEqual(mgr2.stints[sid].status, "running")
+        self.assertIn("--continue", popen.call_args[0][0])
+
+    def test_prompt_on_cold_asks_to_resume(self):
+        mgr, stint = self._make()
+        mgr.close(stint.sid)
+        ok, err = mgr.prompt(stint.sid, "hi")
+        self.assertFalse(ok)
+        self.assertIn("resume", err)
+
+    def test_reap_orphans_clears_pidfile(self):
+        mgr, stint = self._make()
+        self.assertTrue(mgr._pidfile().exists())
+        with patch.object(ide, "_kill_tree") as kill:
+            mgr.reap_orphans()
+        kill.assert_called()                      # the live pid was targeted
+        self.assertEqual(mgr._pidfile().read_text(), "[]")
+
+
 class TestCodeSurfaces(unittest.TestCase):
 
     def setUp(self):

@@ -138,7 +138,7 @@ class StintManager:
 
     # --- lifecycle ---
 
-    def _spawn(self, sdir: Path, work: Path):
+    def _spawn(self, sdir: Path, work: Path, resume: bool = False):
         pi = _resolve_pi(self.config)
         if not pi:
             raise RuntimeError("pi is not installed / resolvable")
@@ -146,16 +146,99 @@ class StintManager:
                 "--provider", getattr(self.config, "ide_pi_provider", "house-tap"),
                 "--model", getattr(self.config, "ide_pi_model", "house-ai"),
                 "--session-dir", str(sdir / "sessions"), "-a"]
+        if resume:
+            argv.append("--continue")    # resume the saved pi session context
         kw = {}
         if os.name == "nt":
             kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             kw["start_new_session"] = True
-        return subprocess.Popen(
+        proc = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, cwd=str(work), text=True,
             encoding="utf-8", errors="replace", bufsize=1,
             env={**os.environ, "PYTHONUTF8": "1"}, **kw)
+        self._register_pid(proc.pid)
+        return proc
+
+    # --- pid ledger: survive a service restart without leaking detached pi ---
+
+    def _pidfile(self) -> Path:
+        return self.root.parent / "pids.json"
+
+    def _register_pid(self, pid: int) -> None:
+        try:
+            pids = json.loads(self._pidfile().read_text()) if self._pidfile().exists() else []
+        except (OSError, ValueError):
+            pids = []
+        pids.append(pid)
+        try:
+            self._pidfile().write_text(json.dumps(pids))
+        except OSError:
+            pass
+
+    def reap_orphans(self) -> None:
+        """Kill pi processes left detached by a previous (crashed) service run."""
+        try:
+            pids = json.loads(self._pidfile().read_text())
+        except (OSError, ValueError):
+            pids = []
+        for pid in pids:
+            _kill_tree(pid)
+        try:
+            self._pidfile().write_text("[]")
+        except OSError:
+            pass
+
+    # --- cold stints: prior sessions on disk, resumable across restarts ---
+
+    def load_cold(self) -> None:
+        for d in sorted(p for p in self.root.glob("*") if p.is_dir()):
+            sid = d.name
+            if sid in self.stints or not (d / "meta.json").exists():
+                continue
+            try:
+                meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            stint = Stint(sid, meta.get("title", sid), d, d / "work", None)
+            stint.status = "cold"
+            try:
+                lines = (d / "transcript.jsonl").read_text(encoding="utf-8").splitlines()
+                stint.events = [json.loads(x) for x in lines[-500:] if x.strip()]
+            except (OSError, ValueError):
+                pass
+            self.stints[sid] = stint
+
+    def resume(self, sid: str):
+        stint = self.stints.get(sid)
+        if not stint:
+            return None, "no such stint"
+        if stint.status == "running":
+            return True, None
+        with self.lock:
+            live = sum(1 for s in self.stints.values() if s.status == "running")
+        if live >= int(getattr(self.config, "ide_max_stints", 8)):
+            return None, "too many live stints (close one first)"
+        try:
+            stint.proc = self._spawn(stint.sdir, stint.work, resume=True)
+        except Exception as exc:  # noqa: BLE001
+            return None, str(exc)
+        stint.status = "running"
+        stint.turn_active = False
+        threading.Thread(target=self._reader, args=(stint,), daemon=True,
+                         name=f"ide-reader-{sid}").start()
+        stint.publish({"type": "stint_resumed"})
+        return True, None
+
+    def reap_idle(self) -> None:
+        timeout = float(getattr(self.config, "ide_stint_idle_timeout_s", 1800.0))
+        now = time.time()
+        for s in list(self.stints.values()):
+            if (s.status == "running" and not s.turn_active
+                    and now - s.last_activity > timeout):
+                logger.info("reaping idle stint %s", s.sid)
+                self.close(s.sid)
 
     def create(self, title: str):
         with self.lock:
@@ -197,15 +280,18 @@ class StintManager:
                 stint.publish(ev)
         except (OSError, ValueError):
             pass
-        stint.status = "exited"
-        stint.turn_active = False
-        stint.publish({"type": "stint_exit"})
+        if stint.status == "running":     # a deliberate close already set it "cold"
+            stint.status = "exited"
+            stint.turn_active = False
+            stint.publish({"type": "stint_exit"})
 
     def prompt(self, sid: str, message: str):
         stint = self.stints.get(sid)
         if not stint:
             return None, "no such stint"
-        if stint.status != "running":
+        if stint.status == "cold":
+            return None, "stint is paused — resume it first"
+        if stint.status != "running" or stint.proc is None:
             return None, "stint has exited"
         if stint.turn_active:
             return None, "a turn is already in flight — wait for it to finish"
@@ -222,8 +308,11 @@ class StintManager:
     def close(self, sid: str):
         with self.lock:
             stint = self.stints.get(sid)
-        if not stint:
+        if not stint or stint.proc is None:
+            if stint:
+                stint.status = "cold"
             return
+        pid = stint.proc.pid
         try:
             stint.proc.stdin.close()       # closing stdin makes pi exit 0
         except OSError:
@@ -231,8 +320,17 @@ class StintManager:
         try:
             stint.proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            _kill_tree(stint.proc.pid)
-        stint.status = "closed"
+            _kill_tree(pid)
+        self._unregister_pid(pid)
+        stint.proc = None
+        stint.status = "cold"              # resumable again, not gone
+
+    def _unregister_pid(self, pid: int) -> None:
+        try:
+            pids = [p for p in json.loads(self._pidfile().read_text()) if p != pid]
+            self._pidfile().write_text(json.dumps(pids))
+        except (OSError, ValueError):
+            pass
 
     def reap_all(self) -> None:
         for sid in list(self.stints):
@@ -357,14 +455,15 @@ async function listStints(){const j=await (await fetch('/api/stints')).json();
   const box=$('stints');box.innerHTML='';
   j.stints.forEach(s=>{const d=document.createElement('div');
     d.className='stint'+(s.id===cur?' active':'');d.textContent=(s.status==='running'?'● ':'○ ')+s.title;
-    d.onclick=()=>open(s.id,s.title);box.appendChild(d);});}
+    d.onclick=()=>open(s.id,s.title,s.status);box.appendChild(d);});}
 async function newStint(){const t=$('newtitle').value||'';
   const j=await (await fetch('/api/stints',{method:'POST',body:JSON.stringify({title:t})})).json();
   if(j.id){$('newtitle').value='';await listStints();open(j.id,t||j.id);}
   else add('sys','could not create stint: '+(j.error||'?'));}
-function open(id,title){cur=id;curText=null;log.innerHTML='';turnActive=false;
+async function open(id,title,status){cur=id;curText=null;log.innerHTML='';turnActive=false;
   tabs=[];active=null;renderTabs();$('viewer').textContent='';
   $('send').disabled=false;$('dl').disabled=false;$('curname').textContent='· '+(title||id);
+  if(status&&status!=='running'){add('sys','resuming…');await fetch('/api/stints/'+id+'/resume',{method:'POST'});}
   listStints();loadTree();if(es)es.close();
   es=new EventSource('/api/stints/'+id+'/events');es.onmessage=e=>handle(JSON.parse(e.data));}
 function handle(ev){const t=ev.type;
@@ -553,6 +652,10 @@ class IDEHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/stints/") and path.endswith("/close"):
             MANAGER.close(self._stint_id("/api/stints/"))
             self._respond(200, "application/json", json.dumps({"ok": True}))
+        elif path.startswith("/api/stints/") and path.endswith("/resume"):
+            ok, err = MANAGER.resume(self._stint_id("/api/stints/"))
+            self._respond(200, "application/json",
+                          json.dumps({"ok": True} if ok else {"ok": False, "error": err}))
         else:
             self._respond(404, "text/plain", "not found")
 
@@ -568,6 +671,17 @@ def main():
     config = load_config(args.config)
     port = args.port or getattr(config, "ide_port", 8100)
     MANAGER = StintManager(config)
+    MANAGER.reap_orphans()      # kill pi left detached by a prior (crashed) run
+    MANAGER.load_cold()         # surface prior stints as resumable
+
+    def _idle_loop():
+        while True:
+            time.sleep(60)
+            try:
+                MANAGER.reap_idle()
+            except Exception:  # noqa: BLE001
+                logger.exception("idle reaper")
+    threading.Thread(target=_idle_loop, daemon=True, name="ide-idle-reaper").start()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     server = ThreadingHTTPServer(("0.0.0.0", port), IDEHandler)
