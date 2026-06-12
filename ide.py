@@ -444,7 +444,7 @@ _PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>EidosCodeIDE
  <div id="chatwrap">
    <div id="log"><div class="sys">pick or create a stint to start coding with pi.</div></div>
    <div id="composer">
-     <textarea id="inp" rows="3" placeholder="describe what to build… (Ctrl+Enter to send)"></textarea>
+     <textarea id="inp" rows="3" placeholder="describe what to build… (Enter to send · Shift+Enter for newline)"></textarea>
      <button id="send" onclick="send()" disabled>send</button>
    </div>
  </div>
@@ -489,7 +489,7 @@ function handle(ev){const t=ev.type;
 async function send(){const m=$('inp').value.trim();if(!m||!cur||turnActive)return;$('inp').value='';
   const j=await (await fetch('/api/stints/'+cur+'/prompt',{method:'POST',body:JSON.stringify({message:m})})).json();
   if(!j.ok)add('sys','✗ '+(j.error||'send failed'));}
-$('inp').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();send();}});
+$('inp').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send();}});
 // --- code tree ---
 async function loadTree(){if(!cur){$('tree').innerHTML='';return;}
   $('tree').innerHTML='';await renderDir($('tree'),'');}
@@ -514,7 +514,9 @@ function renderTabs(){const box=$('tabs');box.innerHTML='';
       if(active===t.path)active=tabs.length?tabs[tabs.length-1].path:null;}
       else active=t.path;renderTabs();renderViewer();};box.appendChild(d);});}
 function renderViewer(){const t=tabs.find(t=>t.path===active);$('viewer').textContent=t?t.body:'';}
-function dl(){if(cur)window.open('/api/stints/'+cur+'/download?zip=1');}
+function dl(){if(!cur)return;const a=document.createElement('a');
+  a.href='/api/stints/'+cur+'/download?zip=1';a.download=cur+'.zip';
+  document.body.appendChild(a);a.click();a.remove();}
 listStints();
 </script></body></html>"""
 
