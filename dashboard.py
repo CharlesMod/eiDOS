@@ -477,7 +477,22 @@ def build_creature_spec(config: Config, persona: dict, heartbeat: dict,
             doc["genome"], _build_garden(config, doc, persona))
     except Exception:  # noqa: BLE001 — the garden must never break the page
         logger.exception("terrarium build failed")
+    spec["delegates"] = _delegates_payload(config)
     return spec
+
+
+def _delegates_payload(config: Config) -> list:
+    """All delegate jobs (running + recently-finished; jobs.json keeps the last 15)
+    so the client mini-me can catch the return transition on the 2.5s poll. A 1:1
+    render of reality — the mini-me IS the delegate job's live state."""
+    out = []
+    for j in _jobs_list(config):
+        if j.get("kind") != "delegate":
+            continue
+        out.append({"name": j.get("name"), "mode": j.get("mode", "research"),
+                    "status": j.get("status", "running"),
+                    "started_ts": j.get("started_ts", 0)})
+    return out
 
 
 def build_status(config: Config) -> dict:

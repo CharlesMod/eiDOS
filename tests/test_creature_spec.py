@@ -126,6 +126,27 @@ class TestTerrarium(Base):
         self.assertFalse(dashboard._build_garden(self.config, doc, {})["mail"])
 
 
+class TestDelegatesPayload(Base):
+
+    def test_delegates_reflect_jobs(self):
+        (self.ws / "jobs.json").write_text(json.dumps([
+            {"name": "dlg_a", "kind": "delegate", "mode": "code",
+             "status": "running", "started_ts": 100},
+            {"name": "dlg_b", "kind": "delegate", "mode": "research",
+             "status": "completed", "started_ts": 50},
+            {"name": "j_other", "kind": "async", "status": "running"},
+        ]))
+        dels = self._spec()["delegates"]
+        names = {d["name"]: d for d in dels}
+        self.assertEqual(set(names), {"dlg_a", "dlg_b"})   # async row excluded
+        self.assertEqual(names["dlg_a"]["mode"], "code")
+        self.assertEqual(names["dlg_a"]["status"], "running")
+        self.assertEqual(names["dlg_b"]["status"], "completed")
+
+    def test_no_jobs_empty_list(self):
+        self.assertEqual(self._spec()["delegates"], [])
+
+
 class TestLifecycle(Base):
 
     def test_created_once_then_stable(self):

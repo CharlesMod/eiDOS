@@ -26,6 +26,12 @@ const Creature = (() => {
     let nextTremble = 0, trembleUntil = 0;
     let bannerTimer = null;
 
+    // delegate mini-me — a 1:1 render of a running delegate job at the bench
+    // (terrarium under-row cells 15-18). null when no delegate is working.
+    let mini = null;
+    const miniSeen = {};            // name -> last status, so a finished-on-load never replays
+    const MINI_SPRITE = { dot: '(o)', ring: '(O)', glow: '(°)', slit: '(=)', star: '(*)' };
+
     const now = () => Date.now();
     const rand = (a, b) => a + Math.random() * (b - a);
 
@@ -40,7 +46,64 @@ const Creature = (() => {
         const fw = terr.frame_w;
         const off = Math.max(0, Math.floor((fw - spec.w) / 2));
         const pad = (s) => (' '.repeat(off) + s + ' '.repeat(fw)).slice(0, fw);
-        return [terr.sky, ...rows.map(r => pad(r.join(''))), terr.ground, terr.under];
+        const under = terr.under.split('');
+        stampMini(under);
+        return [terr.sky, ...rows.map(r => pad(r.join(''))), terr.ground, under.join('')];
+    }
+
+    function _place(arr, c, s) {
+        for (let i = 0; i < s.length; i++) if (c + i < arr.length) arr[c + i] = s[i];
+    }
+
+    function stampMini(under) {
+        // The mini-me lives on the reserved bench (under-row cells 15-18): 3-char
+        // sprite + a status glyph. Every glyph is the delegate row's true state.
+        if (!mini) return;
+        const t = now();
+        const sprite = MINI_SPRITE[(spec.eyes && spec.eyes.family)] || '(o)';
+        if (mini.phase === 'working') {
+            _place(under, 15, sprite);
+            under[18] = mini.mode === 'code'
+                ? ['#', '|', '/', '-', '\\'][Math.floor(t / 300) % 5]
+                : (Math.floor(t / 500) % 2 ? '?' : '·');
+        } else if (mini.phase === 'return') {          // success — carries a spark, then merges
+            _place(under, 15, sprite); under[18] = '✦';
+            if (t - mini.since > 1500) mini = null;
+        } else if (mini.phase === 'fail') {            // empty-handed, no lingering shame
+            _place(under, 15, sprite); under[18] = '~';
+            if (t - mini.since > 1500) mini = null;
+        } else if (mini.phase === 'die') {             // the watchdog killed it at the bench
+            _place(under, 15, '(x)');
+            if (t - mini.since > 2000) mini = null;
+        }
+    }
+
+    function updateMini(dels) {
+        dels = dels || [];
+        const byName = {};
+        for (const d of dels) byName[d.name] = d;
+        // an active mini whose job left "running" plays its return/fail/die/vanish
+        if (mini && mini.phase === 'working') {
+            const d = byName[mini.name];
+            if (!d || d.status !== 'running') {
+                const st = d ? d.status : 'reaped';
+                if (st === 'completed') { mini.phase = 'return'; mini.since = now(); }
+                else if (st === 'failed') { mini.phase = 'fail'; mini.since = now(); }
+                else if (st === 'timed_out') { mini.phase = 'die'; mini.since = now(); }
+                else { mini = null; }                  // reaped → vanish instantly (a restart killed it)
+            }
+        }
+        // adopt a newly-running delegate (only when the bench is free). A delegate already
+        // finished on first page load is marked seen below and never replays.
+        if (!mini) {
+            for (const d of dels) {
+                if (d.status === 'running' && miniSeen[d.name] !== 'running') {
+                    mini = { name: d.name, mode: d.mode || 'research', phase: 'working',
+                             since: now() }; break;
+                }
+            }
+        }
+        for (const d of dels) miniSeen[d.name] = d.status;
     }
 
     /* ---------------- expression resolution ---------------- */
@@ -162,7 +225,10 @@ const Creature = (() => {
             }
         }
         if (t >= nextSaccade) {
-            saccadeDir = Math.random() < 0.5 ? -1 : 1;
+            // Supervisor glance: while a mini-me works the bench (right side), the
+            // creature sometimes checks on its delegate instead of a random saccade.
+            saccadeDir = (mini && mini.phase === 'working' && Math.random() < 0.35)
+                ? 1 : (Math.random() < 0.5 ? -1 : 1);
             saccadeUntil = t + rand(600, 900);
             nextSaccade = t + (a.saccade_ms || 5500) * rand(0.6, 1.4);
         }
@@ -323,6 +389,7 @@ const Creature = (() => {
                 smileUntil = now() + 8000;
             }
             lastCondition = (s.expr && s.expr.condition) || '';
+            updateMini(s.delegates);
             checkEvents(s);
             if (!masterTimer) masterTimer = setInterval(render, 100);
             render();
