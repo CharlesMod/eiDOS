@@ -147,6 +147,48 @@ class TestDelegatesPayload(Base):
         self.assertEqual(self._spec()["delegates"], [])
 
 
+class TestPendingAndBeats(Base):
+
+    def test_spec_carries_pending_and_beats(self):
+        s = self._spec()
+        self.assertIn("pending", s)
+        self.assertIn("beats", s)
+
+    def test_pending_self_guide_and_selfedits(self):
+        p = dashboard._build_pending(self.config)
+        self.assertFalse(p["self_guide"])
+        self.assertEqual(p["selfedits"], 0)
+        self.config.self_guide_proposed_path.write_text("proposed guide")
+        self.assertTrue(dashboard._build_pending(self.config)["self_guide"])
+        pdir = self.ws / "proposals"
+        pdir.mkdir(parents=True, exist_ok=True)
+        (pdir / "p1.json").write_text(json.dumps(
+            {"id": "p1", "kind": "self_edit", "status": "pending"}))
+        (pdir / "p2.json").write_text(json.dumps(
+            {"id": "p2", "kind": "self_edit", "status": "applied"}))
+        self.assertEqual(dashboard._build_pending(self.config)["selfedits"], 1)
+
+    def test_consume_beat_lifecycle(self):
+        doc = {}
+        idir = self.ws / "interventions"
+        idir.mkdir(parents=True, exist_ok=True)
+        (idir / "a.md.done").write_text("x")          # historical consume
+        self.assertEqual(dashboard._update_beats(self.config, doc), [])  # baseline, no beat
+        (idir / "b.md.done").write_text("x")          # a NEW consume
+        beats = dashboard._update_beats(self.config, doc)
+        self.assertEqual(len(beats), 1)
+        self.assertEqual(beats[0]["type"], "consume")
+        first_id = beats[0]["id"]
+        # no change → no new beat, same id
+        self.assertEqual(dashboard._update_beats(self.config, doc)[-1]["id"], first_id)
+        # two new consumes between polls collapse to ONE beat
+        (idir / "c.md.done").write_text("x")
+        (idir / "d.md.done").write_text("x")
+        beats3 = dashboard._update_beats(self.config, doc)
+        self.assertEqual(len(beats3), 2)
+        self.assertNotEqual(beats3[-1]["id"], first_id)
+
+
 class TestLifecycle(Base):
 
     def test_created_once_then_stable(self):

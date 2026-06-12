@@ -478,6 +478,8 @@ def build_creature_spec(config: Config, persona: dict, heartbeat: dict,
     except Exception:  # noqa: BLE001 — the garden must never break the page
         logger.exception("terrarium build failed")
     spec["delegates"] = _delegates_payload(config)
+    spec["pending"] = _build_pending(config)
+    spec["beats"] = _update_beats(config, doc)
     return spec
 
 
@@ -493,6 +495,61 @@ def _delegates_payload(config: Config) -> list:
                     "status": j.get("status", "running"),
                     "started_ts": j.get("started_ts", 0)})
     return out
+
+
+def _build_pending(config: Config) -> dict:
+    """What eiDOS is asking Dean to approve RIGHT NOW — the actionable pull. A
+    self-guide proposal staged, and/or self-edit proposals awaiting review. The
+    creature holds up a tablet while this is non-empty (client renders it)."""
+    try:
+        sg = config.self_guide_proposed_path.exists()
+    except Exception:  # noqa: BLE001
+        sg = False
+    se = 0
+    try:
+        import selfedit
+        se = sum(1 for m in selfedit.list_proposals(config, kind="self_edit")
+                 if m.get("status") == "pending")
+    except Exception:  # noqa: BLE001
+        se = 0
+    return {"self_guide": bool(sg), "selfedits": int(se)}
+
+
+def _count_consumed(config: Config) -> int:
+    try:
+        idir = config.interventions_dir
+        return sum(1 for _ in idir.glob("*.md.done")) if idir.exists() else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _update_beats(config: Config, doc: dict) -> list:
+    """Edge-triggered 'it responded to me' beats with stable ids (client plays each
+    id once, ever — reload mid-beat replays nothing). Consume = eiDOS read a message
+    (a *.md → *.md.done rename). Multiple consumes between polls collapse to one beat.
+    First sight establishes a baseline silently (no beat for historical consumes)."""
+    seen = doc.setdefault("bond_seen", {})
+    beats = doc.setdefault("beats", [])
+    consumed = _count_consumed(config)
+    prev = seen.get("consumed")
+    changed = False
+    if prev is None:
+        seen["consumed"] = consumed          # baseline only — no beat for the backlog
+        changed = True
+    elif consumed > prev:
+        seen["consumed"] = consumed
+        doc["beat_seq"] = int(doc.get("beat_seq", 0)) + 1
+        beats.append({"id": "b%d" % doc["beat_seq"], "type": "consume",
+                      "ts": time.time()})
+        del beats[:-8]
+        changed = True
+    if changed:
+        with _CREATURE_LOCK:
+            try:
+                _save_creature(config, doc)
+            except OSError:
+                logger.exception("creature.json beat update failed")
+    return beats[-5:]
 
 
 def build_status(config: Config) -> dict:

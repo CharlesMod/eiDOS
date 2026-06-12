@@ -32,6 +32,15 @@ const Creature = (() => {
     const miniSeen = {};            // name -> last status, so a finished-on-load never replays
     const MINI_SPRITE = { dot: '(o)', ring: '(O)', glow: '(°)', slit: '(=)', star: '(*)' };
 
+    // pending-proposal tablet — eiDOS is asking Dean to approve something. Held up
+    // ("presenting") until the page has been visible ~60s since it appeared, then set
+    // down beside the creature (still visible = still pending; the beg is removed).
+    let pendingOn = false, tabletVisibleMs = 0, tabletDown = false;
+    // consume / approval beats — edge events the creature answers within a frame.
+    let beatHigh = parseInt(localStorage.getItem('eidosBeatSeq') || '0', 10) || 0;
+    let beatUntil = 0, beatKind = '';
+    const TABLET_PRESENT_MS = 60000;
+
     const now = () => Date.now();
     const rand = (a, b) => a + Math.random() * (b - a);
 
@@ -75,6 +84,43 @@ const Creature = (() => {
         } else if (mini.phase === 'die') {             // the watchdog killed it at the bench
             _place(under, 15, '(x)');
             if (t - mini.since > 2000) mini = null;
+        }
+    }
+
+    function applyBeats(beats) {
+        let maxSeq = beatHigh, latest = null;
+        for (const b of (beats || [])) {
+            const n = parseInt(String(b.id || '').slice(1), 10);
+            if (!isNaN(n) && n > maxSeq) { maxSeq = n; latest = b; }
+        }
+        if (latest) {                       // only the newest beat plays; never replays
+            beatHigh = maxSeq;
+            localStorage.setItem('eidosBeatSeq', String(beatHigh));
+            beatKind = latest.type; beatUntil = now() + 1500;
+        }
+    }
+
+    function applyPending(p) {
+        const on = !!(p && (p.self_guide || (p.selfedits || 0) > 0));
+        if (on && !pendingOn) { tabletVisibleMs = 0; tabletDown = false; }
+        pendingOn = on;
+    }
+
+    function stampBeatTablet(rows, t) {
+        // consume beat: a · mote drifts in from the mailbox side toward the body
+        if (t < beatUntil && beatKind === 'consume') {
+            const p = 1 - (beatUntil - t) / 1500;
+            const col = Math.max(0, Math.min(spec.w - 1, Math.floor(1 + p * (spec.w - 2))));
+            stamp(rows, Math.max(0, spec.h - 2), col, '·');
+        }
+        // pending-proposal tablet: held up, then set down beside the creature after
+        // ~60s of visible page time. Present = still pending; gone = decided.
+        if (pendingOn && spec.eyes) {
+            if (!tabletDown) {
+                if (document.visibilityState !== 'hidden') tabletVisibleMs += 100;
+                if (tabletVisibleMs >= TABLET_PRESENT_MS) tabletDown = true;
+            }
+            stamp(rows, tabletDown ? spec.h - 1 : spec.eyes.l[0], spec.w - 1, '▽');
         }
     }
 
@@ -282,6 +328,11 @@ const Creature = (() => {
             stampAppendages(rows, 0);   // frozen pose
         }
 
+        // consume beat overrides the gaze toward the mailbox ("it read me")
+        if (t < beatUntil && beatKind === 'consume' && state !== 'dead') {
+            saccadeDir = -1; saccadeUntil = beatUntil;
+        }
+
         if (spec.eyes) {
             // micro: look_around chain overrides saccade direction
             if (microKind === 'look_around' && t < microUntil) {
@@ -306,6 +357,7 @@ const Creature = (() => {
             stamp(rows, spec.mouth.row, spec.mouth.col, mouthText(state, t));
         }
         stampFx(rows, state, t);
+        stampBeatTablet(rows, t);
 
         // micro stretch: lift the body one row
         if (microKind === 'stretch' && t < microUntil && rows.length > 1) {
@@ -390,6 +442,8 @@ const Creature = (() => {
             }
             lastCondition = (s.expr && s.expr.condition) || '';
             updateMini(s.delegates);
+            applyPending(s.pending);
+            applyBeats(s.beats);
             checkEvents(s);
             if (!masterTimer) masterTimer = setInterval(render, 100);
             render();
