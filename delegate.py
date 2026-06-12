@@ -64,12 +64,20 @@ def _under(child: str, parent: str) -> bool:
     return child == parent or child.startswith(parent.rstrip(os.sep) + os.sep)
 
 
+# Known install location — under the nssm services (LocalSystem) shutil.which("pi")
+# fails (no user PATH), so fall back to the absolute launcher.
+_PI_FALLBACK = r"C:\Users\cmod\AppData\Local\pi-node\current\pi.cmd"
+
+
 def _resolve_pi(config: Config) -> str:
     """Path to the pi launcher, or '' if unresolvable."""
     p = (getattr(config, "delegate_pi_path", "") or "").strip()
     if p:
         return p if Path(p).exists() else ""
-    return shutil.which("pi") or ""
+    found = shutil.which("pi")
+    if found:
+        return found
+    return _PI_FALLBACK if Path(_PI_FALLBACK).exists() else ""
 
 
 def _cwd_denied(config: Config, cwd: Path) -> str:

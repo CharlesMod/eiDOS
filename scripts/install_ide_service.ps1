@@ -61,7 +61,12 @@ if ($LASTEXITCODE -eq 0) {
 
 & $nssm install $ServiceName $Python $ide "--config" "config.toml"
 & $nssm set $ServiceName AppDirectory $RepoDir
-& $nssm set $ServiceName AppEnvironmentExtra "PYTHONUTF8=1" "PYTHONIOENCODING=utf-8"
+# The service runs as LocalSystem (no user PATH / profile), so point pi at the
+# user's config dir (where the house-tap provider extension lives) and home, and
+# config.toml [delegate] pi_path gives the absolute launcher.
+& $nssm set $ServiceName AppEnvironmentExtra "PYTHONUTF8=1" "PYTHONIOENCODING=utf-8" `
+    "PI_CODING_AGENT_DIR=C:\Users\cmod\.pi\agent" "USERPROFILE=C:\Users\cmod" `
+    "HOMEDRIVE=C:" "HOMEPATH=\Users\cmod"
 & $nssm set $ServiceName Start SERVICE_AUTO_START
 & $nssm set $ServiceName AppStdout (Join-Path $RepoDir "workspace\logs\ide.out.log")
 & $nssm set $ServiceName AppStderr (Join-Path $RepoDir "workspace\logs\ide.err.log")

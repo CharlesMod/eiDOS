@@ -157,7 +157,8 @@ timeout_s = 600
 # regardless of this list (only the workspace/delegate sandbox inside it is allowed).
 allowed_dirs = ["C:/Users/cmod/llm"]
 max_sessions = 12
-pi_path = ""            # '' = resolve 'pi' from PATH
+# Absolute path so it resolves under the nssm services (LocalSystem has no user PATH).
+pi_path = "C:\\Users\\cmod\\AppData\\Local\\pi-node\\current\\pi.cmd"
 # Route pi through the :8088 monitor tap so delegate tokens show on the :9100 dashboard,
 # same as the mind. Set to "house" for a direct :8081 connection.
 pi_provider = "house-tap"

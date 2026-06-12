@@ -55,11 +55,19 @@ logger = logging.getLogger("eidos.ide")
 REPO_ROOT = Path(__file__).resolve().parent
 
 
+# Known install location — the nssm services run as LocalSystem with no user PATH,
+# so shutil.which("pi") fails there; fall back to the absolute launcher.
+_PI_FALLBACK = r"C:\Users\cmod\AppData\Local\pi-node\current\pi.cmd"
+
+
 def _resolve_pi(config) -> str:
     p = (getattr(config, "delegate_pi_path", "") or "").strip()
     if p and Path(p).exists():
         return p
-    return shutil.which("pi") or ""
+    found = shutil.which("pi")
+    if found:
+        return found
+    return _PI_FALLBACK if Path(_PI_FALLBACK).exists() else ""
 
 
 def _kill_tree(pid: int) -> None:

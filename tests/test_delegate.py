@@ -72,7 +72,8 @@ class TestDelegateValidation(unittest.TestCase):
 
     def test_unresolvable_pi_is_exec(self):
         self.config.delegate_pi_path = ""
-        with patch.object(delegate.shutil, "which", return_value=None):
+        with patch.object(delegate.shutil, "which", return_value=None), \
+             patch.object(delegate, "_PI_FALLBACK", r"Z:\nope\pi.cmd"):
             r = self._no_spawn({"task": "do a thing"})
         self.assertFalse(r.success)
         self.assertEqual(r.fail_kind, "exec")
