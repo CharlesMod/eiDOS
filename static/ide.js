@@ -307,6 +307,27 @@
         requestAnimationFrame(thoughtScroll);
     }
 
+    /* ---------------- code-pane toggle (responsive) ----------------
+     * Three columns don't fit a half-screen window. The code pane collapses via the
+     * wb-nocode body class; on narrow widths it defaults off (chat gets the floor) and
+     * the header button swaps it in. Once you click, your choice sticks. */
+    function syncCodeBtn() {
+        const b = $('wb-codetog');
+        if (b) b.classList.toggle('on', !document.body.classList.contains('wb-nocode'));
+    }
+    function wbCode() {
+        const nocode = document.body.classList.toggle('wb-nocode');
+        localStorage.setItem('wbNoCode', nocode ? '1' : '0');
+        syncCodeBtn();
+    }
+    window.wbCode = wbCode;
+    function applyCodeDefault() {
+        let nc = localStorage.getItem('wbNoCode');
+        if (nc === null) nc = (window.innerWidth < 1080) ? '1' : '0';   // auto until you choose
+        document.body.classList.toggle('wb-nocode', nc === '1');
+        syncCodeBtn();
+    }
+
     /* ---------------- boot ---------------- */
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -323,6 +344,13 @@
         // Pause the bench timers when the tab/window is hidden; resume on return.
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible' && wbOn()) standByTouch();
+        });
+        applyCodeDefault();
+        // Re-evaluate on resize only while you're in auto mode (haven't clicked the toggle).
+        window.addEventListener('resize', () => {
+            if (localStorage.getItem('wbNoCode') !== null) return;
+            document.body.classList.toggle('wb-nocode', window.innerWidth < 1080);
+            syncCodeBtn();
         });
         if (localStorage.getItem('eidosTab') === 'wb') wbTab(true);
         requestAnimationFrame(thoughtScroll);

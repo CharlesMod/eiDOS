@@ -674,9 +674,11 @@ body::after {
 #nx-tabs button.on{background:#13361f;border-color:#1c7a3a;color:#9cf0b6}
 /* --- workbench tab: hide the station panels, show the IDE --- */
 body.wb .container > :not(#wb-panel){display:none}
-#wb-panel{display:none;grid-column:1 / -1;border:1px solid #1a3a1a;background:#0d0d0d;
-  height:calc(100vh - 90px);min-height:480px;flex-direction:column;padding:0}
-body.wb #wb-panel{display:flex}
+/* Full-viewport overlay below the fixed control bar: full width (not boxed into the
+   station's centered 1200px grid), opaque, so no station panel can bleed through. */
+#wb-panel{display:none}
+body.wb #wb-panel{display:flex;position:fixed;left:0;right:0;top:39px;bottom:0;z-index:500;
+  flex-direction:column;background:#0a0a0a;border-top:1px solid #1a3a1a;padding:0}
 #wb-head{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid #1a3a1a;color:#ffb000}
 #wb-head .grow{flex:1}
 #wb-main{flex:1;display:flex;min-height:0}
@@ -702,16 +704,19 @@ body.wb #wb-panel{display:flex}
 #wb-new{display:flex;gap:4px;padding:6px;border-top:1px solid #1a3a1a}
 #wb-new input{flex:1;min-width:0;background:#000;color:#00ff41;border:1px solid #1a3a1a;
   padding:4px;font:12px 'Courier New',monospace}
-#wb-chat{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid #1a3a1a}
-#wb-log{flex:1;overflow:auto;padding:10px;white-space:pre-wrap;line-height:1.4;font-size:13px}
+#wb-chat{flex:1.7;display:flex;flex-direction:column;min-width:0;border-right:1px solid #1a3a1a}
+#wb-log{flex:1;overflow:auto;padding:14px 16px;white-space:pre-wrap;line-height:1.5;font-size:13px}
 #wb-log .msg-user{color:#33bbff;margin:8px 0}
 #wb-log .msg-pi{color:#00ff41;margin:8px 0}
 #wb-log .tool{color:#ffb000;margin:4px 0 4px 8px;font-size:12px}
 #wb-log .sys{color:#888;font-size:12px;margin:4px 0}
-#wb-composer{display:flex;border-top:1px solid #1a3a1a}
-#wb-inp{flex:1;background:#000;color:#00ff41;border:none;padding:10px;
-  font:13px 'Courier New',monospace;resize:none}
-#wb-code{width:38%;display:flex;flex-direction:column;min-width:0}
+#wb-composer{display:flex;gap:8px;padding:8px;border-top:1px solid #1a3a1a;background:#0b0f0b}
+#wb-inp{flex:1;min-height:72px;max-height:200px;background:#000;color:#00ff41;
+  border:1px solid #1a3a1a;border-radius:6px;padding:10px 12px;
+  font:13px/1.5 'Courier New',monospace;resize:vertical}
+#wb-inp:focus{border-color:#1c7a3a;outline:none}
+#wb-composer #wb-send{align-self:stretch;padding:0 18px}
+#wb-code{flex:1;min-width:300px;display:flex;flex-direction:column}
 #wb-tree{height:36%;overflow:auto;padding:6px;border-bottom:1px solid #1a3a1a;font-size:12px}
 #wb-tree .row{padding:1px 4px;cursor:pointer;white-space:nowrap}
 #wb-tree .row:hover{background:#1a3a1a}
@@ -724,6 +729,16 @@ body.wb #wb-panel{display:flex}
   cursor:pointer;font:12px 'Courier New',monospace}
 #wb-panel button:hover{background:#00ff41;color:#000}
 #wb-panel button:disabled{opacity:.4;cursor:default}
+/* code-pane toggle: hide the code column → chat (history + input) gets the floor. */
+#wb-codetog.on{background:#13361f;border-color:#1c7a3a;color:#9cf0b6}
+body.wb-nocode #wb-code{display:none}
+/* Half-screen / narrow: three columns don't fit. Default to one working pane (chat),
+   wide; the header "code" button swaps the code pane in (it then takes the pane). */
+@media (max-width:1080px){
+  body.wb #wb-side{width:174px}
+  body.wb #wb-chat,body.wb #wb-code{flex:1 1 100%;min-width:0}
+  body.wb:not(.wb-nocode) #wb-chat{display:none}
+}
 </style>
 <div id="nexus-control">
   <b>eiDOS</b>
@@ -816,6 +831,7 @@ function toggleVoice(){
         <div id="wb-head">
             <b>workbench</b><span id="wb-curname" style="color:#888"></span>
             <span class="grow"></span>
+            <button id="wb-codetog" onclick="wbCode()" title="Show/hide the code pane">⟨⟩ code</button>
             <button id="wb-dl" onclick="wbDl()" disabled>download .zip</button>
         </div>
         <div id="wb-main">
