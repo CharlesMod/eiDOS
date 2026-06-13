@@ -19,6 +19,7 @@
 
     let cur = null, es = null, turnActive = false, curText = null, pendWrite = null;
     let tabs = [], active = null;
+    let agentLines = {};              // toolCallId → the clickable chat row for that Agent spawn
     let stints = [];                  // last /api/stints payload (rail + crew truth)
     let railTimer = null, crewTimer = null;
     let petHome = null, crewHome = null;   // where creature-box / crew live on the station tab
@@ -203,7 +204,7 @@
 
     async function open(id, title, status) {
         cur = id; curText = null; turnActive = false;
-        $('wb-log').innerHTML = '';
+        $('wb-log').innerHTML = ''; agentLines = {};
         tabs = []; active = null; renderTabs(); $('wb-viewer').textContent = '';
         $('wb-send').disabled = false; $('wb-dl').disabled = false;
         $('wb-curname').textContent = '· ' + (title || id);
@@ -240,12 +241,27 @@
             }
         } else if (t === 'tool_execution_start') {
             const ar = ev.args || {};
-            const d = ar.path || ar.command || ar.pattern || '';
-            add('tool', '⚙ ' + ev.toolName + (d ? ' ' + String(d).slice(0, 80) : ''));
-            curText = null;
-            if ((ev.toolName === 'write' || ev.toolName === 'edit') && ar.path) pendWrite = ar.path;
+            if (ev.toolName === 'Agent') {         // a subagent spawn — clickable to expand its work
+                const line = add('tool agent-line', '⚙ Agent ▸ ' + (ar.description || ar.subagent_type || 'subagent'));
+                line.title = 'click to expand this subagent’s work';
+                line.onclick = () => toggleAgentExpand(line);
+                agentLines[ev.toolCallId] = line;
+                curText = null;
+            } else {
+                const d = ar.path || ar.command || ar.pattern || '';
+                add('tool', '⚙ ' + ev.toolName + (d ? ' ' + String(d).slice(0, 80) : ''));
+                curText = null;
+                if ((ev.toolName === 'write' || ev.toolName === 'edit') && ar.path) pendWrite = ar.path;
+            }
         } else if (t === 'tool_execution_end') {
-            if (ev.isError) add('tool', '  ✗ error');
+            if (ev.toolName === 'Agent') {         // attach the Agent ID so the row can fetch its output
+                const line = agentLines[ev.toolCallId];
+                if (line) {
+                    const txt = ((ev.result || {}).content || []).map(c => c.text || '').join('');
+                    const m = txt.match(/Agent ID:\s*([A-Za-z0-9-]+)/);
+                    if (m) line.dataset.aid = m[1];
+                }
+            } else if (ev.isError) add('tool', '  ✗ error');
             else if (pendWrite) {
                 loadTree(); openFile(pendWrite);
                 if (curView() === 'preview') loadPreview();   // live-refresh the preview as files land
@@ -262,6 +278,26 @@
             $('wb-send').disabled = true;
             listStints();
         }
+    }
+
+    async function toggleAgentExpand(line) {
+        const aid = line.dataset.aid;
+        if (!aid) return;                       // spawn not finished → no id yet
+        if (line._expand) {                     // collapse
+            line._expand.remove(); line._expand = null;
+            line.textContent = line.textContent.replace('▾', '▸');
+            return;
+        }
+        let j;
+        try { j = await (await fetch(BASE + '/api/stints/' + cur + '/subagent?aid=' +
+            encodeURIComponent(aid))).json(); }
+        catch (e) { j = { error: 'unreachable' }; }
+        const pre = document.createElement('pre');
+        pre.className = 'agent-expand';
+        pre.textContent = j.content || j.error || '(no output yet)';
+        line.insertAdjacentElement('afterend', pre);
+        line._expand = pre;
+        line.textContent = line.textContent.replace('▸', '▾');
     }
 
     async function send() {

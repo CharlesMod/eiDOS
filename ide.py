@@ -147,8 +147,10 @@ class Stint:
                 txt += c.get("text", "")
             m = re.search(r"Agent ID:\s*([A-Za-z0-9-]+)", txt)
             aid = m.group(1) if m else f"a{len(self.subagents)}"
+            mf = re.search(r"Output file:\s*(.+)", txt)
             self.subagents[aid] = {"id": aid, "desc": pend["desc"], "type": pend["type"],
-                                   "status": "running"}
+                                   "status": "running",
+                                   "output_file": (mf.group(1).strip() if mf else "")}
         elif t in ("tool_execution_start", "tool_execution_end") \
                 and ev.get("toolName") == "get_subagent_result":
             aid = (ev.get("args") or {}).get("agent_id")
@@ -661,6 +663,10 @@ class IDEHandler(BaseHTTPRequestHandler):
             rel = (parse_qs(urlparse(self.path).query).get("path") or [""])[0]
             res, err = MANAGER.read_file(self._stint_id("/api/stints/"), rel)
             self._respond(200, "application/json", json.dumps(res or {"error": err}))
+        elif path.startswith("/api/stints/") and path.endswith("/subagent"):
+            sid = self._stint_id("/api/stints/")
+            aid = (parse_qs(urlparse(self.path).query).get("aid") or [""])[0]
+            self._respond(200, "application/json", json.dumps(self._subagent_output(sid, aid)))
         elif path.startswith("/api/stints/") and path.endswith("/download"):
             self._download(self._stint_id("/api/stints/"),
                            parse_qs(urlparse(self.path).query))
@@ -696,6 +702,25 @@ class IDEHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
+
+    def _subagent_output(self, sid: str, aid: str) -> dict:
+        """A subagent's captured output (its work log) for the click-to-expand chat row."""
+        stint = MANAGER.stints.get(sid)
+        if not stint:
+            return {"error": "no such stint"}
+        sub = stint.subagents.get(aid)
+        if not sub:
+            return {"error": "no such subagent"}
+        out = {"id": aid, "desc": sub.get("desc"), "status": sub.get("status"), "content": ""}
+        fp = sub.get("output_file") or ""
+        if fp and Path(fp).is_file():
+            try:
+                out["content"] = Path(fp).read_text(encoding="utf-8", errors="replace")[-200_000:]
+            except OSError as exc:
+                out["content"] = f"(could not read output: {exc})"
+        else:
+            out["content"] = "(no output captured yet)"
+        return out
 
     def _download(self, sid: str, q: dict):
         if (q.get("zip") or ["0"])[0] in ("1", "true"):
