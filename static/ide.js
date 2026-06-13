@@ -70,6 +70,7 @@
             if (crewTimer) { clearInterval(crewTimer); crewTimer = null; }
             standByRelease();                     // leaving the bench frees the buddy
         }
+        if (window.refreshThought) window.refreshThought();   // standby line flips in at once
     }
     window.wbTab = wbTab;
 
@@ -99,11 +100,17 @@
 
     /* ---------------- stints rail ---------------- */
 
+    // True when the log is scrolled to (near) the bottom. If you've scrolled up to read,
+    // new/streaming content must NOT yank you down — manual scroll wins over the stream.
+    function nearBottom(el) { return el.scrollHeight - el.scrollTop - el.clientHeight < 48; }
+
     function add(cls, txt) {
         const log = $('wb-log');
+        const stick = nearBottom(log);
         const d = document.createElement('div');
         d.className = cls; d.textContent = txt;
-        log.appendChild(d); log.scrollTop = log.scrollHeight;
+        log.appendChild(d);
+        if (stick) log.scrollTop = log.scrollHeight;
         return d;
     }
 
@@ -123,8 +130,14 @@
         stints.forEach(s => {
             const d = document.createElement('div');
             d.className = 'stint' + (s.id === cur ? ' active' : '');
-            d.textContent = (s.status === 'running' ? '● ' : '○ ') + s.title;
-            d.onclick = () => open(s.id, s.title, s.status);
+            const label = document.createElement('span');
+            label.className = 'stint-label';
+            label.textContent = (s.status === 'running' ? '● ' : '○ ') + s.title;
+            label.onclick = () => open(s.id, s.title, s.status);
+            const del = document.createElement('span');
+            del.className = 'stint-del'; del.textContent = '✕'; del.title = 'Delete this stint';
+            del.onclick = (e) => { e.stopPropagation(); delStint(s.id, s.title); };
+            d.appendChild(label); d.appendChild(del);
             box.appendChild(d);
         });
         crewRender();
@@ -140,6 +153,20 @@
     }
     window.wbNewStint = newStint;
 
+    async function delStint(id, title) {
+        if (!confirm('Delete stint “' + (title || id) + '”?\nThis permanently removes its chat, files, and session.')) return;
+        try { await fetch(BASE + '/api/stints/' + id + '/delete', { method: 'POST' }); }
+        catch (e) { add('sys', 'delete failed: ' + e); return; }
+        if (cur === id) {                       // was viewing it → clear the panes
+            cur = null; if (es) { es.close(); es = null; }
+            $('wb-log').innerHTML = '<div class="sys">stint deleted.</div>';
+            tabs = []; active = null; renderTabs(); $('wb-viewer').textContent = '';
+            $('wb-curname').textContent = ''; $('wb-send').disabled = true; $('wb-dl').disabled = true;
+        }
+        listStints();
+    }
+    window.delStint = delStint;
+
     async function open(id, title, status) {
         cur = id; curText = null; turnActive = false;
         $('wb-log').innerHTML = '';
@@ -151,6 +178,7 @@
             await fetch(BASE + '/api/stints/' + id + '/resume', { method: 'POST' });
         }
         listStints(); loadTree();
+        if (curView() === 'preview') loadPreview();
         if (es) es.close();
         es = new EventSource(BASE + '/api/stints/' + id + '/events');
         es.onmessage = e => handle(JSON.parse(e.data));
@@ -170,9 +198,11 @@
         } else if (t === 'message_update' && ev.assistantMessageEvent) {
             const a = ev.assistantMessageEvent;
             if (a.type === 'text_delta') {
+                const log = $('wb-log');
+                const stick = nearBottom(log);
                 if (!curText) curText = add('msg-pi', sprite() + ' ▸ ');
                 curText.textContent += a.delta || '';
-                $('wb-log').scrollTop = $('wb-log').scrollHeight;
+                if (stick) log.scrollTop = log.scrollHeight;
             }
         } else if (t === 'tool_execution_start') {
             const ar = ev.args || {};
@@ -182,7 +212,11 @@
             if ((ev.toolName === 'write' || ev.toolName === 'edit') && ar.path) pendWrite = ar.path;
         } else if (t === 'tool_execution_end') {
             if (ev.isError) add('tool', '  ✗ error');
-            else if (pendWrite) { loadTree(); openFile(pendWrite); pendWrite = null; }
+            else if (pendWrite) {
+                loadTree(); openFile(pendWrite);
+                if (curView() === 'preview') loadPreview();   // live-refresh the preview as files land
+                pendWrite = null;
+            }
         } else if (t === 'agent_end') {
             turnActive = false; $('wb-send').disabled = false; curText = null;
             listStints();
@@ -311,22 +345,100 @@
      * Three columns don't fit a half-screen window. The code pane collapses via the
      * wb-nocode body class; on narrow widths it defaults off (chat gets the floor) and
      * the header button swaps it in. Once you click, your choice sticks. */
-    function syncCodeBtn() {
-        const b = $('wb-codetog');
-        if (b) b.classList.toggle('on', !document.body.classList.contains('wb-nocode'));
+    function curView() {
+        if (document.body.classList.contains('wb-nocode')) return 'chat';
+        return document.body.classList.contains('wb-pv') ? 'preview' : 'code';
     }
-    function wbCode() {
-        const nocode = document.body.classList.toggle('wb-nocode');
-        localStorage.setItem('wbNoCode', nocode ? '1' : '0');
-        syncCodeBtn();
+    function syncViewBtns() {
+        const v = curView();
+        [['sw-chat', 'chat'], ['sw-code', 'code'], ['sw-pv', 'preview']].forEach(p => {
+            const b = $(p[0]); if (b) b.classList.toggle('on', v === p[1]);
+        });
     }
-    window.wbCode = wbCode;
-    function applyCodeDefault() {
-        let nc = localStorage.getItem('wbNoCode');
-        if (nc === null) nc = (window.innerWidth < 1080) ? '1' : '0';   // auto until you choose
-        document.body.classList.toggle('wb-nocode', nc === '1');
-        syncCodeBtn();
+    function setView(view, persist) {
+        document.body.classList.toggle('wb-nocode', view === 'chat');     // chat-only
+        document.body.classList.toggle('wb-pv', view === 'preview');      // right pane = preview
+        if (persist) localStorage.setItem('wbView', view);
+        if (view === 'preview') loadPreview();
+        syncViewBtns();
     }
+    function wbShow(view) { setView(view, true); }
+    window.wbShow = wbShow;
+    function applyViewDefault() {
+        let v = localStorage.getItem('wbView');
+        if (!v) v = (window.innerWidth < 1080) ? 'chat' : 'code';   // auto until you choose
+        setView(v, false);
+    }
+
+    /* ---------------- preview: html page / image / 3D model ---------------- */
+    let _pvUrl = '', _mvLoaded = false;
+    function previewKind(p) {
+        const e = (p.split('.').pop() || '').toLowerCase();
+        if (['html', 'htm'].indexOf(e) >= 0) return 'html';
+        if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'].indexOf(e) >= 0) return 'image';
+        if (['glb', 'gltf'].indexOf(e) >= 0) return 'model';
+        if (e === 'pdf') return 'pdf';
+        return null;
+    }
+    async function listAllFiles(path, depth) {
+        depth = depth || 0; if (depth > 4 || !cur) return [];
+        let out = [];
+        try {
+            const j = await (await fetch(BASE + '/api/stints/' + cur + '/tree?path=' +
+                encodeURIComponent(path))).json();
+            for (const it of (j.items || [])) {
+                if (it.type === 'dir') out = out.concat(await listAllFiles(it.path, depth + 1));
+                else out.push(it.path);
+            }
+        } catch (e) { /* unreachable IDE service → empty */ }
+        return out;
+    }
+    async function pickPreviewTarget() {
+        if (active && previewKind(active)) return { path: active, kind: previewKind(active) };
+        const files = await listAllFiles('');
+        const html = files.find(f => /(^|\/)index\.html$/i.test(f)) || files.find(f => /\.html?$/i.test(f));
+        if (html) return { path: html, kind: 'html' };
+        const img = files.find(f => previewKind(f) === 'image'); if (img) return { path: img, kind: 'image' };
+        const mdl = files.find(f => previewKind(f) === 'model'); if (mdl) return { path: mdl, kind: 'model' };
+        return null;
+    }
+    function pvMsg(t) { $('wb-pvbody').innerHTML = '<div class="sys" style="padding:16px">' + t + '</div>'; }
+    async function loadPreview() {
+        const what = $('wb-pvwhat');
+        if (!cur) { pvMsg('pick a stint to preview its output.'); if (what) what.textContent = ''; return; }
+        const t = await pickPreviewTarget();
+        if (!t) {
+            pvMsg('nothing to preview yet — when the crew writes an HTML page, image, or 3D model it shows here.');
+            if (what) what.textContent = ''; return;
+        }
+        const url = BASE + '/api/stints/' + cur + '/raw/' + t.path.split('/').map(encodeURIComponent).join('/');
+        _pvUrl = url;
+        if (what) what.textContent = t.path + ' · ' + t.kind;
+        const body = $('wb-pvbody');
+        if (t.kind === 'html' || t.kind === 'pdf') {
+            body.innerHTML = '';
+            const f = document.createElement('iframe');
+            f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-modals allow-popups');
+            f.src = url; body.appendChild(f);
+        } else if (t.kind === 'image') {
+            body.innerHTML = ''; const im = document.createElement('img'); im.src = url; body.appendChild(im);
+        } else if (t.kind === 'model') {
+            body.innerHTML = '<model-viewer src="' + url + '" camera-controls auto-rotate></model-viewer>';
+            ensureModelViewer();
+        }
+    }
+    function ensureModelViewer() {
+        if (_mvLoaded || (window.customElements && customElements.get('model-viewer'))) { _mvLoaded = true; return; }
+        _mvLoaded = true;
+        const s = document.createElement('script'); s.type = 'module';
+        s.src = 'https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js';
+        s.onerror = () => pvMsg('3D viewer needs the model-viewer CDN, which is unreachable here. The .glb is still downloadable.');
+        document.head.appendChild(s);
+    }
+    function wbPvRefresh() { loadPreview(); }
+    function wbPvOpen() { if (_pvUrl) window.open(_pvUrl, '_blank'); }
+    window.wbPvRefresh = wbPvRefresh;
+    window.wbPvOpen = wbPvOpen;
 
     /* ---------------- boot ---------------- */
 
@@ -334,6 +446,10 @@
         const inp = $('wb-inp');
         if (inp) inp.addEventListener('keydown', e => {
             if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+        });
+        const nt = $('wb-newtitle');
+        if (nt) nt.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); newStint(); }
         });
         // Any interaction inside the workbench refreshes the stand-by hold.
         const panel = $('wb-panel');
@@ -345,12 +461,11 @@
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible' && wbOn()) standByTouch();
         });
-        applyCodeDefault();
-        // Re-evaluate on resize only while you're in auto mode (haven't clicked the toggle).
+        applyViewDefault();
+        // Re-evaluate on resize only while you're in auto mode (haven't picked a view).
         window.addEventListener('resize', () => {
-            if (localStorage.getItem('wbNoCode') !== null) return;
-            document.body.classList.toggle('wb-nocode', window.innerWidth < 1080);
-            syncCodeBtn();
+            if (localStorage.getItem('wbView') !== null) return;
+            setView(window.innerWidth < 1080 ? 'chat' : 'code', false);
         });
         if (localStorage.getItem('eidosTab') === 'wb') wbTab(true);
         requestAnimationFrame(thoughtScroll);

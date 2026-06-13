@@ -22,6 +22,7 @@ import argparse
 import io
 import json
 import logging
+import mimetypes
 import os
 import queue as _queue
 import shutil
@@ -58,6 +59,26 @@ REPO_ROOT = Path(__file__).resolve().parent
 # Known install location — the nssm services run as LocalSystem with no user PATH,
 # so shutil.which("pi") fails there; fall back to the absolute launcher.
 _PI_FALLBACK = r"C:\Users\cmod\AppData\Local\pi-node\current\pi.cmd"
+
+# Some local models (Gemma) paste a whole file into chat instead of calling write —
+# leaving work/ empty so there's nothing to preview or download. Insist on real files.
+_PI_SYS = (
+    "You are building software collaboratively in the current working directory. "
+    "ALWAYS create and edit REAL files with the write/edit tools — never paste a full "
+    "file's contents into chat as the deliverable. For a web app, write index.html (plus "
+    "any css/js/assets) at the working-directory root so it can be previewed and downloaded. "
+    "Keep chat replies short; let the files on disk be the work."
+)
+
+# Inline content types for the raw preview serve (mimetypes can be wrong/absent on Windows).
+_RAW_MIME = {
+    ".html": "text/html", ".htm": "text/html", ".js": "text/javascript",
+    ".mjs": "text/javascript", ".css": "text/css", ".json": "application/json",
+    ".svg": "image/svg+xml", ".wasm": "application/wasm", ".pdf": "application/pdf",
+    ".glb": "model/gltf-binary", ".gltf": "model/gltf+json",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".ico": "image/x-icon",
+}
 
 
 def _resolve_pi(config) -> str:
@@ -153,7 +174,8 @@ class StintManager:
         argv = [pi, "--mode", "rpc",
                 "--provider", getattr(self.config, "ide_pi_provider", "house-tap"),
                 "--model", getattr(self.config, "ide_pi_model", "house-ai"),
-                "--session-dir", str(sdir / "sessions"), "-a"]
+                "--session-dir", str(sdir / "sessions"),
+                "--append-system-prompt", _PI_SYS, "-a"]
         if resume:
             argv.append("--continue")    # resume the saved pi session context
         kw = {}
@@ -332,6 +354,21 @@ class StintManager:
         self._unregister_pid(pid)
         stint.proc = None
         stint.status = "cold"              # resumable again, not gone
+
+    def delete(self, sid: str):
+        """Permanently remove a stint: stop pi, drop it from the registry, and delete its
+        on-disk dir (sessions + transcript + work). Unlike close(), it does NOT come back."""
+        self.close(sid)                      # stop the pi process if running
+        with self.lock:
+            stint = self.stints.pop(sid, None)
+        if not stint:
+            return False, "no such stint"
+        try:
+            if stint.sdir.exists():
+                shutil.rmtree(stint.sdir, ignore_errors=True)
+        except OSError as exc:
+            return False, str(exc)
+        return True, None
 
     def _unregister_pid(self, pid: int) -> None:
         try:
@@ -580,8 +617,38 @@ class IDEHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/stints/") and path.endswith("/download"):
             self._download(self._stint_id("/api/stints/"),
                            parse_qs(urlparse(self.path).query))
+        elif path.startswith("/api/stints/") and "/raw/" in path:
+            # /api/stints/<id>/raw/<relpath> — serve a work file INLINE (not as an
+            # attachment) so the preview iframe/img can render it, with relative assets.
+            after = path[len("/api/stints/"):]
+            sid, _, rel = after.partition("/raw/")
+            self._serve_raw(sid, rel)
         else:
             self._respond(404, "text/plain", "not found")
+
+    def _serve_raw(self, sid: str, rel: str):
+        from urllib.parse import unquote
+        stint = MANAGER.stints.get(sid)
+        if not stint:
+            self._respond(404, "text/plain", "no such stint"); return
+        p = _safe_path(stint.work, unquote(rel or ""))
+        if not p or not p.is_file():
+            self._respond(404, "text/plain", "not found"); return
+        ctype = _RAW_MIME.get(p.suffix.lower()) \
+            or mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        try:
+            data = p.read_bytes()
+        except OSError:
+            self._respond(404, "text/plain", "unreadable"); return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def _download(self, sid: str, q: dict):
         if (q.get("zip") or ["0"])[0] in ("1", "true"):
@@ -664,6 +731,10 @@ class IDEHandler(BaseHTTPRequestHandler):
             self._respond(200, "application/json", json.dumps({"ok": True}))
         elif path.startswith("/api/stints/") and path.endswith("/resume"):
             ok, err = MANAGER.resume(self._stint_id("/api/stints/"))
+            self._respond(200, "application/json",
+                          json.dumps({"ok": True} if ok else {"ok": False, "error": err}))
+        elif path.startswith("/api/stints/") and path.endswith("/delete"):
+            ok, err = MANAGER.delete(self._stint_id("/api/stints/"))
             self._respond(200, "application/json",
                           json.dumps({"ok": True} if ok else {"ok": False, "error": err}))
         else:

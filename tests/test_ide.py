@@ -117,6 +117,19 @@ class TestColdResume(unittest.TestCase):
         self.assertEqual(mgr2.stints[sid].status, "running")
         self.assertIn("--continue", popen.call_args[0][0])
 
+    def test_delete_removes_stint_and_dir(self):
+        mgr, stint = self._make()
+        sid, sdir = stint.sid, stint.sdir
+        self.assertTrue(sdir.exists())
+        ok, err = mgr.delete(sid)
+        self.assertTrue(ok, err)
+        self.assertNotIn(sid, mgr.stints)        # gone from the registry
+        self.assertFalse(sdir.exists())          # gone from disk
+        # a fresh manager does NOT rediscover it (unlike a closed/cold stint)
+        mgr2 = ide.StintManager(self.config)
+        mgr2.load_cold()
+        self.assertNotIn(sid, mgr2.stints)
+
     def test_prompt_on_cold_asks_to_resume(self):
         mgr, stint = self._make()
         mgr.close(stint.sid)

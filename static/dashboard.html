@@ -670,8 +670,10 @@ body::after {
 #nx-msg{color:#5d6b7e;margin-left:auto;font-size:12px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* --- tab switcher: station (field monitor) | workbench (code with the crew) --- */
 #nx-tabs{display:flex;gap:2px;margin-left:6px}
-#nx-tabs button{border-radius:0;padding:4px 14px;color:#8893a5;border-color:#2a3645}
-#nx-tabs button.on{background:#13361f;border-color:#1c7a3a;color:#9cf0b6}
+#nx-tabs button{border-radius:0;padding:4px 14px;color:#5a6470;border-color:#222a35;
+  background:#10141b;opacity:.7}   /* inactive tab = greyed */
+#nx-tabs button:hover{color:#9cf0b6;opacity:1}
+#nx-tabs button.on{background:#13361f;border-color:#1c7a3a;color:#9cf0b6;font-weight:bold;opacity:1}
 /* --- workbench tab: hide the station panels, show the IDE --- */
 body.wb .container > :not(#wb-panel){display:none}
 /* Full-viewport overlay below the fixed control bar: full width (not boxed into the
@@ -682,30 +684,59 @@ body.wb #wb-panel{display:flex;position:fixed;left:0;right:0;top:39px;bottom:0;z
 #wb-head{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid #1a3a1a;color:#ffb000}
 #wb-head .grow{flex:1}
 #wb-main{flex:1;display:flex;min-height:0}
+/* work column = panes (chat|code) over an optional bottom switcher; min-height:0 all the
+   way down so the code/chat boxes stay bounded to the window and scroll internally. */
+#wb-work{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+#wb-panes{flex:1;display:flex;min-width:0;min-height:0}
+/* chat | code | preview switcher, pinned under the work area */
+#wb-switch{display:flex;flex:0 0 auto;border-top:1px solid #1a3a1a;background:#0b0f0b}
+#wb-switch button{flex:1;border:0;border-right:1px solid #1a3a1a;border-radius:0;
+  padding:9px;color:#4f584f;background:#0a0d0a;opacity:.7}   /* inactive = greyed */
+#wb-switch button:last-child{border-right:0}
+#wb-switch button:hover{color:#9cf0b6;opacity:1}
+#wb-switch button.on{color:#9cf0b6;background:#13361f;font-weight:bold;opacity:1}
+/* preview pane: shows when body.wb-pv (code pane hidden); hidden under chat-only. */
+#wb-preview{display:none;flex:1;min-width:300px;flex-direction:column;min-height:0}
+body.wb-pv #wb-code{display:none}
+body.wb-pv:not(.wb-nocode) #wb-preview{display:flex}
+#wb-pvbar{display:flex;align-items:center;gap:8px;padding:5px 9px;border-bottom:1px solid #1a3a1a;
+  font-size:11px;color:#888}
+#wb-pvbar button{padding:3px 9px}
+#wb-pvbody{flex:1;min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center;
+  background:#0e0e0e}
+#wb-pvbody iframe{width:100%;height:100%;border:0;background:#fff}
+#wb-pvbody img{max-width:100%;max-height:100%;object-fit:contain}
+#wb-pvbody model-viewer{width:100%;height:100%;background:#111}
 #wb-side{width:215px;display:flex;flex-direction:column;border-right:1px solid #1a3a1a;min-height:0}
-#wb-pet{padding:4px 2px 0 2px;text-align:center;overflow:hidden}
+/* flex:0 0 auto → the pet keeps its natural height and never shrinks/clips its stats. */
+#wb-pet{flex:0 0 auto;padding:4px 4px 0;text-align:center}
 #wb-pet #creature-art{font-size:11px;line-height:1.15}
-/* The thought/tool bubbles are 320px on the station; the dock is ~215px, so clamp
-   them to the column instead of letting them overrun the stint rail. */
+#wb-pet .creature-info{font-size:11px;line-height:1.55;word-break:break-word}
+/* The thought/tool bubbles are 320px on the station; pin them to the dock width so the
+   dialog doesn't change width as text streams (was width:auto). */
 #wb-pet #creature-box{min-height:0}
-#wb-pet #thought-bubble,#wb-pet #tool-bubble{width:auto;max-width:100%;box-sizing:border-box}
+#wb-pet #thought-bubble,#wb-pet #tool-bubble{width:100%;box-sizing:border-box}
 #wb-pet #thought-bubble{height:auto;min-height:48px;max-height:140px}
 /* On the station the bubble fades overflow (fixed height, no creature jitter); in the
    dock let the full thought scroll instead of truncating — drop the fade mask + scroll. */
 #wb-pet #thought-bubble #thought-text{font-size:11px;line-height:1.35;overflow:hidden;
   -webkit-mask-image:none;mask-image:none}
-#wb-crew{margin:0;padding:2px 6px 6px;color:#00ff41;font-size:12px;border-bottom:1px solid #1a3a1a;
-  white-space:pre;overflow:hidden}
-#wb-stints{flex:1;overflow:auto;padding:6px}
-#wb-panel .stint{padding:6px;cursor:pointer;border:1px solid transparent;border-radius:4px;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#00ff41}
+#wb-crew{flex:0 0 auto;margin:0;padding:2px 6px 6px;color:#00ff41;font-size:12px;
+  border-bottom:1px solid #1a3a1a;white-space:pre;overflow:hidden}
+#wb-stints{flex:1 1 auto;min-height:70px;overflow:auto;padding:6px}
+#wb-panel .stint{display:flex;align-items:center;gap:4px;padding:6px;border:1px solid transparent;
+  border-radius:4px;color:#00ff41}
 #wb-panel .stint:hover{border-color:#1a3a1a}
 #wb-panel .stint.active{background:#1a3a1a;color:#ffb000}
-#wb-new{display:flex;gap:4px;padding:6px;border-top:1px solid #1a3a1a}
+#wb-panel .stint-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+#wb-panel .stint-del{flex:0 0 auto;opacity:0;color:#9b4a4a;cursor:pointer;padding:0 3px;font-size:12px}
+#wb-panel .stint:hover .stint-del{opacity:.8}
+#wb-panel .stint-del:hover{opacity:1;color:#ff6b6b}
+#wb-new{flex:0 0 auto;display:flex;gap:4px;padding:6px;border-top:1px solid #1a3a1a}
 #wb-new input{flex:1;min-width:0;background:#000;color:#00ff41;border:1px solid #1a3a1a;
   padding:4px;font:12px 'Courier New',monospace}
-#wb-chat{flex:1.7;display:flex;flex-direction:column;min-width:0;border-right:1px solid #1a3a1a}
-#wb-log{flex:1;overflow:auto;padding:14px 16px;white-space:pre-wrap;line-height:1.5;font-size:13px}
+#wb-chat{flex:1.7;display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid #1a3a1a}
+#wb-log{flex:1;min-height:0;overflow:auto;padding:14px 16px;white-space:pre-wrap;line-height:1.5;font-size:13px}
 #wb-log .msg-user{color:#33bbff;margin:8px 0}
 #wb-log .msg-pi{color:#00ff41;margin:8px 0}
 #wb-log .tool{color:#ffb000;margin:4px 0 4px 8px;font-size:12px}
@@ -716,7 +747,7 @@ body.wb #wb-panel{display:flex;position:fixed;left:0;right:0;top:39px;bottom:0;z
   font:13px/1.5 'Courier New',monospace;resize:vertical}
 #wb-inp:focus{border-color:#1c7a3a;outline:none}
 #wb-composer #wb-send{align-self:stretch;padding:0 18px}
-#wb-code{flex:1;min-width:300px;display:flex;flex-direction:column}
+#wb-code{flex:1;min-width:300px;display:flex;flex-direction:column;min-height:0}
 #wb-tree{height:36%;overflow:auto;padding:6px;border-bottom:1px solid #1a3a1a;font-size:12px}
 #wb-tree .row{padding:1px 4px;cursor:pointer;white-space:nowrap}
 #wb-tree .row:hover{background:#1a3a1a}
@@ -724,7 +755,14 @@ body.wb #wb-panel{display:flex;position:fixed;left:0;right:0;top:39px;bottom:0;z
 #wb-tabs{display:flex;flex-wrap:wrap;gap:2px;padding:4px;border-bottom:1px solid #1a3a1a;min-height:26px}
 #wb-tabs .tab{padding:2px 8px;cursor:pointer;border:1px solid #1a3a1a;font-size:11px;color:#888}
 #wb-tabs .tab.active{color:#ffb000;border-color:#ffb000}
-#wb-viewer{flex:1;overflow:auto;padding:8px;white-space:pre;font-size:12px;tab-size:4;margin:0;color:#00ff41}
+#wb-viewer{flex:1;min-height:0;overflow:auto;padding:8px;white-space:pre;font-size:12px;tab-size:4;margin:0;color:#00ff41}
+/* Empty states: no broken-looking bordered boxes before a stint/file is loaded. */
+#wb-tabs:empty{display:none}
+#wb-tree:empty{border-bottom:0}
+#wb-tree:empty::before{content:"— pick a stint to browse its files —";
+  display:block;padding:10px 8px;color:#4f6b4f;font-size:11px;font-style:italic;white-space:normal}
+#wb-viewer:empty::before{content:"no file open — click one in the tree, or watch the crew open what it writes";
+  display:block;color:#4f6b4f;font-size:11px;font-style:italic;white-space:normal;max-width:280px}
 #wb-panel button{background:#1a3a1a;color:#00ff41;border:1px solid #00ff41;padding:4px 10px;
   cursor:pointer;font:12px 'Courier New',monospace}
 #wb-panel button:hover{background:#00ff41;color:#000}
@@ -735,9 +773,9 @@ body.wb-nocode #wb-code{display:none}
 /* Half-screen / narrow: three columns don't fit. Default to one working pane (chat),
    wide; the header "code" button swaps the code pane in (it then takes the pane). */
 @media (max-width:1080px){
-  body.wb #wb-side{width:174px}
-  body.wb #wb-chat,body.wb #wb-code{flex:1 1 100%;min-width:0}
-  body.wb:not(.wb-nocode) #wb-chat{display:none}
+  body.wb #wb-side{width:210px}   /* wider rail (thinner chat/code) so buddy stats don't clip */
+  body.wb #wb-chat,body.wb #wb-code,body.wb #wb-preview{flex:1 1 100%;min-width:0}
+  body.wb:not(.wb-nocode) #wb-chat{display:none}   /* one pane at a time on half-screen */
 }
 </style>
 <div id="nexus-control">
@@ -831,7 +869,6 @@ function toggleVoice(){
         <div id="wb-head">
             <b>workbench</b><span id="wb-curname" style="color:#888"></span>
             <span class="grow"></span>
-            <button id="wb-codetog" onclick="wbCode()" title="Show/hide the code pane">⟨⟩ code</button>
             <button id="wb-dl" onclick="wbDl()" disabled>download .zip</button>
         </div>
         <div id="wb-main">
@@ -844,17 +881,35 @@ function toggleVoice(){
                     <button onclick="wbNewStint()">+</button>
                 </div>
             </div>
-            <div id="wb-chat">
-                <div id="wb-log"><div class="sys">pick or create a stint — the crew does the typing.</div></div>
-                <div id="wb-composer">
-                    <textarea id="wb-inp" rows="3" placeholder="describe what to build… (Enter to send · Shift+Enter for newline)"></textarea>
-                    <button id="wb-send" onclick="wbSend()" disabled>send</button>
+            <div id="wb-work">
+                <div id="wb-panes">
+                    <div id="wb-chat">
+                        <div id="wb-log"><div class="sys">pick or create a stint — the crew does the typing.</div></div>
+                        <div id="wb-composer">
+                            <textarea id="wb-inp" rows="3" placeholder="describe what to build… (Enter to send · Shift+Enter for newline)"></textarea>
+                            <button id="wb-send" onclick="wbSend()" disabled>send</button>
+                        </div>
+                    </div>
+                    <div id="wb-code">
+                        <div id="wb-tree"></div>
+                        <div id="wb-tabs"></div>
+                        <pre id="wb-viewer"></pre>
+                    </div>
+                    <div id="wb-preview">
+                        <div id="wb-pvbar">
+                            <span id="wb-pvwhat"></span><span class="grow" style="flex:1"></span>
+                            <button onclick="wbPvRefresh()" title="Refresh preview">↻</button>
+                            <button onclick="wbPvOpen()" title="Open in a new tab">open ↗</button>
+                        </div>
+                        <div id="wb-pvbody"></div>
+                    </div>
                 </div>
-            </div>
-            <div id="wb-code">
-                <div id="wb-tree"></div>
-                <div id="wb-tabs"></div>
-                <pre id="wb-viewer"></pre>
+                <!-- chat | code | preview switch, pinned under the work area -->
+                <div id="wb-switch">
+                    <button id="sw-chat" onclick="wbShow('chat')">chat</button>
+                    <button id="sw-code" onclick="wbShow('code')">code</button>
+                    <button id="sw-pv" onclick="wbShow('preview')">preview</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1205,9 +1260,35 @@ function updatePauseState(paused) {
 }
 
 var _hasGoal = false;
+var _persona = {};        // latest persona (for the workbench standby line)
+var _lastActivitySnap = null;
 
 // Last real snippet from LLM output (populated by loadThoughts)
 var _lastSnippet = '';
+
+// On the workbench the buddy isn't doing house-work — it's standing by to help code.
+// Compose a line in its own voice from persona (stage/traits/titles/level) + history
+// (current goal). Rotates every ~26s so it feels alive without flickering each poll.
+function wbStandbyLine() {
+    var p = _persona || {};
+    var traits = p.traits || [], titles = p.titles || [];
+    var rot = Math.floor(Date.now() / 26000);
+    var title = titles.length ? String(titles[rot % titles.length]).replace(/^[⚡\s]+/, '') : '';
+    var lines = [
+        'Standing by — hand me something to build.',
+        'House is parked. I’m yours: what are we making?',
+        'Ready to jump in. Spin up a stint and point me at it.'
+    ];
+    if (traits.indexOf('curious') >= 0) lines.push('Curious what we’re building today. Ready when you are.');
+    if (traits.indexOf('veteran') >= 0 || traits.indexOf('resilient') >= 0)
+        lines.push('Done this a thousand times. Give me the problem.');
+    if (title) lines.push(title + ' on the bench — what’s the task?');
+    if (p.level) lines.push('Lv.' + p.level + ' and itching to help. What are we coding?');
+    if (_hasGoal) lines.push('The house can wait. Let’s build something.');
+    return lines[rot % lines.length];
+}
+// Re-render the thought bubble immediately (e.g. the instant you switch to the workbench).
+window.refreshThought = function () { try { updateThoughtBubble(_lastActivitySnap); } catch (e) {} };
 
 // Blue tool bubble below the creature — purely the tool-call feed, independent of thoughts.
 function updateToolBubble(activity) {
@@ -1256,6 +1337,19 @@ function updateThoughtBubble(activity) {
     let textEl = document.getElementById('thought-text');
     let elapsedEl = document.getElementById('thought-elapsed');
     if (!bubble || !textEl) return;
+    _lastActivitySnap = activity || _lastActivitySnap;
+
+    // Workbench: the buddy is standing by to help, not running the house. Override the
+    // bubble with a persona-voiced "ready to jump in" line (the listening hold is engaged).
+    if (document.body.classList.contains('wb')) {
+        bubble.className = ''; bubble.classList.add('state-listening');
+        let gE = document.getElementById('thought-glyph'), sE = document.getElementById('thought-state');
+        if (gE) { gE.textContent = '⚒'; gE.className = 'tb-pulse'; gE.style.color = '#9cf0b6'; }
+        if (sE) sE.textContent = 'ready to help';
+        textEl.textContent = wbStandbyLine();
+        if (elapsedEl) elapsedEl.textContent = '';
+        return;
+    }
 
     let state = (activity && activity.state) || 'sleeping';
     let detail = (activity && activity.detail) || '';
@@ -1531,6 +1625,7 @@ function legacyCreature(cr) {
 
 function update(data) {
     let p = data.persona || {};
+    _persona = p;
     let hb = data.heartbeat || {};
     let cr = data.creature || {};
 
