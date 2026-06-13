@@ -61,6 +61,26 @@ def _alive(pid: int) -> bool:
         return False if isinstance(sys.exc_info()[1], ProcessLookupError) else True
 
 
+def _eidos_pids() -> list:
+    """Every live eidos.py PID — by command line, not just eidos.pid. The watchdog
+    can leave stale/duplicate instances that a single-pid kill misses; those keep
+    ticking and rewrite persona.json/creature.json right after we clear them.
+    The '\\eidos.py' match (backslash before the name) excludes reset_eidos.py itself."""
+    if os.name == "nt":
+        # Single-quoted only — escaping double quotes through -Command silently
+        # breaks the query (returns nothing → the kill misses every instance).
+        # Name test lives in Where-Object so we never match the powershell host.
+        ps = (r"Get-CimInstance Win32_Process "
+              r"| Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*\eidos.py*' } "
+              r"| Select-Object -ExpandProperty ProcessId")
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                             capture_output=True, text=True)
+    else:
+        out = subprocess.run(["pgrep", "-f", r"/eidos\.py"],
+                             capture_output=True, text=True)
+    return [int(x) for x in (out.stdout or "").split() if x.strip().isdigit()]
+
+
 def stop_eidos(config) -> None:
     """Disarm the watchdog, reap background jobs, then kill the eidos process tree."""
     ws = config.workspace
@@ -77,19 +97,32 @@ def stop_eidos(config) -> None:
         print(f"  reaped {n} background job(s)")
     except Exception as e:  # noqa: BLE001
         print(f"  (reap skipped: {e})")
-    # 3. kill the eidos process tree
-    try:
-        pid = int((ws / "eidos.pid").read_text().strip())
-    except (OSError, ValueError):
-        pid = 0
-    if pid and _alive(pid):
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
-        else:
-            subprocess.run(["kill", "-9", str(pid)], capture_output=True)
-        print(f"  killed eidos pid {pid}")
+    # 3. kill EVERY eidos.py process (not just eidos.pid). Loop until none remain
+    #    or we time out — a writer surviving the clear is what corrupts a wipe.
+    killed = []
+    deadline = time.time() + 12
+    while True:
+        pids = _eidos_pids()
+        if not pids:
+            break
+        for pid in pids:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+            else:
+                subprocess.run(["kill", "-9", str(pid)], capture_output=True)
+            killed.append(pid)
+        time.sleep(0.5)
+        if time.time() > deadline:
+            break
+    leftover = _eidos_pids()
+    if killed:
+        print(f"  killed eidos pid(s): {sorted(set(killed))}")
     else:
         print("  eidos was not running")
+    if leftover:
+        # Refuse to clear the workspace while a live eidos can rewrite it.
+        raise SystemExit(f"ABORT: eidos still alive after kill: {leftover}. "
+                         f"Workspace NOT cleared. Kill them manually and retry.")
     # let handles release before we touch the workspace
     time.sleep(1.5)
 
