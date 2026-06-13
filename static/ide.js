@@ -21,7 +21,7 @@
     let tabs = [], active = null;
     let stints = [];                  // last /api/stints payload (rail + crew truth)
     let railTimer = null, crewTimer = null;
-    let petHome = null;               // where creature-box lives on the station tab
+    let petHome = null, crewHome = null;   // where creature-box / crew live on the station tab
 
     // Stand-by: while you're working the bench (or the crew is mid-turn), eiDOS holds
     // its autonomous house loop and attends — the SAME "listening hold" the chat box uses
@@ -50,14 +50,21 @@
         if (st) st.classList.toggle('on', !on);
         if (wb) wb.classList.toggle('on', on);
         localStorage.setItem('eidosTab', on ? 'wb' : 'st');
-        const box = $('creature-box');
+        const box = $('creature-box'), crew = $('wb-crew');
         if (box) {
             if (on) {
                 petHome = petHome || box.parentElement;
+                crewHome = crewHome || (crew && crew.parentElement);
                 const dock = $('wb-pet');
                 if (dock) dock.appendChild(box);
-            } else if (petHome) {
-                petHome.appendChild(box);
+                // crew sits directly under the ASCII buddy (not below the stats/titles)
+                const art = document.getElementById('creature-art');
+                if (art && crew) art.insertAdjacentElement('afterend', crew);
+            } else {
+                // pull the crew out of creature-box BEFORE it returns to the station,
+                // else it would ride along and show on the station tab.
+                if (crew && crewHome) crewHome.insertBefore(crew, $('wb-stints'));
+                if (petHome) petHome.appendChild(box);
             }
         }
         if (on) {

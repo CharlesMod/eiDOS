@@ -491,3 +491,8 @@ const Creature = (() => {
         stop() { if (masterTimer) { clearInterval(masterTimer); masterTimer = null; } },
     };
 })();
+
+// A top-level `const` is NOT a property of window, so `window.Creature` was undefined and
+// dashboard.html's `if (window.Creature)` guards silently fell back to the legacy ascii_art
+// sprite — the genome compositor never rendered in the browser. Expose it explicitly.
+window.Creature = Creature;

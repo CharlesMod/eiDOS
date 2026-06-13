@@ -657,21 +657,21 @@ body::after {
 <body>
 <div id="particles"></div>
 <style>
-#nexus-control{position:fixed;top:0;left:0;right:0;z-index:99999;background:#0b0e14;
-  border-bottom:1px solid #1d2530;padding:7px 14px;display:flex;align-items:center;gap:10px;
-  font-family:Consolas,'SFMono-Regular',monospace;font-size:13px;color:#cdd6e4;}
-#nexus-control b{color:#7da3c9;letter-spacing:1px}
-#nexus-control button{cursor:pointer;border:1px solid #2a3645;background:#161c26;color:#cdd6e4;
-  padding:4px 12px;border-radius:6px;font:inherit}
+#nexus-control{position:fixed;top:0;left:0;right:0;z-index:99999;background:#0a0d0a;
+  border-bottom:1px solid #1a3a1a;padding:7px 14px;display:flex;align-items:center;gap:10px;
+  font-family:'Courier New',monospace;font-size:13px;color:#8aa88a;}
+#nexus-control b{color:#00ff41;letter-spacing:2px}
+#nexus-control button{cursor:pointer;border:1px solid #1a3a1a;background:#101510;color:#9ab89a;
+  padding:4px 12px;border-radius:4px;font:inherit}
 #nexus-control button:disabled{opacity:.35;cursor:not-allowed}
 #nx-go{background:#13361f;border-color:#1c7a3a;color:#9cf0b6}
-#nx-stop{background:#3a1414;border-color:#7a1c1c;color:#ff9b9b}
-#nx-state{padding:2px 12px;border-radius:11px;background:#1a1f29;color:#8893a5;font-weight:bold}
-#nx-msg{color:#5d6b7e;margin-left:auto;font-size:12px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#nx-stop{background:#2a1212;border-color:#7a1c1c;color:#ff9b9b}
+#nx-state{padding:2px 12px;border-radius:4px;background:#101510;color:#7CFC9B;font-weight:bold}
+#nx-msg{color:#5f7a5f;margin-left:auto;font-size:12px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* --- tab switcher: station (field monitor) | workbench (code with the crew) --- */
 #nx-tabs{display:flex;gap:2px;margin-left:6px}
-#nx-tabs button{border-radius:0;padding:4px 14px;color:#5a6470;border-color:#222a35;
-  background:#10141b;opacity:.7}   /* inactive tab = greyed */
+#nx-tabs button{border-radius:4px;padding:4px 14px;color:#5a6a5a;border-color:#1a3a1a;
+  background:#0d110d;opacity:.7}   /* inactive tab = greyed */
 #nx-tabs button:hover{color:#9cf0b6;opacity:1}
 #nx-tabs button.on{background:#13361f;border-color:#1c7a3a;color:#9cf0b6;font-weight:bold;opacity:1}
 /* --- workbench tab: hide the station panels, show the IDE --- */
@@ -689,9 +689,10 @@ body.wb #wb-panel{display:flex;position:fixed;left:0;right:0;top:39px;bottom:0;z
 #wb-work{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
 #wb-panes{flex:1;display:flex;min-width:0;min-height:0}
 /* chat | code | preview switcher, pinned under the work area */
-#wb-switch{display:flex;flex:0 0 auto;border-top:1px solid #1a3a1a;background:#0b0f0b}
+#wb-switch{display:flex;flex:0 0 auto;height:40px;box-sizing:border-box;
+  border-top:1px solid #1a3a1a;background:#0b0f0b}
 #wb-switch button{flex:1;border:0;border-right:1px solid #1a3a1a;border-radius:0;
-  padding:9px;color:#4f584f;background:#0a0d0a;opacity:.7}   /* inactive = greyed */
+  padding:0 9px;color:#4f584f;background:#0a0d0a;opacity:.7}   /* inactive = greyed */
 #wb-switch button:last-child{border-right:0}
 #wb-switch button:hover{color:#9cf0b6;opacity:1}
 #wb-switch button.on{color:#9cf0b6;background:#13361f;font-weight:bold;opacity:1}
@@ -709,7 +710,7 @@ body.wb-pv:not(.wb-nocode) #wb-preview{display:flex}
 #wb-pvbody model-viewer{width:100%;height:100%;background:#111}
 #wb-side{width:215px;display:flex;flex-direction:column;border-right:1px solid #1a3a1a;min-height:0}
 /* flex:0 0 auto → the pet keeps its natural height and never shrinks/clips its stats. */
-#wb-pet{flex:0 0 auto;padding:4px 4px 0;text-align:center}
+#wb-pet{flex:0 0 auto;padding:6px 10px 0;text-align:center}
 #wb-pet #creature-art{font-size:11px;line-height:1.15}
 #wb-pet .creature-info{font-size:11px;line-height:1.55;word-break:break-word}
 /* The thought/tool bubbles are 320px on the station; pin them to the dock width so the
@@ -732,7 +733,9 @@ body.wb-pv:not(.wb-nocode) #wb-preview{display:flex}
 #wb-panel .stint-del{flex:0 0 auto;opacity:0;color:#9b4a4a;cursor:pointer;padding:0 3px;font-size:12px}
 #wb-panel .stint:hover .stint-del{opacity:.8}
 #wb-panel .stint-del:hover{opacity:1;color:#ff6b6b}
-#wb-new{flex:0 0 auto;display:flex;gap:4px;padding:6px;border-top:1px solid #1a3a1a}
+/* new-stint bar: same height as the chat|code|preview switch row so the bottoms align */
+#wb-new{flex:0 0 auto;display:flex;align-items:center;gap:4px;height:40px;padding:0 6px;
+  box-sizing:border-box;border-top:1px solid #1a3a1a}
 #wb-new input{flex:1;min-width:0;background:#000;color:#00ff41;border:1px solid #1a3a1a;
   padding:4px;font:12px 'Courier New',monospace}
 #wb-chat{flex:1.7;display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid #1a3a1a}
@@ -773,7 +776,7 @@ body.wb-nocode #wb-code{display:none}
 /* Half-screen / narrow: three columns don't fit. Default to one working pane (chat),
    wide; the header "code" button swaps the code pane in (it then takes the pane). */
 @media (max-width:1080px){
-  body.wb #wb-side{width:210px}   /* wider rail (thinner chat/code) so buddy stats don't clip */
+  body.wb #wb-side{width:240px}   /* wider rail (thinner chat/code) so the buddy isn't claustrophobic */
   body.wb #wb-chat,body.wb #wb-code,body.wb #wb-preview{flex:1 1 100%;min-width:0}
   body.wb:not(.wb-nocode) #wb-chat{display:none}   /* one pane at a time on half-screen */
 }
