@@ -72,6 +72,12 @@ def main():
     if args.llm_url:
         config.llm_url = args.llm_url
 
+    # eidos runs as LocalSystem (child of the EidosDashboard service, which doesn't export
+    # PI_CODING_AGENT_DIR). delegate.py already sets it per-spawn, but make it process-wide so
+    # ANY pi eidos ever spawns resolves cmod's config (the `house` provider + subagents
+    # extension). setdefault: a real service-env value, if ever added, still wins.
+    os.environ.setdefault("PI_CODING_AGENT_DIR", r"C:\Users\cmod\.pi\agent")
+
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
