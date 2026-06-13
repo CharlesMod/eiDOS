@@ -62,7 +62,7 @@
         }
         if (on) {
             listStints();
-            if (!railTimer) railTimer = setInterval(listStints, 5000);
+            if (!railTimer) railTimer = setInterval(listStints, 2500);
             if (!crewTimer) crewTimer = setInterval(crewRender, 250);
             standByTouch();                       // arriving = present
         } else {
@@ -76,27 +76,54 @@
 
     /* ---------------- crew bench (one mini per stint) ---------------- */
 
+    // The crew = the subagents the CURRENT stint's main agent spawned (its mini-buddies).
+    // They're assigned to that task and stay with it; viewing a different stint shows that
+    // stint's crew. Glyph reflects each subagent's real status. Spinner animates here (250ms);
+    // membership refreshes from /api/stints (listStints) on subagent events.
+    const SPIN = ['|', '/', '-', '\\'];
     function crewRender() {
         const pre = $('wb-crew');
         if (!pre) return;
         const sp = (window.Creature && Creature.miniSprite) ? Creature.miniSprite() : '(o)';
         const t = Date.now();
-        let line = '', tip = [];
-        for (const s of stints) {
-            let g;
-            if (s.status === 'running' && s.turn_active) g = ['#', '|', '/', '-', '\\'][Math.floor(t / 300) % 5];
-            else if (s.status === 'running') g = '·';
-            else g = 'z';
-            line += (s.id === cur ? ' ▸' : '  ') + sp + g;
-            tip.push(s.title + ': ' + (s.turn_active ? 'working' : s.status));
+        const s = stints.find(x => x.id === cur);
+        const subs = (s && s.subagents) || [];
+        if (subs.length) {
+            let line = '', tip = [];
+            for (const a of subs) {
+                const g = a.status === 'done' ? '✓' : a.status === 'error' ? '✗'
+                    : SPIN[Math.floor(t / 200) % 4];
+                line += '  ' + sp + g;
+                tip.push(a.desc + ' — ' + a.status);
+            }
+            pre.textContent = line;
+            pre.title = tip.join(' · ');
+        } else if (s && s.turn_active) {
+            pre.textContent = '  ' + sp + SPIN[Math.floor(t / 200) % 4] + ' solo';
+            pre.title = s.title + ' — main agent working (no subagents spawned)';
+        } else {
+            pre.textContent = '  no crew yet';
+            pre.title = s ? s.title + ' — idle' : 'pick a stint';
         }
-        pre.textContent = line || '  (bench empty)';
-        pre.title = tip.join(' · ');
-        const busy = stints.some(s => s.turn_active);
+        // tab badge reflects ANY active agent across stints (visible from the station tab)
+        const busy = stints.some(x => x.turn_active ||
+            (x.subagents || []).some(a => a.status !== 'done'));
         const wb = $('tab-wb');
         if (wb) wb.textContent = busy ? 'workbench ⚒' : 'workbench';
-        if (busy) standByTouch();   // crew mid-turn → buddy stays present even if you're idle
+        if (busy) standByTouch();   // work in flight → buddy stays present even if you're idle
     }
+
+    // Big buddy "looks at whatever you're looking at": the focus line for the thought bubble.
+    window.wbFocus = function () {
+        if (!wbOn()) return null;
+        const s = stints.find(x => x.id === cur);
+        if (!s) return null;
+        const running = (s.subagents || []).filter(a => a.status !== 'done').length;
+        if (running > 0) return 'watching “' + s.title + '” — ' + running +
+            ' subagent' + (running > 1 ? 's' : '') + ' on it';
+        if (s.turn_active) return 'watching “' + s.title + '” — the agent is working';
+        return null;   // idle task → fall back to the persona standby line
+    };
 
     /* ---------------- stints rail ---------------- */
 
@@ -217,6 +244,9 @@
                 if (curView() === 'preview') loadPreview();   // live-refresh the preview as files land
                 pendWrite = null;
             }
+            listStints();                          // subagent spawn/done may have changed the crew
+        } else if (t === 'extension_ui_request') {
+            listStints();                          // running-agent count changed
         } else if (t === 'agent_end') {
             turnActive = false; $('wb-send').disabled = false; curText = null;
             listStints();

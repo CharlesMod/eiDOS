@@ -25,6 +25,7 @@ import logging
 import mimetypes
 import os
 import queue as _queue
+import re
 import shutil
 import subprocess
 import threading
@@ -121,6 +122,46 @@ class Stint:
         self.created = time.time()
         self.last_activity = time.time()
         self.status = "running"
+        # Subagents this stint's MAIN agent spawned (pi-subagents extension). The main
+        # agent is the "big buddy"; these are its mini-buddies. Keyed by Agent ID, in
+        # spawn order. _pending links a spawn's tool_execution_start → _end (which
+        # carries the Agent ID). running_agents = the extension's live "N running" count.
+        self.subagents: dict = {}
+        self._pending: dict = {}
+        self.running_agents = 0
+
+    def track_subagents(self, ev: dict) -> None:
+        """Derive live subagent state from the pi event stream (see vocab probe):
+        spawn = Agent tool start/end; done = get_subagent_result(agent_id); live count =
+        extension_ui_request statusKey 'subagents'."""
+        t = ev.get("type")
+        if t == "tool_execution_start" and ev.get("toolName") == "Agent":
+            a = ev.get("args") or {}
+            self._pending[ev.get("toolCallId")] = {
+                "desc": a.get("description") or a.get("subagent_type") or "subagent",
+                "type": a.get("subagent_type") or "general-purpose"}
+        elif t == "tool_execution_end" and ev.get("toolName") == "Agent":
+            pend = self._pending.pop(ev.get("toolCallId"), {"desc": "subagent", "type": "general-purpose"})
+            txt = ""
+            for c in ((ev.get("result") or {}).get("content") or []):
+                txt += c.get("text", "")
+            m = re.search(r"Agent ID:\s*([A-Za-z0-9-]+)", txt)
+            aid = m.group(1) if m else f"a{len(self.subagents)}"
+            self.subagents[aid] = {"id": aid, "desc": pend["desc"], "type": pend["type"],
+                                   "status": "running"}
+        elif t in ("tool_execution_start", "tool_execution_end") \
+                and ev.get("toolName") == "get_subagent_result":
+            aid = (ev.get("args") or {}).get("agent_id")
+            if aid and aid in self.subagents:
+                self.subagents[aid]["status"] = "done"
+        elif t == "extension_ui_request" and ev.get("statusKey") == "subagents":
+            txt = ev.get("statusText") or ""
+            m = re.search(r"(\d+)\s+running", txt)
+            self.running_agents = int(m.group(1)) if m else 0
+            if self.running_agents == 0:        # all settled → close out any stragglers
+                for s in self.subagents.values():
+                    if s["status"] == "running":
+                        s["status"] = "done"
 
     def publish(self, event: dict) -> None:
         self.last_activity = time.time()
@@ -154,7 +195,9 @@ class Stint:
     def meta(self) -> dict:
         return {"id": self.sid, "title": self.title, "status": self.status,
                 "cwd": str(self.work), "created": self.created,
-                "turn_active": self.turn_active}
+                "turn_active": self.turn_active,
+                "subagents": list(self.subagents.values()),
+                "running_agents": self.running_agents}
 
 
 class StintManager:
@@ -307,6 +350,10 @@ class StintManager:
                     ev = {"type": "raw", "line": line[:2000]}
                 if ev.get("type") == "agent_end":
                     stint.turn_active = False
+                try:
+                    stint.track_subagents(ev)
+                except Exception:  # noqa: BLE001 — tracking must never break the stream
+                    logger.exception("subagent tracking failed")
                 stint.publish(ev)
         except (OSError, ValueError):
             pass

@@ -1344,9 +1344,10 @@ function updateThoughtBubble(activity) {
     if (document.body.classList.contains('wb')) {
         bubble.className = ''; bubble.classList.add('state-listening');
         let gE = document.getElementById('thought-glyph'), sE = document.getElementById('thought-state');
-        if (gE) { gE.textContent = '⚒'; gE.className = 'tb-pulse'; gE.style.color = '#9cf0b6'; }
-        if (sE) sE.textContent = 'ready to help';
-        textEl.textContent = wbStandbyLine();
+        const focus = window.wbFocus && window.wbFocus();   // watching the task you're viewing?
+        if (gE) { gE.textContent = focus ? '◉' : '⚒'; gE.className = 'tb-pulse'; gE.style.color = '#9cf0b6'; }
+        if (sE) sE.textContent = focus ? 'watching' : 'ready to help';
+        textEl.textContent = focus || wbStandbyLine();
         if (elapsedEl) elapsedEl.textContent = '';
         return;
     }

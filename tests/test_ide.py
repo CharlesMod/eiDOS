@@ -146,6 +146,46 @@ class TestColdResume(unittest.TestCase):
         self.assertEqual(mgr._pidfile().read_text(), "[]")
 
 
+class TestSubagentTracking(unittest.TestCase):
+    """The main agent's spawned subagents (pi-subagents) drive the mini-buddies."""
+
+    def _stint(self):
+        d = Path(tempfile.mkdtemp())
+        return ide.Stint("s1", "t", d, d / "work", MagicMock())
+
+    def _spawn(self, st, call_id, desc, aid):
+        st.track_subagents({"type": "tool_execution_start", "toolName": "Agent",
+                            "toolCallId": call_id, "args": {"description": desc,
+                            "subagent_type": "general-purpose", "run_in_background": True}})
+        st.track_subagents({"type": "tool_execution_end", "toolName": "Agent",
+                            "toolCallId": call_id,
+                            "result": {"content": [{"type": "text",
+                            "text": f"Agent started in background.\nAgent ID: {aid}\n"}]}})
+
+    def test_spawn_then_count_then_done(self):
+        st = self._stint()
+        self._spawn(st, "c1", "Create greet.py", "579acb10-9e1e-478")
+        self._spawn(st, "c2", "Create notes.md", "aa5249dd-6717-4df")
+        m = st.meta()
+        self.assertEqual(len(m["subagents"]), 2)
+        self.assertEqual({s["status"] for s in m["subagents"]}, {"running"})
+        self.assertEqual(m["subagents"][0]["desc"], "Create greet.py")
+        # live count feed
+        st.track_subagents({"type": "extension_ui_request", "statusKey": "subagents",
+                            "statusText": "2 running agents"})
+        self.assertEqual(st.meta()["running_agents"], 2)
+        # one retrieved → done
+        st.track_subagents({"type": "tool_execution_start", "toolName": "get_subagent_result",
+                            "args": {"agent_id": "579acb10-9e1e-478"}})
+        byid = {s["id"]: s for s in st.meta()["subagents"]}
+        self.assertEqual(byid["579acb10-9e1e-478"]["status"], "done")
+        self.assertEqual(byid["aa5249dd-6717-4df"]["status"], "running")
+        # count drops to 0 → stragglers close out
+        st.track_subagents({"type": "extension_ui_request", "statusKey": "subagents"})
+        self.assertEqual(st.meta()["running_agents"], 0)
+        self.assertTrue(all(s["status"] == "done" for s in st.meta()["subagents"]))
+
+
 class TestCodeSurfaces(unittest.TestCase):
 
     def setUp(self):
