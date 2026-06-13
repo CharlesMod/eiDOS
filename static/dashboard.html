@@ -34,11 +34,14 @@ body::after {
     grid-template-columns: 1fr 1fr;
     gap: 16px;
     padding: 16px;
-    max-width: 1200px;
-    margin: 0 auto;
+    /* fill the screen like the workbench (was capped at 1200px centered) */
+    max-width: none;
 }
 @media (max-width: 700px) {
     .container { grid-template-columns: 1fr; }
+}
+@media (min-width: 1600px) {
+    .container { grid-template-columns: 1fr 1fr 1fr; }   /* denser on wide monitors */
 }
 .panel {
     border: 1px solid #1a3a1a;
