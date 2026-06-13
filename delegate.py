@@ -68,6 +68,15 @@ def _under(child: str, parent: str) -> bool:
 # fails (no user PATH), so fall back to the absolute launcher.
 _PI_FALLBACK = r"C:\Users\cmod\AppData\Local\pi-node\current\pi.cmd"
 
+# eidos runs as LocalSystem (child of the EidosDashboard service, which — unlike the IDE
+# service — does NOT export PI_CODING_AGENT_DIR). Without this, a delegated pi can't find
+# cmod's `house` provider extension OR the @tintinweb/pi-subagents Agent tool, so it fails
+# to reach the model / can't fan out subagents. Point pi at cmod's config + home explicitly.
+_PI_ENV = {
+    "PI_CODING_AGENT_DIR": r"C:\Users\cmod\.pi\agent",
+    "USERPROFILE": r"C:\Users\cmod", "HOMEDRIVE": "C:", "HOMEPATH": r"\Users\cmod",
+}
+
 
 def _resolve_pi(config: Config) -> str:
     """Path to the pi launcher, or '' if unresolvable."""
@@ -235,7 +244,7 @@ def tool_delegate(args: dict, config: Config) -> ToolResult:
                 stdout=out_file,
                 stderr=subprocess.STDOUT,
                 cwd=str(cwd),
-                env={**os.environ, "PYTHONUTF8": "1"},
+                env={**os.environ, "PYTHONUTF8": "1", **_PI_ENV},
                 **popen_kwargs,
             )
         finally:
