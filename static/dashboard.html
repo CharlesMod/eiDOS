@@ -551,10 +551,10 @@ body::after {
 #thought-bubble #thought-state { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #thought-bubble .thought-elapsed { color: #4f6b4f; font-size: 10px; flex-shrink: 0; }
 #thought-bubble #thought-text {
+    /* Fixed-height bubble (creature never shifts); ide.js auto-scrolls the overflow
+       — 1s pause top → scroll → 1s pause bottom → repeat — instead of fading/clipping. */
     flex: 1; overflow: hidden; word-break: break-word;
     font-size: 12px; line-height: 1.45; color: #d4ecd4;
-    -webkit-mask-image: linear-gradient(180deg,#000 72%,transparent 100%);
-            mask-image: linear-gradient(180deg,#000 72%,transparent 100%);
 }
 @keyframes tb-spin { to { transform: rotate(360deg); } }
 @keyframes tb-pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
@@ -668,9 +668,69 @@ body::after {
 #nx-stop{background:#3a1414;border-color:#7a1c1c;color:#ff9b9b}
 #nx-state{padding:2px 12px;border-radius:11px;background:#1a1f29;color:#8893a5;font-weight:bold}
 #nx-msg{color:#5d6b7e;margin-left:auto;font-size:12px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* --- tab switcher: station (field monitor) | workbench (code with the crew) --- */
+#nx-tabs{display:flex;gap:2px;margin-left:6px}
+#nx-tabs button{border-radius:0;padding:4px 14px;color:#8893a5;border-color:#2a3645}
+#nx-tabs button.on{background:#13361f;border-color:#1c7a3a;color:#9cf0b6}
+/* --- workbench tab: hide the station panels, show the IDE --- */
+body.wb .container > :not(#wb-panel){display:none}
+#wb-panel{display:none;grid-column:1 / -1;border:1px solid #1a3a1a;background:#0d0d0d;
+  height:calc(100vh - 90px);min-height:480px;flex-direction:column;padding:0}
+body.wb #wb-panel{display:flex}
+#wb-head{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid #1a3a1a;color:#ffb000}
+#wb-head .grow{flex:1}
+#wb-main{flex:1;display:flex;min-height:0}
+#wb-side{width:215px;display:flex;flex-direction:column;border-right:1px solid #1a3a1a;min-height:0}
+#wb-pet{padding:4px 2px 0 2px;text-align:center;overflow:hidden}
+#wb-pet #creature-art{font-size:11px;line-height:1.15}
+/* The thought/tool bubbles are 320px on the station; the dock is ~215px, so clamp
+   them to the column instead of letting them overrun the stint rail. */
+#wb-pet #creature-box{min-height:0}
+#wb-pet #thought-bubble,#wb-pet #tool-bubble{width:auto;max-width:100%;box-sizing:border-box}
+#wb-pet #thought-bubble{height:auto;min-height:48px;max-height:140px}
+/* On the station the bubble fades overflow (fixed height, no creature jitter); in the
+   dock let the full thought scroll instead of truncating — drop the fade mask + scroll. */
+#wb-pet #thought-bubble #thought-text{font-size:11px;line-height:1.35;overflow:hidden;
+  -webkit-mask-image:none;mask-image:none}
+#wb-crew{margin:0;padding:2px 6px 6px;color:#00ff41;font-size:12px;border-bottom:1px solid #1a3a1a;
+  white-space:pre;overflow:hidden}
+#wb-stints{flex:1;overflow:auto;padding:6px}
+#wb-panel .stint{padding:6px;cursor:pointer;border:1px solid transparent;border-radius:4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#00ff41}
+#wb-panel .stint:hover{border-color:#1a3a1a}
+#wb-panel .stint.active{background:#1a3a1a;color:#ffb000}
+#wb-new{display:flex;gap:4px;padding:6px;border-top:1px solid #1a3a1a}
+#wb-new input{flex:1;min-width:0;background:#000;color:#00ff41;border:1px solid #1a3a1a;
+  padding:4px;font:12px 'Courier New',monospace}
+#wb-chat{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid #1a3a1a}
+#wb-log{flex:1;overflow:auto;padding:10px;white-space:pre-wrap;line-height:1.4;font-size:13px}
+#wb-log .msg-user{color:#33bbff;margin:8px 0}
+#wb-log .msg-pi{color:#00ff41;margin:8px 0}
+#wb-log .tool{color:#ffb000;margin:4px 0 4px 8px;font-size:12px}
+#wb-log .sys{color:#888;font-size:12px;margin:4px 0}
+#wb-composer{display:flex;border-top:1px solid #1a3a1a}
+#wb-inp{flex:1;background:#000;color:#00ff41;border:none;padding:10px;
+  font:13px 'Courier New',monospace;resize:none}
+#wb-code{width:38%;display:flex;flex-direction:column;min-width:0}
+#wb-tree{height:36%;overflow:auto;padding:6px;border-bottom:1px solid #1a3a1a;font-size:12px}
+#wb-tree .row{padding:1px 4px;cursor:pointer;white-space:nowrap}
+#wb-tree .row:hover{background:#1a3a1a}
+#wb-tree .row.dir{color:#ffb000} #wb-tree .row.file{color:#00ff41}
+#wb-tabs{display:flex;flex-wrap:wrap;gap:2px;padding:4px;border-bottom:1px solid #1a3a1a;min-height:26px}
+#wb-tabs .tab{padding:2px 8px;cursor:pointer;border:1px solid #1a3a1a;font-size:11px;color:#888}
+#wb-tabs .tab.active{color:#ffb000;border-color:#ffb000}
+#wb-viewer{flex:1;overflow:auto;padding:8px;white-space:pre;font-size:12px;tab-size:4;margin:0;color:#00ff41}
+#wb-panel button{background:#1a3a1a;color:#00ff41;border:1px solid #00ff41;padding:4px 10px;
+  cursor:pointer;font:12px 'Courier New',monospace}
+#wb-panel button:hover{background:#00ff41;color:#000}
+#wb-panel button:disabled{opacity:.4;cursor:default}
 </style>
 <div id="nexus-control">
   <b>eiDOS</b>
+  <span id="nx-tabs">
+    <button id="tab-st" class="on" onclick="wbTab(false)">station</button>
+    <button id="tab-wb" onclick="wbTab(true)">workbench</button>
+  </span>
   <span id="nx-state">checking…</span>
   <button id="nx-start" onclick="nxCtl('start')">&#9654; Start (paused)</button>
   <button id="nx-go" onclick="nxCtl('resume')">GO &#9654;</button>
@@ -714,6 +774,8 @@ const NX_SILENT='data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfA
 // Voice runs as its own service (phase 8.3) on a separate port. Derive its base from the host the
 // browser used to reach THIS page, so it works over localhost AND Tailscale (not hardcoded 127.0.0.1).
 const NX_VOICE_BASE=location.protocol+'//'+location.hostname+':{{VOICE_PORT}}';
+// The pi mini-IDE is its own service too (EidosCodeIDE) — same host-derivation trick.
+const NX_IDE_BASE=location.protocol+'//'+location.hostname+':{{IDE_PORT}}';
 let nxVoiceOn=false, nxES=null, nxAC=null;
 function nxLabel(extra){ const b=document.getElementById('nx-voice'); const base=nxVoiceOn?'&#128266; Voice: on':'&#128263; Voice: off'; b.innerHTML=extra?extra+' '+base:base; if(extra) setTimeout(()=>{b.innerHTML=base;},1400); }
 function nxBlip(){ try{ nxAC=nxAC||new (window.AudioContext||window.webkitAudioContext)(); if(nxAC.state==='suspended')nxAC.resume(); const o=nxAC.createOscillator(),g=nxAC.createGain(); o.frequency.value=660; g.gain.value=0.05; o.connect(g); g.connect(nxAC.destination); o.start(); o.stop(nxAC.currentTime+0.12);}catch(_){} }
@@ -745,6 +807,40 @@ function toggleVoice(){
     <div class="header">
         <h1>⟨ eiDOS ⟩</h1>
         <div class="subtitle">autonomous agent — field station monitor</div>
+    </div>
+
+    <!-- Workbench: code with the buddy + its pi crew (EidosCodeIDE :8100 behind it).
+         Hidden until body.wb; the live #creature-box REPARENTS into #wb-pet so the
+         same pet (same state, same bubbles) presides over the work. -->
+    <div id="wb-panel">
+        <div id="wb-head">
+            <b>workbench</b><span id="wb-curname" style="color:#888"></span>
+            <span class="grow"></span>
+            <button id="wb-dl" onclick="wbDl()" disabled>download .zip</button>
+        </div>
+        <div id="wb-main">
+            <div id="wb-side">
+                <div id="wb-pet"></div>
+                <pre id="wb-crew">  (bench empty)</pre>
+                <div id="wb-stints"></div>
+                <div id="wb-new">
+                    <input id="wb-newtitle" placeholder="new stint">
+                    <button onclick="wbNewStint()">+</button>
+                </div>
+            </div>
+            <div id="wb-chat">
+                <div id="wb-log"><div class="sys">pick or create a stint — the crew does the typing.</div></div>
+                <div id="wb-composer">
+                    <textarea id="wb-inp" rows="3" placeholder="describe what to build… (Enter to send · Shift+Enter for newline)"></textarea>
+                    <button id="wb-send" onclick="wbSend()" disabled>send</button>
+                </div>
+            </div>
+            <div id="wb-code">
+                <div id="wb-tree"></div>
+                <div id="wb-tabs"></div>
+                <pre id="wb-viewer"></pre>
+            </div>
+        </div>
     </div>
 
     <!-- Left: Creature -->
@@ -898,6 +994,7 @@ function toggleVoice(){
 </div>
 
 <script src="/static/creature.js"></script>
+<script src="/static/ide.js"></script>
 <script>
 let creatureFrames = [];
 let creatureIdx = 0;

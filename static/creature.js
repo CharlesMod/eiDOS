@@ -486,6 +486,8 @@ const Creature = (() => {
         },
         applyActivity(a) { activity = a || { state: '' }; },
         setSpeaking(b) { speaking = !!b; },
+        // genome-matched mini sprite (workbench crew renders the pet's agents with it)
+        miniSprite() { return MINI_SPRITE[(spec && spec.eyes && spec.eyes.family)] || '(o)'; },
         stop() { if (masterTimer) { clearInterval(masterTimer); masterTimer = null; } },
     };
 })();

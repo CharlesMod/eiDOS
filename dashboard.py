@@ -914,6 +914,7 @@ def _render_html(config: Config) -> str:
     html = html.replace("{{NAME}}", "eiDOS")
     html = html.replace("{{INTERVAL_MS}}", str(config.tick_interval_s * 1000))
     html = html.replace("{{VOICE_PORT}}", str(getattr(config, "voice_port", 8098)))
+    html = html.replace("{{IDE_PORT}}", str(getattr(config, "ide_port", 8100)))
     return html
 
 
@@ -937,10 +938,11 @@ def _make_handler(config: Config):
             if self.path == "/":
                 self._respond(200, "text/html; charset=utf-8", _render_html(config))
 
-            elif self.path == "/static/creature.js":
+            elif self.path in ("/static/creature.js", "/static/ide.js"):
                 # Explicit whitelist (no generic static serving = no traversal surface).
                 try:
-                    body = (_STATIC_DIR / "creature.js").read_text(encoding="utf-8")
+                    name = self.path.rsplit("/", 1)[-1]
+                    body = (_STATIC_DIR / name).read_text(encoding="utf-8")
                     self._respond(200, "application/javascript; charset=utf-8", body)
                 except OSError:
                     self.send_error(404)
