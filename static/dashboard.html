@@ -660,16 +660,29 @@ body::after {
 #nexus-control{position:fixed;top:0;left:0;right:0;z-index:99999;background:#0a0d0a;
   border-bottom:1px solid #1a3a1a;padding:7px 14px;display:flex;align-items:center;gap:10px;
   font-family:'Courier New',monospace;font-size:13px;color:#8aa88a;}
-#nexus-control b{color:#00ff41;letter-spacing:2px}
+#nexus-control b{color:#00ff41;letter-spacing:2px;flex:0 0 auto}
+/* buttons FILL the bar (flex:1), like the chat|code|preview switch — not content-sized */
 #nexus-control button{cursor:pointer;border:1px solid #1a3a1a;background:#101510;color:#9ab89a;
-  padding:4px 12px;border-radius:4px;font:inherit}
+  padding:6px 10px;border-radius:4px;font:inherit;flex:1 1 0;min-width:0;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
 #nexus-control button:disabled{opacity:.35;cursor:not-allowed}
 #nx-go{background:#13361f;border-color:#1c7a3a;color:#9cf0b6}
 #nx-stop{background:#2a1212;border-color:#7a1c1c;color:#ff9b9b}
-#nx-state{padding:2px 12px;border-radius:4px;background:#101510;color:#7CFC9B;font-weight:bold}
-#nx-msg{color:#5f7a5f;margin-left:auto;font-size:12px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#nx-state{flex:0 0 auto;padding:5px 12px;border-radius:4px;background:#101510;color:#7CFC9B;font-weight:bold}
+#nx-msg{flex:1 1 0;color:#5f7a5f;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* --- tab switcher: station (field monitor) | workbench (code with the crew) --- */
-#nx-tabs{display:flex;gap:2px;margin-left:6px}
+#nx-tabs{display:flex;gap:2px;flex:1.4 1 0}
+/* settings dropdown — wipe levels */
+#nx-settings-panel{position:fixed;top:44px;right:10px;z-index:99998;width:360px;
+  background:#0a0d0a;border:1px solid #1a3a1a;border-radius:6px;padding:9px;
+  font-family:'Courier New',monospace;font-size:12px;color:#9ab89a;box-shadow:0 8px 28px rgba(0,0,0,.6)}
+#nx-settings-panel .nxs-title{color:#7CFC9B;font-size:11px;letter-spacing:.5px;margin-bottom:7px}
+#nx-settings-panel button{display:block;width:100%;text-align:left;margin:5px 0;padding:8px 10px;
+  background:#101510;border:1px solid #1a3a1a;border-radius:4px;color:#9ab89a;cursor:pointer;
+  font:inherit;flex:none}
+#nx-settings-panel button:hover{background:#13361f;border-color:#1c7a3a;color:#9cf0b6}
+#nx-settings-panel .nxs-msg{margin-top:7px;font-size:11px;color:#7CFC9B;min-height:14px;
+  white-space:pre-wrap}
 #nx-tabs button{border-radius:4px;padding:4px 14px;color:#5a6a5a;border-color:#1a3a1a;
   background:#0d110d;opacity:.7}   /* inactive tab = greyed */
 #nx-tabs button:hover{color:#9cf0b6;opacity:1}
@@ -798,8 +811,15 @@ body.wb-nocode #wb-code{display:none}
   <button id="nx-pause" onclick="nxCtl('pause')">&#9208; Pause</button>
   <button id="nx-stop" onclick="nxStop()">&#9632; STOP</button>
   <button id="nx-voice" onclick="toggleVoice()" title="Play eiDOS's GLaDOS voice through this browser/device — click to enable">&#128263; Voice: off</button>
+  <button id="nx-settings" onclick="toggleSettings()" title="Settings &amp; wipe levels">&#9881; Settings</button>
   <audio id="nx-audio" preload="auto" style="display:none"></audio>
   <span id="nx-msg"></span>
+</div>
+<div id="nx-settings-panel" style="display:none">
+  <div class="nxs-title">WIPE LEVELS — eiDOS stops; press Start &#9654; GO after</div>
+  <button onclick="nxReset('rebirth')">&#8634; Rebirth — back to egg, KEEP knowledge &amp; skills (same creature)</button>
+  <button onclick="nxReset('full')">&#8856; Full wipe — Level 0, fresh nuggets, NEW creature</button>
+  <div id="nx-settings-msg" class="nxs-msg"></div>
 </div>
 <div style="height:38px"></div>
 <script>
@@ -813,6 +833,22 @@ async function nxCtl(action){
 async function nxStop(){
   if(!confirm('Authoritative STOP: force-kill the consciousness loop and free VRAM (stops HouseAI-Llama)?'))return;
   await nxCtl('stop');
+}
+function toggleSettings(){ const p=document.getElementById('nx-settings-panel');
+  p.style.display = (p.style.display==='none'||!p.style.display) ? 'block' : 'none'; }
+async function nxReset(mode){
+  const label = mode==='rebirth'
+    ? 'REBIRTH — back to an egg, KEEP knowledge & skills (same creature)'
+    : 'FULL WIPE — Level 0, fresh nuggets, a NEW creature';
+  if(!confirm('Wipe eiDOS:\n'+label+'\n\nIt stops and the workspace is cleared (archived first). Continue?'))return;
+  const msg=document.getElementById('nx-settings-msg'); msg.textContent='working… (stops eidos, clears, ~10s)';
+  try{
+    const r=await fetch('/api/control/reset',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({mode:mode})});
+    const d=await r.json();
+    msg.textContent = d.ok ? ('✓ '+(d.message||'done')) : ('✗ '+(d.error||'failed'));
+  }catch(e){ msg.textContent='✗ '+e; }
+  nxStatus();
 }
 async function nxStatus(){
   try{const r=await fetch('/api/control/status');const s=await r.json();

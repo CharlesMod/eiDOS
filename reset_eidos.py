@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -133,6 +134,9 @@ def main():
     ap.add_argument("--no-archive", action="store_true", help="don't archive the old workspace")
     ap.add_argument("--no-seed", action="store_true", help="don't re-seed bootstrap knowledge")
     ap.add_argument("--reset-guide", action="store_true", help="also reset self_guide.md to default")
+    ap.add_argument("--keep-knowledge", action="store_true",
+                    help="REBIRTH: reset level/persona + creature back to an egg, but KEEP the "
+                         "knowledge store (and skills) — it remembers what it learned. Same genome.")
     args = ap.parse_args()
 
     config = load_config(str(KDIR / "config.toml"))
@@ -140,17 +144,31 @@ def main():
     ts = time.strftime("%Y%m%d_%H%M%S")
     archive = KDIR.parent / f"eidos_ws_pre-reset_{ts}"
 
-    kept = sorted(KEEP_FILES - ({"self_guide.md"} if args.reset_guide else set()))
-    print("eiDOS reset plan:")
+    # Rebirth keeps the learned stores; a full wipe reseeds fresh bootstrap nuggets.
+    keep_dirs = {"knowledge", "skills"} if args.keep_knowledge else set()
+    reseed = not args.no_seed and not args.keep_knowledge
+    kept = sorted((KEEP_FILES - ({"self_guide.md"} if args.reset_guide else set())) | keep_dirs)
+    print("eiDOS reset plan:" + ("   [REBIRTH — keep knowledge]" if args.keep_knowledge else ""))
     print(f"  workspace:   {ws}")
     print(f"  archive:     {'(skipped)' if args.no_archive else archive}")
     print(f"  keep:        {', '.join(kept)}")
-    print(f"  reseed:      {'no' if args.no_seed else 'yes (bootstrap nuggets)'}")
+    print(f"  reseed:      {'yes (bootstrap nuggets)' if reseed else 'no'}")
     print(f"  self_guide:  {'RESET to default' if args.reset_guide else 'kept'}")
+    print(f"  creature:    {'reset to EGG (same genome)' if args.keep_knowledge else 'fresh egg (new genome)'}")
     print("  eidos after: STOPPED (start it yourself from the dashboard)")
     if not args.yes:
         print("\nDRY RUN — re-run with --yes to execute.")
         return
+
+    # Rebirth: capture the current genome so the egg is the SAME creature, reborn.
+    saved_genome = None
+    if args.keep_knowledge:
+        try:
+            cj = json.loads((ws / "creature.json").read_text(encoding="utf-8"))
+            if cj.get("genome"):
+                saved_genome = {"seed": cj.get("seed"), "genome": cj.get("genome")}
+        except (OSError, ValueError):
+            pass
 
     print("\nStopping eidos…")
     stop_eidos(config)
@@ -163,9 +181,9 @@ def main():
         except Exception as e:  # noqa: BLE001
             print(f"  archive WARNING (continuing): {e}")
 
-    # Clear workspace contents, keeping the config files.
+    # Clear workspace contents, keeping the config files (+ knowledge/skills on rebirth).
     print("Clearing workspace to Level 0…")
-    keep = KEEP_FILES - ({"self_guide.md"} if args.reset_guide else set())
+    keep = (KEEP_FILES - ({"self_guide.md"} if args.reset_guide else set())) | keep_dirs
     if ws.exists():
         for item in ws.iterdir():
             if item.name in keep:
@@ -183,7 +201,17 @@ def main():
         (ws / "self_guide.md").write_text(DEFAULT_SELF_GUIDE, encoding="utf-8")
         print("  self_guide.md reset to default")
 
-    if not args.no_seed:
+    # Rebirth: lay a fresh egg with the SAME genome (same being, reborn). persona.json is
+    # gone → Lv.0, so it stays an egg (progress 0) until it earns its first XP and re-hatches.
+    if args.keep_knowledge and saved_genome:
+        now = time.time()
+        egg = {"v": 1, "seed": saved_genome["seed"], "genome": saved_genome["genome"],
+               "born_ts": now, "hatched": False, "hatch_xp": 25,
+               "events": [{"ts": now, "kind": "laid"}], "last_stage": "egg"}
+        (ws / "creature.json").write_text(json.dumps(egg, indent=2), encoding="utf-8")
+        print("  creature reset to EGG (same genome, kept)")
+
+    if reseed:
         print("Re-seeding bootstrap knowledge…")
         r = subprocess.run([sys.executable, str(KDIR / "seed_knowledge.py")],
                            cwd=str(KDIR), env={**os.environ, "PYTHONUTF8": "1"},

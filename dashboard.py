@@ -1068,6 +1068,18 @@ def _make_handler(config: Config):
                 self._respond(200, "application/json", json.dumps(_ctrl_resume(config)))
             elif self.path == "/api/control/pause":
                 self._respond(200, "application/json", json.dumps(_ctrl_pause(config)))
+            elif self.path == "/api/control/reset":
+                # Destructive wipe (rebirth / full). Operator-only like the other controls.
+                if not _token_ok(self.headers, self.path, config):
+                    self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                mode = "rebirth"
+                if 0 < length <= 1000:
+                    try:
+                        mode = str(json.loads(self.rfile.read(length)).get("mode") or "rebirth")
+                    except (json.JSONDecodeError, ValueError):
+                        mode = "rebirth"
+                self._respond(200, "application/json", json.dumps(_ctrl_reset(config, mode)))
             elif self.path == "/api/chat_hold":
                 # Listening hold — focusing the chat box quiets the loop. Best-effort,
                 # never 500s; token-gated if a token is configured.
@@ -1324,6 +1336,33 @@ def _spawn_eidos(config):
     threading.Thread(target=_watch_child, args=(proc,), daemon=True,
                          name="eidos-death-watch").start()
     return proc.pid
+
+
+def _ctrl_reset(config, mode):
+    """Operator-triggered wipe via reset_eidos.py (it stops eidos, archives, clears).
+    mode 'rebirth' = keep knowledge + skills, back to egg (same genome), Lv.0.
+    mode 'full'    = Level 0, fresh bootstrap nuggets, new-genome egg.
+    Leaves eidos STOPPED; operator presses Start → GO to begin the new life."""
+    import subprocess, os, sys
+    repo = Path(__file__).resolve().parent
+    flags = ["--yes"]
+    if mode == "rebirth":
+        flags.append("--keep-knowledge")
+    elif mode != "full":
+        return {"ok": False, "error": f"unknown reset mode {mode!r}"}
+    try:
+        r = subprocess.run([sys.executable, str(repo / "reset_eidos.py"), *flags],
+                           cwd=str(repo), env={**os.environ, "PYTHONUTF8": "1"},
+                           capture_output=True, text=True, timeout=150)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+    tail = [l for l in (r.stdout or "").strip().splitlines() if l.strip()]
+    ok = r.returncode == 0
+    return {"ok": ok, "mode": mode,
+            "message": ("reborn — back to egg, kept knowledge" if mode == "rebirth"
+                        else "full wipe — Level 0") + " · press Start → GO" if ok else "reset failed",
+            "output": "\n".join(tail[-8:]),
+            "error": "" if ok else (r.stderr or "reset failed")[:300]}
 
 
 def _ctrl_start(config):
