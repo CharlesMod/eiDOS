@@ -174,5 +174,16 @@ pi_model = "house-ai"
 max_stints = 8
 stint_idle_timeout_s = 1800
 
+[nervous]
+# V3 afferent nervous-system bus (P0 — the seam). Defaults live in config.py; override here.
+enabled = true
+transport = "inproc"          # "inproc" | "zmq" (deployment-manifest switch, I9)
+bind = "tcp://0.0.0.0:8120"
+peer = "tcp://127.0.0.1:8120"
+fungible_qsize = 256
+reliable_backpressure_max_s = 30.0
+admits_per_source_per_window = 1000
+heartbeat_interval_s = 0.5
+
 [paths]
 workspace = "C:/Users/cmod/llm/Kairos/workspace"

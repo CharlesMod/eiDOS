@@ -166,6 +166,24 @@ class Config:
     ide_max_stints: int = 8                     # concurrent live pi rpc processes
     ide_stint_idle_timeout_s: float = 1800.0    # close a quiet stint after this
 
+    # --- Nervous system (V3 afferent bus — P0 the seam; EIDOS_V3_ARCHITECTURE.md) ---
+    nervous_enabled: bool = True
+    nervous_transport: str = "inproc"           # "inproc" | "zmq" (the deployment-manifest switch, I9)
+    nervous_bind: str = "tcp://0.0.0.0:8120"     # zmq: this bus binds here
+    nervous_peer: str = "tcp://127.0.0.1:8120"   # zmq: connect to a peer here (loopback = cross-device proxy)
+    nervous_schema_version: int = 1
+    nervous_fungible_qsize: int = 256            # per-subscriber bounded queue (voice.py maxsize generalization)
+    nervous_ordered_seq_max_buffered: int = 512  # ordered staging cap before atomic abort
+    nervous_reliable_backpressure_max_s: float = 30.0   # liveness cap → drop+log+alarm (never wedge, ARCH #2)
+    nervous_ordered_backpressure_max_s: float = 10.0
+    nervous_payload_store_max_bytes: int = 67_108_864   # 64 MB content-addressed store cap
+    nervous_payload_inline_max_bytes: int = 65_536      # <= this ships inline; larger is fetched by ref
+    nervous_admits_per_source_per_window: int = 1000    # I10 fair-admission token bucket
+    nervous_admission_window_s: float = 1.0
+    nervous_heartbeat_interval_s: float = 0.5           # the trivial sense cadence
+    nervous_drop_log_name: str = "drop_events.jsonl"
+    nervous_metrics_log_name: str = "nervous_metrics.jsonl"
+
     @property
     def workspace(self) -> Path:
         return Path(self.workspace_dir)
@@ -236,6 +254,15 @@ class Config:
     def proposals_dir(self) -> Path:
         """Where eiDOS stages self-edit / skill proposals for operator approval."""
         return self.workspace / "proposals"
+
+    # --- Nervous-system log paths (under state_dir, the glue.py/outcomes.jsonl convention) ---
+    @property
+    def nervous_drop_log_path(self) -> Path:
+        return self.state_dir / self.nervous_drop_log_name
+
+    @property
+    def nervous_metrics_log_path(self) -> Path:
+        return self.state_dir / self.nervous_metrics_log_name
 
 
 def load_config(path: str = "config.toml") -> Config:
@@ -375,6 +402,32 @@ def load_config(path: str = "config.toml") -> Config:
         config.ide_max_stints = ide.get("max_stints", config.ide_max_stints)
         config.ide_stint_idle_timeout_s = float(
             ide.get("stint_idle_timeout_s", config.ide_stint_idle_timeout_s))
+
+        nervous = data.get("nervous", {})
+        config.nervous_enabled = nervous.get("enabled", config.nervous_enabled)
+        config.nervous_transport = nervous.get("transport", config.nervous_transport)
+        config.nervous_bind = nervous.get("bind", config.nervous_bind)
+        config.nervous_peer = nervous.get("peer", config.nervous_peer)
+        config.nervous_schema_version = nervous.get("schema_version", config.nervous_schema_version)
+        config.nervous_fungible_qsize = nervous.get("fungible_qsize", config.nervous_fungible_qsize)
+        config.nervous_ordered_seq_max_buffered = nervous.get(
+            "ordered_seq_max_buffered", config.nervous_ordered_seq_max_buffered)
+        config.nervous_reliable_backpressure_max_s = float(nervous.get(
+            "reliable_backpressure_max_s", config.nervous_reliable_backpressure_max_s))
+        config.nervous_ordered_backpressure_max_s = float(nervous.get(
+            "ordered_backpressure_max_s", config.nervous_ordered_backpressure_max_s))
+        config.nervous_payload_store_max_bytes = nervous.get(
+            "payload_store_max_bytes", config.nervous_payload_store_max_bytes)
+        config.nervous_payload_inline_max_bytes = nervous.get(
+            "payload_inline_max_bytes", config.nervous_payload_inline_max_bytes)
+        config.nervous_admits_per_source_per_window = nervous.get(
+            "admits_per_source_per_window", config.nervous_admits_per_source_per_window)
+        config.nervous_admission_window_s = float(nervous.get(
+            "admission_window_s", config.nervous_admission_window_s))
+        config.nervous_heartbeat_interval_s = float(nervous.get(
+            "heartbeat_interval_s", config.nervous_heartbeat_interval_s))
+        config.nervous_drop_log_name = nervous.get("drop_log_name", config.nervous_drop_log_name)
+        config.nervous_metrics_log_name = nervous.get("metrics_log_name", config.nervous_metrics_log_name)
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)
