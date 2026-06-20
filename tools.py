@@ -152,6 +152,55 @@ def _single_quoted_spans(cmd: str):
     return spans
 
 
+# Listing commands the model reaches for, and the POSIX short-flag letters it bundles out of habit
+# (ls -F / ls -la / ls -lh …) that PowerShell's `ls`/`dir` (= Get-ChildItem) does NOT accept. Only these
+# letters count as a strippable bundle, so real PS switches (-Recurse, -Force, -Name…) are never touched.
+_LISTING_CMDS = ("ls", "dir", "gci", "get-childitem")
+_POSIX_LS_BUNDLE = re.compile(r"-[laAFhGtSrR1]+$")
+
+
+def _normalize_listing_flags(c: str):
+    """Translate Unix/cmd listing flags to PowerShell so the creature stops bonking on shell dialect:
+      ls -F → ls   |   ls -la → ls -Force   |   ls -R → ls -Recurse   |   dir /s *.json → dir *.json -Recurse
+    Conservative: only acts when the command STARTS with a listing command, only on the segment before
+    the first pipe, and only on known POSIX/cmd flag tokens — paths, globs, and real PS switches pass
+    through untouched. Returns (new_cmd, note) or None."""
+    head = c.split("|", 1)[0]
+    tail = c[len(head):]
+    toks = head.split()
+    if not toks or toks[0].lower() not in _LISTING_CMDS:
+        return None
+    out, changed, recurse, force = [toks[0]], False, False, False
+    for t in toks[1:]:
+        tl = t.lower()
+        if tl.startswith("--color"):                       # --color / --color=auto
+            changed = True
+            continue
+        if t.startswith("/"):                              # cmd.exe switches: /s /b /a /o /w …
+            changed = True
+            if tl == "/s":
+                recurse = True
+            elif tl.startswith("/a"):
+                force = True
+            continue                                       # /b /o /w /p /q → drop (no PS equivalent needed)
+        if _POSIX_LS_BUNDLE.fullmatch(t):                  # -F / -la / -lhR …
+            if "r" in tl[1:]:
+                recurse = True
+            if "a" in tl[1:]:
+                force = True
+            changed = True
+            continue
+        out.append(t)
+    if not changed:
+        return None
+    if recurse:
+        out.append("-Recurse")
+    if force:
+        out.append("-Force")
+    return (" ".join(out) + tail,
+            "translated Unix/cmd listing flags to PowerShell (dropped POSIX flags; -R→-Recurse, -a→-Force)")
+
+
 def _lint_windows_command(cmd: str):
     """Quote-aware pre-flight. See contract above."""
     c = cmd.strip()
@@ -186,6 +235,10 @@ def _lint_windows_command(cmd: str):
             return ("rewrite", fixed,
                     "changed a single-quoted '…' to \"…\" so the $variable expands (single quotes are "
                     "literal in PowerShell)")
+    # 4) Unix/cmd listing flags (ls -F, ls -la, dir /s) that PowerShell's Get-ChildItem rejects.
+    listing = _normalize_listing_flags(c)
+    if listing:
+        return ("rewrite", listing[0], listing[1])
     return None
 
 

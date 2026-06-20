@@ -470,6 +470,37 @@ class TestCreatureWorldFirewall(unittest.TestCase):
         self.assertIn("outside your world", r.output)
 
 
+class TestListingFlagNormalizer(unittest.TestCase):
+    """Live run (fresh creature, 2026-06-20): it bonked on Unix/cmd listing flags PowerShell rejects
+    (`ls -F`, `dir /s`). The lint now translates them so it stops relearning shell trivia."""
+
+    def _rw(self, cmd):
+        from tools import _lint_windows_command
+        v = _lint_windows_command(cmd)
+        return v[1] if v and v[0] == "rewrite" else None
+
+    def test_strips_posix_classify_flag(self):
+        self.assertEqual(self._rw("ls -F"), "ls")
+
+    def test_maps_all_to_force_and_recurse(self):
+        self.assertEqual(self._rw("ls -la"), "ls -Force")
+        self.assertEqual(self._rw("ls -lhR"), "ls -Recurse")
+        self.assertEqual(self._rw("ls -a snapshots"), "ls snapshots -Force")
+
+    def test_cmd_switch_recurse(self):
+        self.assertEqual(self._rw("dir /s *.json"), "dir *.json -Recurse")
+
+    def test_valid_commands_untouched(self):
+        # globs, real PS switches, plain listings, and piped commands must pass through unchanged
+        for ok in ("ls *.json", "dir snapshots", "Get-ChildItem -Recurse", "ls",
+                   "Get-Content x | Select-Object -First 5"):
+            self.assertIsNone(self._rw(ok), ok)
+
+    def test_does_not_touch_pipe_target(self):
+        # only the leading listing command is normalized, never a downstream pipe stage
+        self.assertIsNone(self._rw("Get-Content a.json | Select-String 'x'"))
+
+
 class TestSkillWatchdog(unittest.TestCase):
     """Tick 342 reproduction: a self-authored skill that makes a blocking network call with no timeout
     must NOT freeze the tick loop. execute_tool runs skills under a wall-clock watchdog; built-in tools
