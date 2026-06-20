@@ -29,6 +29,7 @@ from typing import Optional
 
 from config import Config
 from tools import ToolResult, TOOLS
+from skill_atoms import build_atoms, ATOM_NAMES  # M2: the in-scope vocabulary skills compose
 
 logger = logging.getLogger("eidos.skills")
 
@@ -38,9 +39,10 @@ MANIFEST_NAME = "_index.json"
 
 # Names the agent may NOT use for a skill (built-in tools + skill-admin tools).
 RESERVED_NAMES = {
-    "bash", "write_file", "read_file", "bg_run", "bg_check", "http_get",
+    "bash", "write_file", "read_file", "bg_run", "bg_check",
     "update_plan", "memorize", "recall",
     "create_skill", "edit_skill", "list_skills", "rollback_skill",
+    *ATOM_NAMES,   # a skill must not shadow an atom in its own namespace
 }
 
 # Meta-execution builtins forbidden inside skill source (they bypass review).
@@ -113,8 +115,10 @@ def _next_version(entry: Optional[dict]) -> str:
 # Validation
 # ---------------------------------------------------------------------------
 
-def _validate_source(name: str, code: str) -> list[str]:
-    """Static checks. Returns a list of error strings (empty == valid)."""
+def _validate_source(name: str, code: str, sandbox: bool = True) -> list[str]:
+    """Static checks. Returns a list of error strings (empty == valid). When `sandbox` (the default),
+    the meta-execution builtins (eval/exec/compile/__import__) are forbidden in skill source; the
+    `skill_sandbox_enabled=false` checkbox sets it free (full coding-agent freedom)."""
     errors: list[str] = []
 
     if not _NAME_RE.match(name):
@@ -142,14 +146,15 @@ def _validate_source(name: str, code: str) -> list[str]:
         if argnames[:2] != ["args", "config"]:
             errors.append(f"{func_name} signature must be (args, config); got {argnames or '()'}")
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
-                and node.func.id in FORBIDDEN_BUILTINS:
-            errors.append(f"forbidden builtin '{node.func.id}()' in skill source")
-        if isinstance(node, ast.Name) and node.id in FORBIDDEN_BUILTINS \
-                and isinstance(getattr(node, "ctx", None), ast.Load):
-            # catch assignment/aliasing like `e = exec`
-            errors.append(f"reference to forbidden builtin '{node.id}'")
+    if sandbox:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                    and node.func.id in FORBIDDEN_BUILTINS:
+                errors.append(f"forbidden builtin '{node.func.id}()' in skill source")
+            if isinstance(node, ast.Name) and node.id in FORBIDDEN_BUILTINS \
+                    and isinstance(getattr(node, "ctx", None), ast.Load):
+                # catch assignment/aliasing like `e = exec`
+                errors.append(f"reference to forbidden builtin '{node.id}'")
 
     # de-dupe, preserve order
     seen, out = set(), []
@@ -193,6 +198,14 @@ def _dry_run(config: Config, name: str, version: str) -> tuple[bool, str]:
     if line.startswith("CALL_OK"):
         return True, "dry-run clean"
     if line.startswith("CALL_RAISED") or line.startswith("CALL_BADRESULT"):
+        # A reference to something UNAVAILABLE (a missing import, an undefined name) means the skill can
+        # NEVER work — reject it now. The predecessor MASKED these as "probably just needs args" and so
+        # promoted 20 skills that did `import requests` (not installed) — the #1 source of dead weight.
+        # An arg-shape error (called with empty {}) is genuinely fine: the skill needs real arguments.
+        if any(t in line for t in ("ModuleNotFoundError", "ImportError", "NameError")):
+            return False, (f"{line[:200]} — the package/name isn't available. Use the in-scope ATOMS "
+                           f"(http_get, http_post, json_parse, sh, read, write, recall, memorize, note, "
+                           f"look, net_scan, tcp_probe, http_probe) instead of importing.")
         # loaded fine; raised only because it was called with empty args — acceptable
         return True, f"loads OK; {line[:200]} (expected if it needs args)"
     return False, f"dry-run produced no verdict: {out[:200]}"
@@ -208,9 +221,14 @@ cfg = load_config("config.toml")
 code = open({skill_file}, encoding="utf-8").read()
 ns = {{"Config": Config, "ToolResult": ToolResult}}
 try:
+    from skill_atoms import build_atoms
+    ns.update(build_atoms(cfg))   # same atom vocabulary as the live runner, so validation matches runtime
+except Exception:
+    pass
+try:
     exec(compile(code, {skill_file}, "exec"), ns)
 except Exception as e:
-    print("LOAD_ERROR: " + repr(e)); sys.exit(0)
+    print("LOAD_ERROR: " + type(e).__name__ + ": " + repr(e)); sys.exit(0)
 fn = ns.get("{func}")
 if fn is None:
     print("LOAD_ERROR: {func} not defined after exec"); sys.exit(0)
@@ -220,7 +238,7 @@ try:
 except SystemExit:
     print("CALL_RAISED: SystemExit")
 except Exception as e:
-    print("CALL_RAISED: " + repr(e)[:200])
+    print("CALL_RAISED: " + type(e).__name__ + ": " + repr(e)[:200])
 '''
 
 
@@ -235,6 +253,10 @@ def _build_runner(config: Config, name: str, code: str):
     Exceptions are caught and converted to a failed ToolResult; usage is recorded.
     """
     ns = {"Config": Config, "ToolResult": ToolResult}
+    try:
+        ns.update(build_atoms(config))   # M2.1: atoms in scope so skills compose them, never `import requests`
+    except Exception as e:  # noqa: BLE001 - atoms are additive; never block a skill from loading
+        logger.warning("could not build atoms for skill '%s': %s", name, e)
     exec(compile(code, f"<skill:{name}>", "exec"), ns)  # noqa: S102 - trusted local agent code
     fn = ns[f"tool_{name}"]
 
@@ -417,7 +439,7 @@ def create_skill(config: Config, name: str, code: str,
             f"CALL one as a tool (e.g. <tool>{sorted(dup)[0]}</tool>), or use edit_skill to improve "
             f"it. Do NOT author a near-duplicate — reuse what you built."]}
 
-    errs = _validate_source(name, code)
+    errs = _validate_source(name, code, sandbox=getattr(config, "skill_sandbox_enabled", True))
     if errs:
         return {"success": False, "errors": errs}
 
@@ -455,7 +477,7 @@ def edit_skill(config: Config, name: str, code: str,
     if not ent:
         return {"success": False, "errors": [f"no skill '{name}' — use create_skill"]}
 
-    errs = _validate_source(name, code)
+    errs = _validate_source(name, code, sandbox=getattr(config, "skill_sandbox_enabled", True))
     if errs:
         return {"success": False, "errors": errs}
 

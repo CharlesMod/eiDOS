@@ -48,7 +48,7 @@ from persona import (
 from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rotate_metrics, rotate_thoughts, cleanup_old_snapshots
 from safety import check_ram, check_disk_space
 from telemetry import write_heartbeat, append_metrics, write_activity, get_cpu_pct
-from tools import execute_tool, refresh_jobs, collect_finished_jobs, reap_jobs
+from tools import execute_tool, refresh_jobs, collect_finished_jobs, reap_jobs, _BUILTIN_TOOL_NAMES
 
 logger = logging.getLogger("eidos")
 
@@ -1335,6 +1335,12 @@ def run_loop(config: Config, persona=None, wal=None):
                 _resting = _arousal <= getattr(config, "nervous_metabolism_rest_arousal", 0.2)
                 _acted = tick_tool_name not in ("", "thought", "parse_error")
                 nervous_metabolism.metabolize(thought=True, acted=_acted, resting=_resting)
+                # M2.4 — accomplishment nutrient: a SUCCESSFUL authored-skill call nourishes (mastery).
+                # Built-ins don't directly feed (the LEARNING from using them feeds via M1); using a
+                # working skill you authored does. Reused-skill-feeds-often naturally rewards reliability.
+                if (tick_tool_success and _acted
+                        and tick_tool_name not in _BUILTIN_TOOL_NAMES):
+                    nervous_metabolism.feed(getattr(config, "nervous_metabolism_act_feed", 0.01))
                 if nervous_neuromod is not None:
                     nervous_neuromod.observe_energy(nervous_metabolism.energy)
             except Exception as _me:  # noqa: BLE001 - metabolism must never break the tick

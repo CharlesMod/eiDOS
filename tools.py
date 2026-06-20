@@ -1054,9 +1054,14 @@ def tool_create_skill(args: dict, config: Config) -> ToolResult:
     description = args.get("description", "")
     schema = args.get("args_schema", {})
     if not name or not code:
+        try:
+            from skill_atoms import atoms_reference
+            _atoms = "\n" + atoms_reference()
+        except Exception:  # noqa: BLE001
+            _atoms = ""
         return ToolResult(
             output=("Error: provide 'skill_name' and 'skill_code'. The code MUST define:\n"
-                    "def tool_<skill_name>(args: dict, config: Config) -> ToolResult"),
+                    "def tool_<skill_name>(args: dict, config: Config) -> ToolResult\n" + _atoms),
             full_output_path=None, success=False, duration_s=0)
     t = time.monotonic()
     r = skills.create_skill(config, name, code, description, schema if isinstance(schema, dict) else {})
@@ -1067,9 +1072,10 @@ def tool_create_skill(args: dict, config: Config) -> ToolResult:
         if re.search(r"\d+\.\d+\.\d+\.\d+", code) and "args.get(" not in code.replace(" ", ""):
             nudge += ("\n⚠ This skill hardcodes an IP/port. Make it REUSABLE: take them as args — "
                       "`ip = args.get('ip')`, `port = args.get('port')` — so one skill works for any host.")
-        if re.search(r"socket\.|TcpClient|create_connection|urllib|http", code) and "import" in code:
-            nudge += ("\n➤ Prefer COMPOSING the built-in primitives (net_scan, tcp_probe, http_probe, "
-                      "udp_listen) over re-writing raw socket/HTTP code — they're parameterized and tested.")
+        if re.search(r"\bimport\s+(requests|httpx|aiohttp|urllib|socket|http)\b", code):
+            nudge += ("\n➤ You don't need that import — COMPOSE the in-scope ATOMS instead (reliable, no "
+                      "imports): http_get/http_post/json_parse for HTTP, net_scan/tcp_probe/http_probe for "
+                      "the LAN, sh for shell, recall/memorize/note for memory, look for vision.")
         # Timeout hygiene: a skill that does network/socket/subprocess I/O with NO explicit timeout can
         # wedge the tick (tick 342 froze the loop ~6.7 min). The execute_tool watchdog is the hard
         # backstop; this nudge gets the skill fixed at the source so it never trips the watchdog.

@@ -149,6 +149,8 @@ class Config:
     git_checkpoint_keep: int = 30              # prune to last N eidos-good-* tags
     self_edit_enabled: bool = False            # gated self-code-editing (opt-in)
     self_edit_max_proposal_bytes: int = 200000
+    skill_sandbox_enabled: bool = True         # M2: forbid eval/exec/compile/__import__ in skill source;
+    #                                            set false to "set it free" (full coding-agent freedom)
     self_edit_health_probe_s: int = 90         # post-restart health window before auto-rollback
     eidos_stuck_threshold_s: int = 600         # watchdog restarts eidos if alive but not ticking this long
     dashboard_token: str = ""                  # shared token gating state-changing POSTs ('' = off)
@@ -206,6 +208,7 @@ class Config:
     nervous_metabolism_enabled: bool = True
     nervous_metabolism_rest_arousal: float = 0.2     # at/below this arousal the creature is resting (recovers)
     nervous_metabolism_learn_feed: float = 0.02      # M1: energy a full-learning-progress tick restores (nourishment)
+    nervous_metabolism_act_feed: float = 0.01        # M2.4: energy a SUCCESSFUL authored-skill call restores (mastery)
 
     @property
     def workspace(self) -> Path:
@@ -408,6 +411,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.git_checkpoint_keep = si.get("git_checkpoint_keep", config.git_checkpoint_keep)
         config.self_edit_enabled = si.get("self_edit_enabled", config.self_edit_enabled)
         config.self_edit_max_proposal_bytes = si.get("self_edit_max_proposal_bytes", config.self_edit_max_proposal_bytes)
+        config.skill_sandbox_enabled = si.get("skill_sandbox_enabled", config.skill_sandbox_enabled)
         config.self_edit_health_probe_s = si.get("self_edit_health_probe_s", config.self_edit_health_probe_s)
         config.eidos_stuck_threshold_s = si.get("eidos_stuck_threshold_s", config.eidos_stuck_threshold_s)
 
@@ -478,6 +482,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.nervous_metabolism_enabled = nervous.get("metabolism_enabled", config.nervous_metabolism_enabled)
         config.nervous_metabolism_rest_arousal = float(nervous.get("metabolism_rest_arousal", config.nervous_metabolism_rest_arousal))
         config.nervous_metabolism_learn_feed = float(nervous.get("metabolism_learn_feed", config.nervous_metabolism_learn_feed))
+        config.nervous_metabolism_act_feed = float(nervous.get("metabolism_act_feed", config.nervous_metabolism_act_feed))
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)
