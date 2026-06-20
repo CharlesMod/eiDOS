@@ -122,6 +122,14 @@ Dean: wire in real **battery level** AND **solar intake** when we can. Two disti
   midday, nothing at 3am. Modulates `feed()`/recovery rather than the reserve directly.
 - [ ] **M4.1** Investigate readable power: Windows battery API / UPS / solar inverter on the LAN /
   smart watt-meter (e.g. a Tuya energy plug). Capture both charge % and PV watts if available.
+  - **CONFIRMED SOURCE (Dean, 2026-06-20): the solar system is a Renogy Rover 20A with Bluetooth (the
+    BT-1/BT-2 module).** It exposes battery **state-of-charge %** AND **PV charging rate (watts/amps)**
+    over BLE — exactly the two signals M4 needs, from one device. Read it via BLE (e.g. `bleak` on
+    Windows; the Rover speaks Modbus-over-BLE — community libs: `renogy-bt` / `solar-monitor` decode
+    the 0x0100-ish holding registers for SOC, PV W/V/A, battery V, load). Plan: a tiny poller →
+    publishes a retained `Kind.metabolism` power event (SOC + PV watts) → metabolism reads SOC as the
+    reserve anchor and PV watts as the `feed()`/recovery multiplier. No Tuya watt-meter needed for the
+    sense path; Tuya stays only for M4.3 (self-charging actuation).
 - [ ] **M4.2** If readable: battery% anchors the reserve, PV watts drives recovery → a real diurnal
   rhythm (lively by day, husbanding itself at night). Else keep internal + the hook ready.
 - [ ] **M4.3** (future) self-charging via a Tuya plug = "going to bed" — the creature seeks its charger

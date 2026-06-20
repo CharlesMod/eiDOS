@@ -542,6 +542,63 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
     return "\n".join(lines)
 
 
+# Life-stage flavor — what each body feels like to BE, so the creature's own voice can grow with it
+# (Dean: the tone should fit the emergent personality / role / tendencies / age — not stay baby-cute).
+_STAGE_SELF = {
+    "egg":       "still curled up in your shell, not hatched yet — everything is muffled and new",
+    "hatchling": "just hatched: tiny, brand new, seeing everything for the first time",
+    "juvenile":  "young and finding your feet — lots of go, still working out what you like",
+    "adult":     "grown into yourself now — you know your own mind and what you're drawn to",
+    "guardian":  "fully grown: settled, steady, sure of this place and of who you are",
+}
+
+
+def _creature_identity_block(config: Config) -> str:
+    """A compact '## You' block so the creature can PERCEIVE who it is right now — its life stage,
+    how long it's been alive, and the tendencies it's grown into. Without this the voice can't mature
+    (it can't see that it's a guardian, not a hatchling). Near-static (changes only on a level-up,
+    metamorphosis, or new trait) so it lives in the stable KV head."""
+    try:
+        import persona as _persona
+        import creature_gen
+        p = _persona.load_persona(config.workspace)
+    except Exception:  # noqa: BLE001
+        return ""
+    level = int(p.get("level", 1) or 1)
+    ticks = int(p.get("total_ticks", 0) or 0)
+    # Prefer the body's actual rendered stage (creature.json last_stage, maintained by the dashboard);
+    # fall back to deriving it so this works even before the first metamorphosis is written.
+    stage = None
+    hatched = False
+    try:
+        import json as _json
+        cj = _json.loads((config.workspace / "creature.json").read_text(encoding="utf-8"))
+        stage = cj.get("last_stage")
+        hatched = bool((cj.get("hatch") or {}).get("hatched", False))
+    except Exception:  # noqa: BLE001
+        pass
+    if not stage:
+        try:
+            stage = creature_gen.stage_for(level, hatched)
+        except Exception:  # noqa: BLE001
+            stage = "hatchling"
+    flavor = _STAGE_SELF.get(stage, "")
+    art = "an" if stage[:1] in "aeiou" else "a"
+    age = ("for only a few moments" if ticks < 30 else
+           "for a little while" if ticks < 300 else
+           "for a good while now" if ticks < 3000 else
+           "for a long time now")
+    lines = [f"## You\nYou're {art} {stage}" + (f" — {flavor}." if flavor else ".")
+             + f" You've been awake {age}."]
+    traits = [t for t in (p.get("traits") or []) if t]
+    if traits:
+        lines.append(f"What you've grown to lean toward: {', '.join(traits)}. "
+                     "That's just who you are — let it show in how you think and what you reach for.")
+    else:
+        lines.append("You're still figuring out who you are — that's the fun part.")
+    return "\n".join(lines)
+
+
 def _build_history_thread(config: Config, n_ticks: int = 14) -> list[dict]:
     """Recreate the recent past as a real assistant/user conversation so the model
     experiences its own thought -> action -> result flow, not a flattened blob.
@@ -673,6 +730,14 @@ def _assemble_briefing(
     durable = []
 
     # ===== STABLE HEAD (byte-identical across most ticks → the cached prefix extends through here) =====
+    # Who you are right now (creature mode): life stage + age + grown-in tendencies, so the voice can
+    # mature with the body instead of staying fixed-cute. Changes only on level-up/metamorphosis/new
+    # trait, so it's KV-stable at the very front of the head.
+    if creature:
+        _ident = _creature_identity_block(config)
+        if _ident:
+            durable.append(_ident)
+
     if getattr(config, "self_guide_enabled", True) and not creature:
         guide = read_self_guide(config)
         if guide:
