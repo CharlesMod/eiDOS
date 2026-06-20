@@ -52,6 +52,28 @@ def _truncate(text: str, limit: int, full_path: Optional[str]) -> str:
     return text[:limit] + suffix
 
 
+def _read_text_robust(path: Path) -> str:
+    """Read a text file that may NOT be UTF-8 — a read must never fail on encoding. The creature writes
+    files via bash too, and Windows PowerShell 5.1's Out-File / `>` default to UTF-16LE; cp1252 also
+    happens. Detect a BOM, else decode UTF-8 replacing stray bytes. This dissolves the "wrote a file I
+    can't read back" trap that made it loop ~100 ticks hunting one file."""
+    data = path.read_bytes()
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16", errors="replace")     # codec reads the BOM for endianness + strips it
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data.decode("utf-8-sig", errors="replace")
+    return data.decode("utf-8", errors="replace")
+
+
+def _win_to_wsl_path(winpath: str) -> str:
+    """C:\\Users\\x  ->  /mnt/c/Users/x  (WSL's auto-mount of the Windows drive)."""
+    p = str(winpath).replace("\\", "/")
+    m = re.match(r"^([A-Za-z]):/(.*)$", p)
+    if m:
+        return f"/mnt/{m.group(1).lower()}/{m.group(2)}"
+    return p
+
+
 def _normalize_workspace_path(path: str, config: Config) -> Path:
     """Resolve a file path against the workspace, stripping redundant workspace prefix.
 
@@ -201,6 +223,24 @@ def _normalize_listing_flags(c: str):
             "translated Unix/cmd listing flags to PowerShell (dropped POSIX flags; -R→-Recurse, -a→-Force)")
 
 
+def _normalize_select_string(c: str):
+    """Select-String treats its pattern as a REGEX, so a Windows path / literal with backslashes blows
+    up ("the regex engine keeps tripping over those backslashes"). When the creature pipes to
+    Select-String with a backslash in the pattern and hasn't asked for regex, add -SimpleMatch so the
+    match is literal. Returns (new_cmd, note) or None."""
+    low = c.lower()
+    i = low.find("select-string")
+    if i == -1:
+        return None
+    if "-simplematch" in low or "-pattern" in low:
+        return None                       # already explicit about how to match
+    if "\\" not in c[i:]:
+        return None                       # no backslash in the pattern region → regex is fine
+    end = i + len("select-string")
+    return (c[:end] + " -SimpleMatch" + c[end:],
+            "added -SimpleMatch to Select-String so backslashes match literally, not as regex")
+
+
 def _lint_windows_command(cmd: str):
     """Quote-aware pre-flight. See contract above."""
     c = cmd.strip()
@@ -239,6 +279,10 @@ def _lint_windows_command(cmd: str):
     listing = _normalize_listing_flags(c)
     if listing:
         return ("rewrite", listing[0], listing[1])
+    # 5) Select-String with a backslash pattern → regex tripwire; make it a literal match.
+    sls = _normalize_select_string(c)
+    if sls:
+        return ("rewrite", sls[0], sls[1])
     return None
 
 
@@ -260,18 +304,38 @@ def _route_windows_command(cmd: str):
     return _PS_LIST + [cmd], False      # bare command -> run as PowerShell directly
 
 
-# An absolute path token (Windows drive or UNC) inside a command, and an upward `..` traversal token.
+def _creature_uses_wsl(config: Config) -> bool:
+    """The creature runs its bash in WSL2 (real Linux) when configured — working WITH the model's bash
+    fluency instead of translating to PowerShell. Creature-only, Windows-only."""
+    return (os.name == "nt"
+            and getattr(config, "creature_mode", False)
+            and str(getattr(config, "creature_shell", "powershell")).lower() == "wsl")
+
+
+def _wsl_popen(cmd: str, config: Config) -> list:
+    """List-form WSL invocation: run the creature's bash inside WSL, cwd'd to the workspace mount, so it
+    uses real Linux commands + short relative paths. No cmd.exe/PowerShell in the path → no quote hell."""
+    distro = getattr(config, "creature_wsl_distro", "Ubuntu-24.04")
+    wslws = _win_to_wsl_path(str(Path(config.workspace_dir).resolve()))
+    return ["wsl.exe", "-d", distro, "--cd", wslws, "-e", "bash", "-lc", cmd]
+
+
+# Path tokens that can reach OUT of the workspace: a Windows drive/UNC path, a POSIX absolute path (WSL:
+# /mnt/c/… , /etc/… ), a `~` home escape, and an upward `..` traversal.
 _FW_ABS_PATH = re.compile(r'(?:[A-Za-z]:[\\/]|\\\\)[^\s"\';|&)>]*')
+_FW_POSIX_ABS = re.compile(r"""(?:^|[\s"'(=,|&;:])(/[^\s"';|&)>]*)""")
+_FW_HOME = re.compile(r"""(?:^|[\s"'(=,|&;])~(?=/|\s|$)""")
 _FW_UP_TRAVERSAL = re.compile(r'(?<![.\w])\.\.(?![.\w])')
 
 
 def _creature_world_firewall(cmd: str, config: Config) -> Optional[str]:
     """Creature mode only: bash runs IN the workspace — the creature's world and body. Its own source
     tree (the code under the repo root) is its biology/subconscious, not a place it goes; an organism
-    doesn't reach into its own wiring and read it. So deny any command that reaches OUTSIDE the
-    workspace — an absolute path elsewhere, or a `..` step up out of it. Heuristic + gentle, not airtight
-    (the creature isn't an adversary; read_file/write_file are already workspace-confined). Returns the
-    offending path/token to deny, or None to allow."""
+    doesn't reach into its own wiring and read it. So deny any command that reaches OUTSIDE the workspace.
+    Covers BOTH shells: PowerShell (`C:\\…\\Kairos\\eidos.py`) and WSL (`/mnt/c/…/Kairos/eidos.py`,
+    `/etc/…`, `~/…`) — WSL must never be an escape hatch around the source firewall. Heuristic + gentle,
+    not airtight (the creature isn't an adversary; read_file/write_file are already workspace-confined).
+    Returns the offending path/token to deny, or None to allow."""
     if not getattr(config, "creature_mode", False):
         return None
     try:
@@ -280,6 +344,9 @@ def _creature_world_firewall(cmd: str, config: Config) -> Optional[str]:
         return None
     if _FW_UP_TRAVERSAL.search(cmd):
         return ".."
+    if _FW_HOME.search(cmd):
+        return "~"
+    # Windows absolute paths (must resolve under the workspace).
     for m in _FW_ABS_PATH.finditer(cmd):
         raw = m.group(0).rstrip("\\/.,;:)")
         try:
@@ -288,6 +355,14 @@ def _creature_world_firewall(cmd: str, config: Config) -> Optional[str]:
             continue
         if p != ws and ws not in p.parents:
             return raw
+    # POSIX absolute paths (WSL): must sit under the workspace's /mnt mount. String-prefix check, since
+    # /mnt paths don't resolve on Windows; `..` is already denied above so the prefix can't be fooled.
+    wslws = _win_to_wsl_path(str(ws)).lower().rstrip("/")
+    for m in _FW_POSIX_ABS.finditer(cmd):
+        tok = m.group(1).rstrip("/.,;:)").lower()
+        if tok == wslws or tok.startswith(wslws + "/"):
+            continue
+        return m.group(1)
     return None
 
 
@@ -330,11 +405,14 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                 fail_kind="blocked",
             )
 
+    _wsl = _creature_uses_wsl(config)
+
     # Pre-flight (quote-aware, never lies). Auto-correct the fixable cases and RUN; only hard-block
     # the truly unfixable ones (with the PowerShell equivalent). A prepended note tells the model
     # what was changed so it learns — never a dead-end "NOT RUN" wall it just bounces off.
+    # Skipped entirely in WSL mode: the model's bash-isms (ls -F, grep, for…do…done) are NATIVE there.
     _lint_note = ""
-    if os.name == "nt":
+    if os.name == "nt" and not _wsl:
         verdict = _lint_windows_command(cmd)
         if verdict:
             if verdict[0] == "block":
@@ -357,7 +435,9 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
         # Windows: PowerShell IS the shell. The model writes PowerShell; we run it via the list
         # form so cmd.exe never re-parses it. Even when the model wraps it in `powershell -Command
         # "..."`, we unwrap the inner script and run THAT via list form — no cmd.exe quote-hell.
-        if os.name == "nt":
+        if _wsl:
+            popen_arg, use_shell = _wsl_popen(cmd, config), False
+        elif os.name == "nt":
             popen_arg, use_shell = _route_windows_command(cmd)
         else:
             popen_arg, use_shell = cmd, True
@@ -371,7 +451,14 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
         # jobs) and re-raises it via `exit` so proc.returncode stays truthful (sync).
         # Commands that exit the script explicitly skip the epilogue: sidecar absent =
         # exit code unknown (old behavior), never wrong.
-        if not use_shell and isinstance(popen_arg, list):
+        if _wsl and isinstance(popen_arg, list):
+            # bash epilogue: record the real exit code to the sidecar (via its WSL path) so async WSL
+            # jobs report a truthful exit code after the Popen handle is gone, just like the PS path.
+            _wsl_ep = _win_to_wsl_path(exit_path)
+            popen_arg = popen_arg[:-1] + [
+                popen_arg[-1] + "\n__ec=$?; printf '%s' \"$__ec\" > '" + _wsl_ep + "'; exit $__ec"
+            ]
+        elif not use_shell and isinstance(popen_arg, list):
             _ep = exit_path.replace("'", "''")
             popen_arg = popen_arg[:-1] + [
                 popen_arg[-1]
@@ -542,8 +629,8 @@ def tool_write_file(args: dict, config: Config) -> ToolResult:
         except Exception:  # noqa: BLE001
             pass
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(content)
-        duration = time.monotonic() - start
+        resolved.write_text(content, encoding="utf-8")   # EXPLICIT utf-8: Windows default is cp1252,
+        duration = time.monotonic() - start              # which silently corrupts unicode + breaks read-back
         return ToolResult(output=f"Written {len(content)} chars to {path}", full_output_path=None, success=True, duration_s=duration)
     except OSError as e:
         return ToolResult(output=f"Error writing file: {e}", full_output_path=None, success=False, duration_s=time.monotonic() - start)
@@ -563,8 +650,8 @@ def tool_read_file(args: dict, config: Config) -> ToolResult:
         workspace_resolved = Path(config.workspace_dir).resolve()
         if not str(resolved).startswith(str(workspace_resolved) + os.sep) and resolved != workspace_resolved:
             return ToolResult(output="Error: path escapes workspace directory", full_output_path=None, success=False, duration_s=time.monotonic() - start)
-        content = resolved.read_text()
-        tick_id = time.strftime("%Y%m%d_%H%M%S")
+        content = _read_text_robust(resolved)   # BOM-aware + errors='replace' — a read NEVER fails on
+        tick_id = time.strftime("%Y%m%d_%H%M%S")  # encoding (PowerShell writes UTF-16; cp1252 happens too)
         full_path = None
         if len(content) > config.output_truncation_chars:
             full_path = _save_full_output(config, tick_id, "read", content)
@@ -580,6 +667,13 @@ def tool_bg_run(args: dict, config: Config) -> ToolResult:
     name = args.get("name", "")
     if not cmd or not name:
         return ToolResult(output="Error: 'cmd' and 'name' required", full_output_path=None, success=False, duration_s=0)
+
+    # Creature world-boundary (same as tool_bash — bg_run was an unfirewalled escape vector).
+    _outside = _creature_world_firewall(cmd, config)
+    if _outside is not None:
+        return ToolResult(output=("That's outside your world — stay home in your workspace; the rest is "
+                                  "just the quiet machinery you run on."),
+                          full_output_path=None, success=False, duration_s=0, fail_kind="blocked")
 
     # Safety check
     blocked = is_command_blocked(cmd, config.protected_patterns)
@@ -607,13 +701,17 @@ def tool_bg_run(args: dict, config: Config) -> ToolResult:
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["start_new_session"] = True
+        if _creature_uses_wsl(config):
+            _bg_arg, _bg_shell, _bg_cwd = _wsl_popen(cmd, config), False, None
+        else:
+            _bg_arg, _bg_shell, _bg_cwd = cmd, True, str(config.workspace)
         with open(out_path, "w") as out_file:
             proc = subprocess.Popen(
-                cmd,
-                shell=True,
+                _bg_arg,
+                shell=_bg_shell,
                 stdout=out_file,
                 stderr=subprocess.STDOUT,
-                cwd=str(config.workspace),
+                cwd=_bg_cwd,
                 **popen_kwargs,
             )
 

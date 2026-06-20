@@ -136,6 +136,12 @@ class Config:
     # --- Creature mode (V3): the undisturbed-creature experiment. Swaps in SYSTEM_PROMPT_CREATURE,
     #     drops the task/objective/mission scaffolding, and runs without an assigned goal. ---
     creature_mode: bool = False
+    # The creature's shell. "wsl" runs its bash through WSL2 (real Linux: ls/grep/find/cat/sed, UTF-8,
+    # forward-slash paths) — working WITH the model's bash fluency instead of translating it to
+    # PowerShell. "powershell" keeps the Windows shell + the dialect lints. Creature-only; the house-AI
+    # eiDOS always uses PowerShell (it manages Windows services). The source firewall covers both shells.
+    creature_shell: str = "wsl"
+    creature_wsl_distro: str = "Ubuntu-24.04"   # must auto-mount /mnt/c (the default distro may not)
 
     # --- Self-improvement subsystem (self-guide, listening hold, git safety, self-edit) ---
     self_guide_enabled: bool = True
@@ -331,6 +337,8 @@ def load_config(path: str = "config.toml") -> Config:
             data = tomllib.load(f)
 
         config.creature_mode = data.get("creature_mode", config.creature_mode)
+        config.creature_shell = data.get("creature_shell", config.creature_shell)
+        config.creature_wsl_distro = data.get("creature_wsl_distro", config.creature_wsl_distro)
 
         llm = data.get("llm", {})
         config.llm_url = llm.get("url", config.llm_url)

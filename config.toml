@@ -2,6 +2,12 @@
 # framing, no assigned goal. The full afferent nervous system is active either way; this just frees
 # the creature from house-AI chores so we can watch what it does. Set false for the normal house eidos.
 creature_mode = true
+# The creature's shell: "wsl" runs its bash through WSL2 (real Linux — ls/grep/find/cat/sed, UTF-8,
+# forward-slash paths), working WITH the model's bash fluency instead of translating to PowerShell.
+# The source firewall covers WSL too (/mnt/c/...Kairos is blocked). The house-AI eiDOS always uses
+# PowerShell. Set "powershell" to revert. Distro must auto-mount /mnt/c.
+creature_shell = "wsl"
+creature_wsl_distro = "Ubuntu-24.04"
 
 [llm]
 # House nexus mind — Gemma-4-12B "house-ai" on gamingPC via llama.cpp (OpenAI-compatible).

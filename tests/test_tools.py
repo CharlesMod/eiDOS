@@ -501,6 +501,80 @@ class TestListingFlagNormalizer(unittest.TestCase):
         self.assertIsNone(self._rw("Get-Content a.json | Select-String 'x'"))
 
 
+class TestWslShellAndEncoding(unittest.TestCase):
+    """The creature's bash runs in WSL2 (real Linux) — working WITH the model's bash fluency. The source
+    firewall must follow it into WSL (no /mnt/c escape hatch), and file I/O must be encoding-robust."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.config = Config()
+        self.config.workspace_dir = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.config.workspace_dir)
+        self.config.creature_mode = True
+        self.config.creature_shell = "wsl"
+        self.config.creature_wsl_distro = "Ubuntu-24.04"
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_win_to_wsl_path(self):
+        from tools import _win_to_wsl_path
+        self.assertEqual(_win_to_wsl_path(r"C:\Users\x\workspace"), "/mnt/c/Users/x/workspace")
+
+    def test_uses_wsl_gating(self):
+        from tools import _creature_uses_wsl
+        if os.name != "nt":
+            self.skipTest("wsl routing is windows-only")
+        self.assertTrue(_creature_uses_wsl(self.config))
+        self.config.creature_shell = "powershell"
+        self.assertFalse(_creature_uses_wsl(self.config))
+        self.config.creature_shell = "wsl"; self.config.creature_mode = False
+        self.assertFalse(_creature_uses_wsl(self.config))   # house-AI keeps PowerShell
+
+    def test_wsl_popen_shape(self):
+        from tools import _wsl_popen
+        arg = _wsl_popen("ls -F", self.config)
+        self.assertEqual(arg[0], "wsl.exe")
+        self.assertIn("Ubuntu-24.04", arg)
+        self.assertIn("--cd", arg)
+        self.assertEqual(arg[-3:], ["bash", "-lc", "ls -F"])
+
+    def test_firewall_blocks_wsl_source_escape(self):
+        from tools import _creature_world_firewall as fw
+        ws_wsl = "/mnt/c" + self.tmp.replace("\\", "/").split(":", 1)[1] + "/workspace"
+        parent = ws_wsl.rsplit("/", 1)[0]
+        self.assertIsNotNone(fw(f"cat {parent}/eidos.py", self.config))   # source via mount → blocked
+        self.assertIsNotNone(fw("cat /etc/passwd", self.config))
+        self.assertIsNotNone(fw("cat ~/.bashrc", self.config))
+        self.assertIsNotNone(fw("cat ../prompts.py", self.config))
+
+    def test_firewall_allows_workspace_linux_commands(self):
+        from tools import _creature_world_firewall as fw
+        for ok in ("ls -F", "grep -r fins .", "cat creature.json", "find . -name '*.json'",
+                   "ls | head -5"):
+            self.assertIsNone(fw(ok, self.config), ok)
+
+    def test_read_text_robust_handles_encodings(self):
+        from tools import _read_text_robust
+        p = Path(self.config.workspace_dir)
+        (p / "u8.txt").write_bytes("héllo ✦".encode("utf-8"))
+        (p / "u16.txt").write_bytes("héllo".encode("utf-16"))              # PS Out-File: UTF-16LE + BOM
+        (p / "bad.txt").write_bytes(b"ok\xff\xfegarbage")                  # not valid utf-8
+        self.assertEqual(_read_text_robust(p / "u8.txt"), "héllo ✦")
+        self.assertEqual(_read_text_robust(p / "u16.txt"), "héllo")
+        self.assertIn("ok", _read_text_robust(p / "bad.txt"))              # never raises
+
+    def test_write_then_read_roundtrip_unicode(self):
+        ws = self.config.workspace_dir
+        tool_write_file({"path": "note.txt", "content": "spark ✦ café"}, self.config)
+        r = tool_read_file({"path": "note.txt"}, self.config)
+        self.assertTrue(r.success)
+        self.assertIn("✦", r.output)
+        # written as real UTF-8 on disk (not cp1252)
+        self.assertEqual(Path(ws, "note.txt").read_bytes(), "spark ✦ café".encode("utf-8"))
+
+
 class TestSkillWatchdog(unittest.TestCase):
     """Tick 342 reproduction: a self-authored skill that makes a blocking network call with no timeout
     must NOT freeze the tick loop. execute_tool runs skills under a wall-clock watchdog; built-in tools
