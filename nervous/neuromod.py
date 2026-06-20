@@ -65,9 +65,14 @@ class NeuromodulatoryState:
         valence toward the reward's sign (it felt good / bad). Transient — interoception still sets the
         baseline mood; this is the phasic dopamine bump on top."""
         with self._lock:
-            # Capped phasic bump: a high-RPE newborn (every action novel, V starts at 0) would otherwise
-            # slam arousal to 1.0 every tick. A single surprise lifts arousal by at most 0.15.
-            self.arousal = min(1.0, self.arousal + min(0.15, 0.5 * abs(float(rpe))))
+            # Phasic dopamine: ONLY a genuinely large prediction error spikes arousal, and only by a
+            # small bounded amount. Routine ticks (small RPE) must NOT pump arousal every tick, or a busy
+            # creature — and especially a newborn, where everything is mildly surprising — never relaxes
+            # to its tonic level. As the world-model learns and RPE shrinks, these spikes fade and the
+            # creature calms on its own (habituation), instead of staying pinned "vigilant".
+            arpe = abs(float(rpe))
+            if arpe > 0.5:
+                self.arousal = min(1.0, self.arousal + min(0.1, 0.15 * arpe))
             self.valence = max(-1.0, min(1.0, self.valence + 0.3 * float(reward)))
 
     @staticmethod

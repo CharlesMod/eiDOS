@@ -47,6 +47,20 @@ class TestNeuromod(unittest.TestCase):
         nm.bump(0.5)
         self.assertGreater(nm.arousal, a0)          # a startle spike
 
+    def test_reward_arousal_is_phasic_not_per_tick(self):
+        # Routine small-RPE ticks must NOT pump arousal every tick (the newborn-creature pin); only a
+        # genuine surprise spikes it, and only by a small bounded amount.
+        bus = NervousBus()
+        self.addCleanup(bus.close)
+        nm = NeuromodulatoryState(bus, baseline_arousal=0.3)
+        base = nm.arousal
+        for _ in range(20):
+            nm.observe_reward(rpe=0.1, reward=0.05)      # 20 routine ticks
+        self.assertLessEqual(nm.arousal, base + 1e-9)    # arousal untouched — it can relax to baseline
+        nm.observe_reward(rpe=1.0, reward=0.5)           # a real surprise
+        self.assertGreater(nm.arousal, base)             # spikes
+        self.assertLessEqual(nm.arousal, base + 0.1 + 1e-9)   # but bounded
+
     def test_modulation_published_retained(self):
         bus = NervousBus()
         self.addCleanup(bus.close)
