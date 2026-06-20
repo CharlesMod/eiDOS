@@ -19,7 +19,7 @@ from config import Config
 from memory import read_goal, read_plan, read_recent_observations, read_interventions, read_recent_thoughts, read_self_guide
 from env_snapshot import generate as generate_env_snapshot
 from env_snapshot import generate_alerts as generate_env_alerts
-from prompts import SYSTEM_PROMPT_BRIEFING, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED
+from prompts import SYSTEM_PROMPT_BRIEFING, SYSTEM_PROMPT_CREATURE, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED
 
 logger = logging.getLogger("eidos.context")
 
@@ -635,9 +635,10 @@ def _assemble_briefing(
     Designed for tight context windows (~6500 chars / ~1870 tokens).
     """
     messages = []
+    creature = getattr(config, "creature_mode", False)   # undisturbed-creature mode: no task framing
 
     # 1. Standing Orders (system message) — compressed prompt
-    system = SYSTEM_PROMPT_BRIEFING.format(workspace=str(config.workspace))
+    system = (SYSTEM_PROMPT_CREATURE if creature else SYSTEM_PROMPT_BRIEFING).format(workspace=str(config.workspace))
     messages.append({"role": "system", "content": system})
 
     # --- Durable context in KV tiers (BIBLE §2.11: stable cached prefix + delta prompting).
@@ -652,7 +653,7 @@ def _assemble_briefing(
     durable = []
 
     # ===== STABLE HEAD (byte-identical across most ticks → the cached prefix extends through here) =====
-    if getattr(config, "self_guide_enabled", True):
+    if getattr(config, "self_guide_enabled", True) and not creature:
         guide = read_self_guide(config)
         if guide:
             durable.append(
@@ -672,14 +673,15 @@ def _assemble_briefing(
     except Exception:  # noqa: BLE001
         pass
 
-    goal = read_goal(config)
-    if goal:
-        durable.append(f"## Mission\n{_truncate(goal, config.context_goal_max_chars, 'goal')}")
-    else:
-        durable.append("## Mission\n(No goal set.)")
+    if not creature:                       # a creature has no mission; the prompt covers its being
+        goal = read_goal(config)
+        if goal:
+            durable.append(f"## Mission\n{_truncate(goal, config.context_goal_max_chars, 'goal')}")
+        else:
+            durable.append("## Mission\n(No goal set.)")
 
     # ===== SEMI tier (changes every few ticks) =====
-    plan = read_plan(config)
+    plan = "" if creature else read_plan(config)
     if plan:
         durable.append(f"## Plan\n{_truncate(plan, config.context_plan_max_chars, 'plan')}")
 
@@ -699,7 +701,7 @@ def _assemble_briefing(
     if relevant:
         durable.append("## Possibly relevant from memory\n" + relevant)
 
-    backlog = _backlog_panel(config)
+    backlog = None if creature else _backlog_panel(config)
     if backlog:
         durable.append(backlog)
 

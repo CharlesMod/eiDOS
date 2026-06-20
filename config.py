@@ -133,6 +133,10 @@ class Config:
     # Mock mode
     mock_mode: bool = False
 
+    # --- Creature mode (V3): the undisturbed-creature experiment. Swaps in SYSTEM_PROMPT_CREATURE,
+    #     drops the task/objective/mission scaffolding, and runs without an assigned goal. ---
+    creature_mode: bool = False
+
     # --- Self-improvement subsystem (self-guide, listening hold, git safety, self-edit) ---
     self_guide_enabled: bool = True
     world_state_max_items: int = 12              # world-model panel entries shown per tick
@@ -283,6 +287,8 @@ def load_config(path: str = "config.toml") -> Config:
     if config_path.exists():
         with open(config_path, "rb") as f:
             data = tomllib.load(f)
+
+        config.creature_mode = data.get("creature_mode", config.creature_mode)
 
         llm = data.get("llm", {})
         config.llm_url = llm.get("url", config.llm_url)

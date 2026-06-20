@@ -677,9 +677,9 @@ def run_loop(config: Config, persona=None, wal=None):
             logger.info("Listening hold released — resuming autonomous loop")
             listening_since = None
 
-        # --- Check for goal ---
-        goal = read_goal(config)
-        if not goal:
+        # --- Check for goal --- (creature mode has no assignment: it runs regardless)
+        goal = read_goal(config) or ""
+        if not goal and not getattr(config, "creature_mode", False):
             if idle_since is None:
                 idle_since = time.time()
             if config.mock_mode:
@@ -687,8 +687,7 @@ def run_loop(config: Config, persona=None, wal=None):
                 break
             _interruptible_sleep(config)
             continue
-        else:
-            idle_since = None
+        idle_since = None
 
         # --- Goal change detection (hash tracking only) ---
         import hashlib
