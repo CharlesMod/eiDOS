@@ -38,10 +38,11 @@ class ChangeDetector:
     """An organ: re-emits a `change` event only when an input's value (by `key_of`) differs from the
     last seen for its (source, modality, kind). Forwards only the delta upward."""
 
-    def __init__(self, bus, *, topics=None, key_of=None):
+    def __init__(self, bus, *, topics=None, key_of=None, self_model=None):
         self.bus = bus
         self.novelty = Novelty()
         self.key_of = key_of or (lambda ev, payload: payload)
+        self.self_model = self_model   # P5: efference copy — cancel self-caused change (agency)
         self.sub = bus.subscribe(topics=topics)
         self._stop = threading.Event()
         self._thread = None
@@ -51,10 +52,14 @@ class ChangeDetector:
 
     def step(self, ev, payload=None):
         """Process one event synchronously; returns True iff a `change` was emitted."""
-        if self.novelty.is_novel(self._key(ev), self.key_of(ev, payload)):
-            self._emit_change(ev, payload)
-            return True
-        return False
+        key = self._key(ev)
+        value = self.key_of(ev, payload)
+        if not self.novelty.is_novel(key, value):
+            return False
+        if self.self_model is not None and self.self_model.is_expected(key, value):
+            return False   # self-caused change (efference copy) — cancelled: the sense of agency
+        self._emit_change(ev, payload)
+        return True
 
     def _emit_change(self, src_ev, payload):
         ev = NervousEvent(SCHEMA_VERSION, "change", Kind.change, src_ev.modality, Delivery.fungible,
