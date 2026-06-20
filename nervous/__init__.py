@@ -14,6 +14,7 @@ from .arbiter import GpuArbiter, Lease, PRI_BACKGROUND, PRI_MIND, PRI_SPEECH, PR
 from .change import Novelty, ChangeDetector
 from .efferent import Effector, SelfModel, ReflexArc, Proprioceptor
 from .neuromod import NeuromodulatoryState
+from .exteroception import PreFilter, FrameDiffFilter, VadFilter, Exteroceptor
 
 
 def build_bus(config, *, payload_store=None):
@@ -37,4 +38,5 @@ __all__ = [
     "Novelty", "ChangeDetector",
     "Effector", "SelfModel", "ReflexArc", "Proprioceptor",
     "NeuromodulatoryState",
+    "PreFilter", "FrameDiffFilter", "VadFilter", "Exteroceptor",
 ]
