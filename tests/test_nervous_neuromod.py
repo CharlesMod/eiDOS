@@ -24,10 +24,20 @@ class TestNeuromod(unittest.TestCase):
         nm = NeuromodulatoryState(bus, baseline_arousal=0.3)
         a0 = nm.arousal
         for _ in range(20):
-            nm.observe_interoception({"bars": {"vram": "critical"}})
+            nm.observe_interoception({"bars": {"gpu_temp": "critical"}})   # a real stressor (heat)
         self.assertGreater(nm.arousal, a0)          # the body's stress raises arousal
         self.assertLess(nm.valence, 0.0)            # and lowers valence
         self.assertIn(nm.mood(), ("vigilant", "distressed", "uneasy", "tense"))
+
+    def test_high_vram_does_not_sweat(self):
+        # high VRAM is the resident mind (high usage BY DESIGN) — it must not raise arousal or sour mood.
+        bus = NervousBus()
+        self.addCleanup(bus.close)
+        nm = NeuromodulatoryState(bus, baseline_arousal=0.3)
+        for _ in range(20):
+            nm.observe_interoception({"bars": {"vram": "critical"}})
+        self.assertEqual(nm.valence, 0.0)           # pressure = 0 -> valence unsoured
+        self.assertEqual(nm.mood(), "calm")         # an at-ease body, a calm mind
 
     def test_bump_raises_arousal(self):
         bus = NervousBus()

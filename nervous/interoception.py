@@ -18,7 +18,7 @@ import threading
 import time
 
 from .event import NervousEvent, Kind, Modality, Delivery, SCHEMA_VERSION
-from .felt import felt_state
+from .felt import felt_state, stress_bars
 
 # ascending pressure: ok < elevated < high < critical
 LEVELS = ["ok", "elevated", "high", "critical"]
@@ -100,7 +100,9 @@ def felt_bars(t):
 
 
 def worst_salience(bars):
-    return max((_SEVERITY.get(v, 0.0) for v in bars.values()), default=0.0)
+    # Baseline systems (the resident mind filling VRAM, by design) are posture, not threat — they never
+    # make the body salient. You don't notice your body until something is actually wrong.
+    return max((_SEVERITY.get(v, 0.0) for v in stress_bars(bars).values()), default=0.0)
 
 
 class Interoception:

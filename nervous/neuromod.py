@@ -12,6 +12,7 @@ import threading
 import time
 
 from .event import NervousEvent, Kind, Modality, Delivery, SCHEMA_VERSION
+from .felt import stress_bars
 
 _SEVERITY = {None: 0.0, "ok": 0.0, "elevated": 0.4, "high": 0.7, "critical": 1.0}
 
@@ -32,7 +33,9 @@ class NeuromodulatoryState:
     def observe_interoception(self, felt_state):
         """Resource pressure raises arousal and lowers valence (the body's stress shows as mood)."""
         bars = felt_state.get("bars", {}) if isinstance(felt_state, dict) else {}
-        pressure = max((_SEVERITY.get(v, 0.0) for v in bars.values()), default=0.0)
+        # Only genuine stress raises arousal/lowers valence — high VRAM (the resident mind, by design)
+        # is posture, not a stressor, so the creature never "sweats" over its own brain being resident.
+        pressure = max((_SEVERITY.get(v, 0.0) for v in stress_bars(bars).values()), default=0.0)
         with self._lock:
             target = max(self.baseline, pressure)
             self.arousal = self.arousal * self.decay + target * (1.0 - self.decay)

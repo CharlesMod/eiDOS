@@ -1292,6 +1292,38 @@ def _eidos_should_run_path(config):
     return config.workspace / "eidos.should_run"
 
 
+def _eidos_restart_breadcrumb(config):
+    """Set by an operator START: the dashboard exit that follows is an INTENTIONAL full-service restart
+    (reload ALL current code — supervisor + the eidos child + the nervous system), not a crash. The
+    next boot honors it by force-respawning a FRESH, paused eidos even if the old one survived the
+    restart; the outgoing watchdog stays quiet about eidos's death during the stop."""
+    return config.workspace / "eidos.intentional_restart"
+
+
+# The live HTTP server, so a control action can gracefully stop it to restart the service (set in main()).
+_HTTP_SERVER = None
+
+
+def _schedule_dashboard_exit(delay_s=0.8):
+    """Exit this process shortly so nssm re-launches the dashboard from disk (fresh supervisor code).
+    Runs in a daemon timer so the triggering HTTP response flushes first. nssm restarts the app on exit
+    (a bare kill already respawns it — see CLAUDE.md), and the new boot brings eidos back paused."""
+    import os, threading, time
+
+    def _bye():
+        time.sleep(delay_s)
+        try:
+            srv = _HTTP_SERVER
+            if srv is not None:
+                threading.Thread(target=srv.shutdown, daemon=True).start()  # stop accepting; don't block
+                time.sleep(0.3)
+        except Exception:  # noqa: BLE001
+            pass
+        os._exit(0)   # hard exit so nothing can wedge the restart; nssm relaunches from disk
+
+    threading.Thread(target=_bye, name="dashboard-restart", daemon=True).start()
+
+
 # Death event (phase 4b, ARCH #1): the spawn HOLDS the Popen handle and a daemon thread
 # wait()s on it, so a child exit is an interrupt to the watchdog — not something a 5s
 # tasklist poll discovers late. The pid file + tasklist liveness remain ground truth for
@@ -1366,12 +1398,15 @@ def _ctrl_reset(config, mode):
 
 
 def _ctrl_start(config):
+    """START = (re)start the service so the CURRENT code goes live, with no shell. On Windows-under-nssm
+    we restart the whole service (exit -> nssm relaunches the supervisor from disk), and its boot
+    force-respawns a fresh, PAUSED eidos — so one click reloads the supervisor, the eidos child, AND the
+    nervous system. Off-Windows / manual run (no supervisor): (re)start just the eidos child in place.
+    Either way eidos comes up PAUSED awaiting GO."""
     import subprocess, os
     pidfile, pausefile, kdir = _ctrl_paths(config)
-    st = _ctrl_status(config)
-    if st["running"]:
-        return {"ok": False, "message": f"already running (pid {st['pid']})", **st}
-    # Ensure GPU services are running before spawning eidos (may have been freed by STOP).
+    # Ensure GPU services are up (STOP frees them). They're independent services, so they keep loading
+    # even across the dashboard restart below.
     llama_note = ""
     if os.name == "nt":
         svc_list = ",".join(f"'{s}'" for s in _GPU_SERVICES_START)
@@ -1384,7 +1419,7 @@ def _ctrl_start(config):
                 ["powershell", "-NonInteractive", "-Command", ps],
                 capture_output=True, text=True, timeout=60)
             if r.returncode == 0:
-                llama_note = " (GPU services starting — wait ~20s before clicking GO)"
+                llama_note = " (GPU services starting — give the mind ~20s before GO)"
         except Exception:  # noqa: BLE001
             pass
     pausefile.write_text("paused on start - click GO to begin")  # boot PAUSED
@@ -1393,6 +1428,21 @@ def _ctrl_start(config):
         (config.state_dir / "rollback_attempted").unlink()  # fresh operator start re-arms auto-recovery
     except OSError:
         pass
+    if os.name == "nt":
+        # Restart the whole service: drop a breadcrumb (boot force-respawns fresh eidos + quiets the
+        # outgoing watchdog), then exit so nssm relaunches the dashboard on current code.
+        _eidos_restart_breadcrumb(config).write_text(str(time.time()))
+        _schedule_dashboard_exit()
+        return {"ok": True, "restarting": True,
+                "message": f"restarting service to load current code — reconnecting, then click GO{llama_note}",
+                **_ctrl_status(config)}
+    # Fallback (no service supervisor): (re)start the eidos child in place on fresh code.
+    st = _ctrl_status(config)
+    if st["running"]:
+        try:
+            subprocess.run(["kill", "-9", str(st["pid"])], capture_output=True, timeout=15)
+        except Exception:  # noqa: BLE001
+            pass
     pid = _spawn_eidos(config)
     return {"ok": True, "message": f"started PAUSED (pid {pid}) - click GO to wake it{llama_note}",
             **_ctrl_status(config)}
@@ -1679,6 +1729,15 @@ def _watchdog_loop(config):
                 _pid_cache.clear()   # bypass the liveness cache — react to the death NOW
             if not _eidos_should_run_path(config).exists():
                 continue  # operator stopped it — do not resurrect
+            # Operator START triggers a full service restart; during that brief window ignore eidos's
+            # death (no false "you died" note to the creature, no premature respawn) — the post-restart
+            # boot brings it back fresh and paused.
+            try:
+                _crumb = _eidos_restart_breadcrumb(config)
+                if _crumb.exists() and (time.time() - _crumb.stat().st_mtime) < 30:
+                    continue
+            except OSError:
+                pass
             try:
                 pid = int((config.workspace / "eidos.pid").read_text().strip())
             except Exception:  # noqa: BLE001
@@ -1890,9 +1949,46 @@ def main():
     except Exception as _bre:  # noqa: BLE001
         print(f"[dashboard] boot-reconcile error: {_bre}")
 
+    # Boot-respawn eiDOS so an operator START (which restarts this whole service) — or any other
+    # dashboard restart while eidos should be running — brings the consciousness loop back WITHOUT a
+    # second click. Done BEFORE the watchdog arms, so there's no respawn race and no false "you died"
+    # note reaches the creature. An operator-restart breadcrumb forces FRESH code: any eidos that
+    # survived the restart is killed first so it can't keep running stale code; a plain restart instead
+    # preserves a surviving eidos (continuity) and only respawns if it actually died.
+    try:
+        import subprocess
+        _crumb = _eidos_restart_breadcrumb(config)
+        _intentional = _crumb.exists()
+        if _intentional:
+            try:
+                _crumb.unlink()
+            except OSError:
+                pass
+        if _eidos_should_run_path(config).exists():
+            try:
+                _live = int((config.workspace / "eidos.pid").read_text().strip())
+            except Exception:  # noqa: BLE001
+                _live = 0
+            _alive = bool(_live) and _ctrl_pid_alive(_live)
+            if _intentional and _alive:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/PID", str(_live), "/T", "/F"], capture_output=True, timeout=15)
+                else:
+                    subprocess.run(["kill", "-9", str(_live)], capture_output=True, timeout=15)
+                _alive = False
+            if not _alive:
+                _bp = _spawn_eidos(config)
+                _paused = (config.workspace / "paused").exists()
+                print(f"[dashboard] boot-respawn eiDOS pid {_bp} "
+                      f"({'PAUSED' if _paused else 'running'}{' · operator restart' if _intentional else ''})")
+    except Exception as _bre2:  # noqa: BLE001 — boot must proceed even if respawn fails
+        print(f"[dashboard] boot-respawn error: {_bre2}")
+
     handler = _make_handler(config)
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     server.daemon_threads = True
+    global _HTTP_SERVER
+    _HTTP_SERVER = server   # so a control action can gracefully stop the server to restart the service
     import threading
     threading.Thread(target=_watchdog_loop, args=(config,), daemon=True).start()
     print("[watchdog] armed — eiDOS auto-restart-on-crash enabled")

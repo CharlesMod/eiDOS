@@ -20,16 +20,21 @@ def reader(**vals):
 class TestTransfer(unittest.TestCase):
     def test_to_felt_maps_bars_to_qualia(self):
         self.assertEqual(to_felt({"ram": "ok", "vram": "ok"})["overall"], "at ease")
-        self.assertEqual(to_felt({"ram": "ok", "vram": "critical"})["overall"], "in distress")
+        # a GENUINE stressor (thermal) escalates to distress...
+        self.assertEqual(to_felt({"ram": "ok", "gpu_temp": "critical"})["overall"], "in distress")
+        # ...but high VRAM is the resident mind by design — felt as calm posture, never distress.
+        self.assertEqual(to_felt({"ram": "ok", "vram": "critical"})["overall"], "at ease")
         f = to_felt({"vram": "high", "cpu": "elevated"})
-        self.assertEqual(f["overall"], "strained")            # worst bar = high -> strained
-        self.assertIn("GPU tight", f["felt"])                 # the qualia, not "vram: high"
-        self.assertIn("working hard", f["felt"])
+        self.assertEqual(f["overall"], "a little tense")      # worst STRESS bar = cpu (vram doesn't count)
+        self.assertIn("working hard", f["felt"])              # the cpu qualia
+        self.assertIn("mind resident on the GPU", f["felt"])  # vram felt as calm posture
+        self.assertNotIn("GPU tight", f["felt"])              # never the old aversive framing
 
     def test_felt_state_carries_bars_and_qualia(self):
         s = felt_state({"vram": "critical", "disk": None})
         self.assertEqual(s["bars"], {"vram": "critical"})     # None bars dropped
-        self.assertEqual(s["overall"], "in distress")
+        self.assertEqual(s["overall"], "at ease")             # resident mind (baseline) is not distress
+        self.assertEqual(felt_state({"gpu_temp": "critical"})["overall"], "in distress")  # real stress escalates
 
 
 class TestRenderView(unittest.TestCase):
@@ -38,11 +43,11 @@ class TestRenderView(unittest.TestCase):
         self.addCleanup(bus.close)
         view = FeltStateView(bus)
         self.addCleanup(view.close)
-        Interoception(bus, reader=reader(vram_used_pct=99)).emit()
+        Interoception(bus, reader=reader(vram_used_pct=99, gpu_temp_c=95)).emit()
         cur = view.current()
         self.assertIsNotNone(cur)
-        self.assertEqual(cur["overall"], "in distress")        # read from the projection, not recomputed
-        self.assertEqual(cur["bars"]["vram"], "critical")
+        self.assertEqual(cur["overall"], "in distress")        # from thermal stress (read from the projection)
+        self.assertEqual(cur["bars"]["vram"], "critical")      # resident mind still reported as a bar
 
     def test_truth_rendering_view_and_context_agree(self):
         # the render and the deliberative core read the SAME retained projection -> they cannot
@@ -53,7 +58,7 @@ class TestRenderView(unittest.TestCase):
         self.addCleanup(view.close)
         aff = AfferentContext(bus, max_chars=2000)
         self.addCleanup(aff.close)
-        Interoception(bus, reader=reader(vram_used_pct=95)).emit()   # vram high -> strained
+        Interoception(bus, reader=reader(cpu_pct=90)).emit()    # cpu high -> strained (a real stressor)
         block, _ = aff.drain_block()
         cur = view.current()
         self.assertEqual(cur["overall"], "strained")
@@ -62,7 +67,7 @@ class TestRenderView(unittest.TestCase):
     def test_late_view_gets_current_felt(self):
         bus = NervousBus()
         self.addCleanup(bus.close)
-        Interoception(bus, reader=reader(vram_used_pct=99)).emit()   # published BEFORE the view exists
+        Interoception(bus, reader=reader(gpu_temp_c=95)).emit()      # published BEFORE the view exists
         view = FeltStateView(bus)                                    # late subscriber (retained)
         self.addCleanup(view.close)
         self.assertEqual(view.current()["overall"], "in distress")

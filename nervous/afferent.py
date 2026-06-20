@@ -48,7 +48,8 @@ class AfferentContext:
     def _render(self, ev):
         payload = self.bus.payloads.get(ev.payload_ref) if ev.payload_ref else None
         # Interoceptive felt-state (P1b): render the QUALIA (the Pantheon abstraction) — the creature
-        # feels "strained (GPU tight)", not "vram: high". Same projection the render reads (I6).
+        # feels "running hot" or "mind resident on the GPU", not "vram: high / 92%" (high VRAM is the
+        # resident mind, felt as calm posture, never distress). Same projection the render reads (I6).
         if ev.kind == Kind.interoceptive and payload:
             try:
                 d = json.loads(payload.decode("utf-8"))
