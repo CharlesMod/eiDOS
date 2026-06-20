@@ -620,12 +620,12 @@ def _build_history_thread(config: Config, n_ticks: int = 14) -> list[dict]:
 # Briefing model context assembly
 # ---------------------------------------------------------------------------
 
-def _read_learned_lessons(config, k=6):
-    """The reward learner's distilled lessons (written by nervous/reward.py on sleep consolidation).
+def _read_learned_file(config, name, k=6):
+    """Read a JSON-list file written by the reward learner on sleep consolidation (lessons / habits).
     Read-only, best-effort — the weight-free policy update surfaced into context."""
     import json
     try:
-        p = config.state_dir / "learned_lessons.json"
+        p = config.state_dir / name
         if not p.exists():
             return []
         data = json.loads(p.read_text(encoding="utf-8"))
@@ -634,6 +634,10 @@ def _read_learned_lessons(config, k=6):
     except Exception:  # noqa: BLE001
         return []
     return []
+
+
+def _read_learned_lessons(config, k=6):
+    return _read_learned_file(config, "learned_lessons.json", k=k)
 
 
 def _assemble_briefing(
@@ -694,6 +698,10 @@ def _assemble_briefing(
     # learns from its own experience too. This is the weight-free policy update — lessons re-enter context
     # and bias the next action.
     try:
+        _habits = _read_learned_file(config, "learned_habits.json", k=5)
+        if _habits:
+            durable.append("## Habits — your reliable routines, learned by doing (reach for these without "
+                           "overthinking):\n" + "\n".join("- " + _h for _h in _habits))
         _lessons = _read_learned_lessons(config)
         if _lessons:
             durable.append("## Learned — what your own experience has taught you (let it guide you):\n"

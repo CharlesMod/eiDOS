@@ -18,6 +18,8 @@ from .exteroception import PreFilter, FrameDiffFilter, VadFilter, Exteroceptor
 from .sleep import SleepCycle
 from .monitor import NervousMonitor
 from .reward import RewardLearner
+from .worldmodel import WorldModel
+from .curiosity import CuriosityDrive
 
 
 def build_bus(config, *, payload_store=None):
@@ -42,5 +44,5 @@ __all__ = [
     "Effector", "SelfModel", "ReflexArc", "Proprioceptor",
     "NeuromodulatoryState",
     "PreFilter", "FrameDiffFilter", "VadFilter", "Exteroceptor",
-    "SleepCycle", "NervousMonitor", "RewardLearner",
+    "SleepCycle", "NervousMonitor", "RewardLearner", "WorldModel", "CuriosityDrive",
 ]

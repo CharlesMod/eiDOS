@@ -28,6 +28,7 @@ _ORGANS = [
     ("interoception", "feels the body — telemetry → felt bars",        (Kind.interoceptive,)),
     ("neuromod",      "neuromodulation — arousal + affect (mood)",     (Kind.modulation,)),
     ("reward",        "reward learning — value cache + dopamine (RPE)", (Kind.reward,)),
+    ("curiosity",     "curiosity drive — novelty → intrinsic reward",   (Kind.drive,)),
     ("gpu_arbiter",   "GPU residency — who holds the one GPU",         (Kind.capability,)),
     ("change",        "novelty / habituation — forwards only surprise", (Kind.change,)),
     ("exteroception", "world senses — camera / mic pre-filters",       (Kind.sensory, Kind.percept)),

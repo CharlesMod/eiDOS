@@ -603,6 +603,8 @@ def run_loop(config: Config, persona=None, wal=None):
     nervous_gpu = None
     nervous_neuromod = None
     nervous_learner = None
+    nervous_worldmodel = None
+    nervous_curiosity = None
     if getattr(config, "nervous_enabled", False):
         try:
             import nervous
@@ -656,15 +658,21 @@ def run_loop(config: Config, persona=None, wal=None):
     if nervous_bus is not None and getattr(config, "nervous_learning_enabled", True):
         try:
             from nervous.reward import RewardLearner
+            from nervous.worldmodel import WorldModel
+            from nervous.curiosity import CuriosityDrive
             from nervous.sleep import SleepCycle
             nervous_learner = RewardLearner(bus=nervous_bus, neuromod=nervous_neuromod, config=config)
+            nervous_worldmodel = WorldModel(config=config)            # predicts situation transitions (T2)
+            nervous_curiosity = CuriosityDrive(bus=nervous_bus, neuromod=nervous_neuromod)  # novelty → intrinsic reward
             SleepCycle(nervous_bus, neuromod=nervous_neuromod, learner=nervous_learner,
                        sleep_arousal=getattr(config, "nervous_learning_sleep_arousal", 0.32),
                        min_consolidate_interval_s=getattr(config, "nervous_learning_consolidate_interval_s", 120.0)
                        ).start(getattr(config, "nervous_learning_sleep_interval_s", 10.0))
-            print(f"{pfx} reward learning + dream replay started — the creature learns from experience")
+            print(f"{pfx} reward learning + world-model + curiosity + dream replay started — the creature learns")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} reward learning start failed (continuing): {_e}")
+    _wm_prev_sit = None   # previous tick's situation/action — for the world-model transition + curiosity
+    _wm_prev_act = None
 
     while not _shutdown_requested:
         # --- Operator pause check ---
@@ -1285,9 +1293,18 @@ def run_loop(config: Config, persona=None, wal=None):
         #     the felt body + mood itself. Sleep replays the tagged experiences into lessons. Guarded. ---
         if nervous_learner is not None:
             try:
+                # world-model: how novel was arriving at THIS situation from the previous (situation,
+                # action)? curiosity turns that surprise into a small intrinsic-reward bonus (and grows
+                # restless during predictable lulls). The bonus reinforces exploring the unknown.
+                _intrinsic = 0.0
+                if nervous_worldmodel is not None and _wm_prev_sit is not None:
+                    _surprise = nervous_worldmodel.observe(_wm_prev_sit, _wm_prev_act, tick_situation)
+                    if nervous_curiosity is not None:
+                        _intrinsic = nervous_curiosity.observe(_surprise)
                 nervous_learner.observe(situation=tick_situation, action=str(_act_sig),
                                         success=tick_tool_success, made_progress=_made_progress,
-                                        strain=_strain_bump, tick=tick_number)
+                                        strain=_strain_bump, intrinsic=_intrinsic, tick=tick_number)
+                _wm_prev_sit, _wm_prev_act = tick_situation, str(_act_sig)
             except Exception as _le:  # noqa: BLE001 - learning must never break the tick
                 logger.warning("reward learning failed: %s", _le)
 

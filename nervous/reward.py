@@ -49,7 +49,7 @@ def wellbeing(overall):
 
 class RewardLearner:
     def __init__(self, *, bus=None, neuromod=None, config=None, alpha=0.3, replay_alpha=0.15,
-                 value_path=None, experience_path=None, lessons_path=None,
+                 value_path=None, experience_path=None, lessons_path=None, habits_path=None,
                  max_values=2000, max_experiences=600, save_every=10,
                  lesson_min_count=3, lesson_min_abs=0.25, lessons_top=8):
         self.bus = bus
@@ -67,13 +67,16 @@ class RewardLearner:
             value_path = value_path or str(sd / "learned_values.json")
             experience_path = experience_path or str(sd / "experience.jsonl")
             lessons_path = lessons_path or str(sd / "learned_lessons.json")
+            habits_path = habits_path or str(sd / "learned_habits.json")
         self.value_path = value_path
         self.experience_path = experience_path
         self.lessons_path = lessons_path
+        self.habits_path = habits_path
 
         self._lock = threading.Lock()
         self.values = {}             # key -> {"v","n","situation","action","t"}
         self._lessons = []           # list[str]
+        self._habits = []            # list[str]
         self._experiences = []       # in-memory ring (mirrors the jsonl tail) for replay/tests
         self._prev_wellbeing = None  # felt wellbeing at the previous observe (for the delta)
         self._since_save = 0
@@ -157,9 +160,13 @@ class RewardLearner:
                 entry["v"] = round(entry["v"] + self.replay_alpha * (r["reward"] - entry["v"]), 4)
             lessons = self._distill_lessons()
             self._lessons = lessons
+        habits = self.habits()                 # takes the lock itself → compute outside the with-block
+        with self._lock:
+            self._habits = habits
         self._save_values()
         self._save_lessons()
-        return {"replayed": len(batch), "lessons": list(lessons)}
+        self._save_habits()
+        return {"replayed": len(batch), "lessons": list(lessons), "habits": list(habits)}
 
     def _distill_lessons(self):
         cand = [e for e in self.values.values()
@@ -173,6 +180,21 @@ class RewardLearner:
                 out.append(f"When {sit}: \"{act}\" tends to go well (v={e['v']:+.2f}, n={e['n']}) — lean into it.")
             else:
                 out.append(f"When {sit}: \"{act}\" tends to go badly (v={e['v']:+.2f}, n={e['n']}) — try another approach.")
+        return out
+
+    def habits(self, k=5, min_value=0.5, min_count=5):
+        """Habit formation (basal-ganglia automatization): the FEW over-learned (situation→action)
+        routines — high value, heavily reinforced — that have become reliable defaults. Surfaced as a
+        distinct, stronger prior than the broader lessons, so the creature reaches for them without
+        re-deliberating (freeing the slow core). The strongest are candidates for skill-compilation."""
+        with self._lock:
+            cand = [e for e in self.values.values()
+                    if e["v"] >= float(min_value) and e["n"] >= int(min_count)]
+        cand.sort(key=lambda e: e["v"] * math.log1p(e["n"]), reverse=True)
+        out = []
+        for e in cand[:int(k)]:
+            sit = e.get("situation") or "in general"
+            out.append(f"When {sit}: you reliably \"{e.get('action') or 'do that'}\" (v={e['v']:+.2f}, n={e['n']}).")
         return out
 
     def lessons(self, situation=None, k=6):
@@ -223,7 +245,8 @@ class RewardLearner:
     def snapshot(self):
         with self._lock:
             return {"values": len(self.values), "experiences": len(self._experiences),
-                    "lessons": list(self._lessons), "last": dict(self.last) if self.last else None}
+                    "lessons": list(self._lessons), "habits": list(self._habits),
+                    "last": dict(self.last) if self.last else None}
 
     def _fire_dopamine(self, reward, rpe, predicted):
         if self.bus is None:
@@ -251,6 +274,12 @@ class RewardLearner:
                     self._lessons = json.load(f) or []
             except Exception:  # noqa: BLE001
                 self._lessons = []
+        if self.habits_path and os.path.exists(self.habits_path):
+            try:
+                with open(self.habits_path, encoding="utf-8") as f:
+                    self._habits = json.load(f) or []
+            except Exception:  # noqa: BLE001
+                self._habits = []
 
     def _atomic_write(self, path, text):
         if not path:
@@ -279,6 +308,11 @@ class RewardLearner:
         with self._lock:
             data = json.dumps(self._lessons, ensure_ascii=False)
         self._atomic_write(self.lessons_path, data)
+
+    def _save_habits(self):
+        with self._lock:
+            data = json.dumps(self._habits, ensure_ascii=False)
+        self._atomic_write(self.habits_path, data)
 
     def _append_experience(self, rec):
         if not self.experience_path:
