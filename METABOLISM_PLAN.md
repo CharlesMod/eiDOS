@@ -99,14 +99,14 @@ learner). Get this wrong and we've built a slot machine, not a creature.
 - [x] **M1.3** Wire into metabolism + reward; surface in behind-the-curtain. Commit.
 
 ### Phase M2 — Mastery + the SKILL REVAMP  ⚠ DESIGN-FIRST (do NOT execute until the design below is settled)
-- [ ] **M2.0** Finalize the skill-language design (section below) with Dean.
-- [ ] **M2.1** Atom layer: expose the reliable built-in toolset as an in-scope vocabulary for authored
+- [x] **M2.0** Finalize the skill-language design (section below) with Dean.
+- [x] **M2.1** Atom layer: expose the reliable built-in toolset as an in-scope vocabulary for authored
   skills (kills the `import requests` / out-of-scope `http_request` brick walls).
-- [ ] **M2.2** Composition: skills compose atoms (+ other skills); typed-failure (atoms never raise);
+- [x] **M2.2** (atoms compose + soft-fail; skill→skill calls deferred) Composition: skills compose atoms (+ other skills); typed-failure (atoms never raise);
   short and legible.
 - [ ] **M2.3** Promotion loop: a proven, reused composition is compiled into a new named atom/skill
   (ties to `reward.habits()` habit-compilation) → the vocabulary grows.
-- [ ] **M2.4** Accomplishment nutrient: feeds only on real run + downstream reuse (anti-gaming). Tests.
+- [x] **M2.4** Accomplishment nutrient: feeds only on real run + downstream reuse (anti-gaming). Tests.
 
 ### Phase M3 — Connection nutrient (Loop D)
 - [ ] **M3.1** Reciprocation-gated connection feed (bond signals); unrequited bid = no food + small
