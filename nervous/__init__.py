@@ -9,6 +9,7 @@ from .payload import PayloadStore
 from .transport import Transport, InProcTransport, ZmqTransport
 from .bus import NervousBus, Subscription, PublishResult
 from .afferent import AfferentContext
+from .felt import to_felt, felt_state, FeltStateView
 
 
 def build_bus(config, *, payload_store=None):
@@ -27,4 +28,5 @@ __all__ = [
     "PayloadStore", "Transport", "InProcTransport", "ZmqTransport",
     "NervousBus", "Subscription", "PublishResult",
     "AfferentContext", "build_bus",
+    "to_felt", "felt_state", "FeltStateView",
 ]

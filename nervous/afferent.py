@@ -7,6 +7,9 @@ construction: the block is batched per tick into the volatile message — never 
 the history turns (EIDOS_V3_ARCHITECTURE.md §5). Empty until organs publish, so wiring it into the
 tick loop is inert until P1a (interoception) arrives.
 """
+import json
+
+from .event import Kind
 
 
 class AfferentContext:
@@ -43,10 +46,20 @@ class AfferentContext:
         return block, len(events)
 
     def _render(self, ev):
+        payload = self.bus.payloads.get(ev.payload_ref) if ev.payload_ref else None
+        # Interoceptive felt-state (P1b): render the QUALIA (the Pantheon abstraction) — the creature
+        # feels "strained (GPU tight)", not "vram: high". Same projection the render reads (I6).
+        if ev.kind == Kind.interoceptive and payload:
+            try:
+                d = json.loads(payload.decode("utf-8"))
+                if isinstance(d, dict) and "overall" in d:
+                    felt = "; ".join(d.get("felt") or []) or "nothing amiss"
+                    return "- body feels %s (%s)" % (d["overall"], felt)
+            except Exception:
+                pass
         bits = ["- [%s/%s]" % (ev.modality.value, ev.kind.value)]
         if ev.source_organ:
             bits.append("from %s" % ev.source_organ)
-        payload = self.bus.payloads.get(ev.payload_ref) if ev.payload_ref else None
         if payload:
             try:
                 txt = payload.decode("utf-8")

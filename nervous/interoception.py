@@ -18,6 +18,7 @@ import threading
 import time
 
 from .event import NervousEvent, Kind, Modality, Delivery, SCHEMA_VERSION
+from .felt import felt_state
 
 # ascending pressure: ok < elevated < high < critical
 LEVELS = ["ok", "elevated", "high", "critical"]
@@ -127,12 +128,16 @@ class Interoception:
             raw = self.reader()
         except Exception:
             return None
-        present = {k: v for k, v in felt_bars(raw).items() if v is not None}
-        if not present:
+        bars = {k: v for k, v in felt_bars(raw).items() if v is not None}
+        if not bars:
             return None
-        payload = json.dumps(present, ensure_ascii=False).encode("utf-8")
+        # P1b: the single felt-state projection {bars, overall, felt} — one source of truth (I6),
+        # published RETAINED (last-value-wins) so the core and any creature render read the SAME
+        # current felt body. The qualia (the Pantheon abstraction) ride alongside the raw bars.
+        projection = felt_state(bars)
+        payload = json.dumps(projection, ensure_ascii=False).encode("utf-8")
         ev = NervousEvent(SCHEMA_VERSION, self.source, Kind.interoceptive, Modality.intero,
-                          Delivery.fungible, salience=worst_salience(present), t=time.monotonic())
+                          Delivery.retained, salience=worst_salience(bars), t=time.monotonic())
         return self.bus.publish(ev, payload)
 
     def stop(self):

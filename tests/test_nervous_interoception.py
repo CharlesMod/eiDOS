@@ -67,7 +67,8 @@ class TestOrgan(unittest.TestCase):
         self.assertEqual(e.source_organ, "interoception")       # single writer of the felt-state (I6)
         self.assertAlmostEqual(e.salience, 1.0)
         payload = json.loads(bus.payloads.get(e.payload_ref).decode("utf-8"))
-        self.assertEqual(payload["vram"], "critical")
+        self.assertEqual(payload["bars"]["vram"], "critical")   # P1b: felt-state projection {bars,overall,felt}
+        self.assertEqual(payload["overall"], "in distress")
 
     def test_felt_body_surfaces_in_context(self):
         bus = NervousBus()
@@ -77,9 +78,8 @@ class TestOrgan(unittest.TestCase):
         Interoception(bus, reader=reader(ram_pct=99, vram_used_pct=99)).emit()
         block, n = aff.drain_block()
         self.assertEqual(n, 1)
-        self.assertIn("intero/interoceptive", block)
-        self.assertIn("vram", block)
-        self.assertIn("critical", block)
+        self.assertIn("body feels", block)        # P1b: rendered as qualia, not raw numbers
+        self.assertIn("in distress", block)
 
 
 if __name__ == "__main__":
