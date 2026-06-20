@@ -56,6 +56,30 @@ class TestParser(unittest.TestCase):
         self.assertIsNone(parse_tool_call("I keep bashing my head and should note that down later."))
         self.assertIsNone(parse_tool_call("my plan note {a vague reminder to self, not json}"))
 
+    def test_bare_format_wrapped_in_inline_backticks(self):
+        # The live 5-min run (2026-06-20): the creature emitted a valid write_file EVERY tick, each
+        # wrapped in markdown inline-code backticks — all silently dropped (false "rumination"). The
+        # parser must see through a leading/trailing backtick.
+        text = ('I need to record my progress now.\n\n'
+                '`write_file {"path":"C:\\\\x\\\\growth.json","content":"{\\"tick\\": 110}"}`')
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.tool, "write_file")
+        self.assertEqual(result.args["path"], "C:\\x\\growth.json")
+
+    def test_bare_format_in_triple_fence(self):
+        text = 'ok here goes\n```\nbash {"cmd":"ls -la"}\n```'
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.tool, "bash")
+        self.assertEqual(result.args["cmd"], "ls -la")
+
+    def test_bare_text_arg_in_backticks(self):
+        result = parse_tool_call("`bash df -h`")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.tool, "bash")
+        self.assertEqual(result.args, {"cmd": "df -h"})
+
     def test_malformed_json(self):
         text = '<tool>bash</tool>\n<args>{cmd: "ls"}</args>'
         result = parse_tool_call(text)

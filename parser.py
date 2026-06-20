@@ -208,7 +208,11 @@ def parse_tool_call(text: str) -> Optional[ToolCall]:
     # (the overnight 5067-thoughts/3-actions creature was acting every tick; the calls were DROPPED, not
     # absent). Guards against false positives: the tool name must (a) start a line — so prose that merely
     # mentions a tool can't trigger — and (b) be a KNOWN tool, with (c) brace-matched, parseable JSON.
-    for m in re.finditer(r'(?:^|\n)[ \t>*\-]*([a-zA-Z_]\w*)[ \t]*\{', text):
+    # The line-prefix may include markdown noise the model adds: blockquote/list markers AND backticks
+    # (it loves wrapping a call in inline code: `write_file {…}` or a ```fence). Backticks must be
+    # allowed here or every such call is silently dropped — observed live as false "rumination" (the
+    # creature emitted a valid write_file every tick, all gagged by the wrapping backtick).
+    for m in re.finditer(r'(?:^|\n)[ \t>*\-`]*([a-zA-Z_]\w*)[ \t]*\{', text):
         name = m.group(1).lower()
         if name not in known or name in _reserved:
             continue
@@ -221,10 +225,10 @@ def parse_tool_call(text: str) -> Optional[ToolCall]:
             return ToolCall(tool=name, args=args, raw=text[m.start(1):brace + len(blob)])
 
     # Bare text-arg form with no JSON at all: a known text-arg tool at line start, e.g.  bash df -h
-    for m in re.finditer(r'(?:^|\n)[ \t>*\-]*([a-zA-Z_]\w*)[ \t]+(\S.*)', text):
+    for m in re.finditer(r'(?:^|\n)[ \t>*\-`]*([a-zA-Z_]\w*)[ \t]+(\S.*)', text):
         name = m.group(1).lower()
         if name in _TEXT_ARG_TOOLS and name in known:
-            body = m.group(2).strip()
+            body = m.group(2).strip().rstrip("`").strip()   # drop a trailing inline-code backtick
             if body and not body.startswith(("{", "[", "<")):
                 return ToolCall(tool=name, args={_TEXT_ARG_TOOLS[name]: body}, raw=m.group(0).strip())
 
