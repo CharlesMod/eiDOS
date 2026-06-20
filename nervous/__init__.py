@@ -11,6 +11,7 @@ from .bus import NervousBus, Subscription, PublishResult
 from .afferent import AfferentContext
 from .felt import to_felt, felt_state, FeltStateView
 from .arbiter import GpuArbiter, Lease, PRI_BACKGROUND, PRI_MIND, PRI_SPEECH, PRI_REFLEX
+from .change import Novelty, ChangeDetector
 
 
 def build_bus(config, *, payload_store=None):
@@ -31,4 +32,5 @@ __all__ = [
     "AfferentContext", "build_bus",
     "to_felt", "felt_state", "FeltStateView",
     "GpuArbiter", "Lease", "PRI_BACKGROUND", "PRI_MIND", "PRI_SPEECH", "PRI_REFLEX",
+    "Novelty", "ChangeDetector",
 ]
