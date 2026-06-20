@@ -13,6 +13,7 @@ from .felt import to_felt, felt_state, FeltStateView
 from .arbiter import GpuArbiter, Lease, PRI_BACKGROUND, PRI_MIND, PRI_SPEECH, PRI_REFLEX
 from .change import Novelty, ChangeDetector
 from .efferent import Effector, SelfModel, ReflexArc, Proprioceptor
+from .neuromod import NeuromodulatoryState
 
 
 def build_bus(config, *, payload_store=None):
@@ -35,4 +36,5 @@ __all__ = [
     "GpuArbiter", "Lease", "PRI_BACKGROUND", "PRI_MIND", "PRI_SPEECH", "PRI_REFLEX",
     "Novelty", "ChangeDetector",
     "Effector", "SelfModel", "ReflexArc", "Proprioceptor",
+    "NeuromodulatoryState",
 ]

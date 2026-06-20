@@ -609,7 +609,11 @@ def run_loop(config: Config, persona=None, wal=None):
             # P2: the GPU lease arbiter (mind / TTS / escalated perception). Available for the
             # speech-gate migration + escalated perception (P6); inert until a claimant acquires.
             nervous_gpu = nervous.GpuArbiter(bus=nervous_bus, log_path=str(config.nervous_gpu_leases_log_path))
-            print(f"{pfx} nervous bus up ({getattr(config, 'nervous_transport', 'inproc')}); afferent intake + GPU arbiter ready")
+            try:
+                nervous.NeuromodulatoryState(nervous_bus).start(2.0)   # Pillar 6: arousal + affect (mood)
+            except Exception:  # noqa: BLE001
+                pass
+            print(f"{pfx} nervous bus up ({getattr(config, 'nervous_transport', 'inproc')}); afferent + GPU arbiter + neuromod ready")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} nervous bus init failed (continuing without afferent): {_e}")
             nervous_bus = None
