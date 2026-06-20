@@ -20,6 +20,10 @@ tts_output_*.mp3
 
 # self-authored-skill output that lands in the repo root (should live in workspace/)
 boss_habits.log
+# stray probe/snapshot artifacts a skill dumped into the repo root (HTML/JSON saved by
+# http_request / camera-snapshot skills; e.g. a `>null` redirect or snapshot_*.jpg)
+/null
+/snapshot_*.jpg
 
 # machine-local seed nuggets (device credentials/keys) — NEVER commit
 preserved_nuggets.local.toml
