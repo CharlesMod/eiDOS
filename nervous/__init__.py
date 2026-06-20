@@ -17,6 +17,7 @@ from .neuromod import NeuromodulatoryState
 from .exteroception import PreFilter, FrameDiffFilter, VadFilter, Exteroceptor
 from .sleep import SleepCycle
 from .monitor import NervousMonitor
+from .reward import RewardLearner
 
 
 def build_bus(config, *, payload_store=None):
@@ -41,5 +42,5 @@ __all__ = [
     "Effector", "SelfModel", "ReflexArc", "Proprioceptor",
     "NeuromodulatoryState",
     "PreFilter", "FrameDiffFilter", "VadFilter", "Exteroceptor",
-    "SleepCycle", "NervousMonitor",
+    "SleepCycle", "NervousMonitor", "RewardLearner",
 ]

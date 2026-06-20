@@ -196,6 +196,10 @@ class Config:
     nervous_monitor_interval_s: float = 1.0         # how often the monitor writes its snapshot
     nervous_monitor_feed_max: int = 48              # rolling event-feed length carried in the snapshot
     nervous_snapshot_name: str = "nervous_snapshot.json"
+    nervous_learning_enabled: bool = True           # the dopaminergic reward-learning keystone (learn from outcomes over time)
+    nervous_learning_sleep_interval_s: float = 10.0  # how often the sleep cycle checks whether to dream
+    nervous_learning_sleep_arousal: float = 0.32     # consolidate (dream) when arousal is at/below this (calm)
+    nervous_learning_consolidate_interval_s: float = 120.0  # but dream at most this often (throttle)
 
     @property
     def workspace(self) -> Path:
@@ -461,6 +465,10 @@ def load_config(path: str = "config.toml") -> Config:
         config.nervous_monitor_interval_s = float(nervous.get("monitor_interval_s", config.nervous_monitor_interval_s))
         config.nervous_monitor_feed_max = nervous.get("monitor_feed_max", config.nervous_monitor_feed_max)
         config.nervous_snapshot_name = nervous.get("snapshot_name", config.nervous_snapshot_name)
+        config.nervous_learning_enabled = nervous.get("learning_enabled", config.nervous_learning_enabled)
+        config.nervous_learning_sleep_interval_s = float(nervous.get("learning_sleep_interval_s", config.nervous_learning_sleep_interval_s))
+        config.nervous_learning_sleep_arousal = float(nervous.get("learning_sleep_arousal", config.nervous_learning_sleep_arousal))
+        config.nervous_learning_consolidate_interval_s = float(nervous.get("learning_consolidate_interval_s", config.nervous_learning_consolidate_interval_s))
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

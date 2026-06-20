@@ -620,6 +620,22 @@ def _build_history_thread(config: Config, n_ticks: int = 14) -> list[dict]:
 # Briefing model context assembly
 # ---------------------------------------------------------------------------
 
+def _read_learned_lessons(config, k=6):
+    """The reward learner's distilled lessons (written by nervous/reward.py on sleep consolidation).
+    Read-only, best-effort — the weight-free policy update surfaced into context."""
+    import json
+    try:
+        p = config.state_dir / "learned_lessons.json"
+        if not p.exists():
+            return []
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return [str(x) for x in data[:int(k)]]
+    except Exception:  # noqa: BLE001
+        return []
+    return []
+
+
 def _assemble_briefing(
     config: Config,
     tick_number: int,
@@ -670,6 +686,18 @@ def _assemble_briefing(
             durable.append("## Your skills — CALL these by name as tools (e.g. <tool>check_mqtt_port</tool>). "
                            "Do NOT author a new skill that duplicates one of these; reuse it, or edit_skill "
                            "to improve it.\n" + sb)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ## Learned — the reward learner's distilled lessons (self-improvement over time). Changes only on
+    # sleep consolidation (~minutes), so it sits in this semi-stable tier. Shown in BOTH modes: a creature
+    # learns from its own experience too. This is the weight-free policy update — lessons re-enter context
+    # and bias the next action.
+    try:
+        _lessons = _read_learned_lessons(config)
+        if _lessons:
+            durable.append("## Learned — what your own experience has taught you (let it guide you):\n"
+                           + "\n".join("- " + _l for _l in _lessons))
     except Exception:  # noqa: BLE001
         pass
 

@@ -46,6 +46,14 @@ class NeuromodulatoryState:
         with self._lock:
             self.arousal = min(1.0, self.arousal + float(amount))
 
+    def observe_reward(self, rpe, reward):
+        """Dopamine: a reward-prediction-error spike raises arousal (the surprise is salient) and nudges
+        valence toward the reward's sign (it felt good / bad). Transient — interoception still sets the
+        baseline mood; this is the phasic dopamine bump on top."""
+        with self._lock:
+            self.arousal = min(1.0, self.arousal + 0.5 * abs(float(rpe)))
+            self.valence = max(-1.0, min(1.0, self.valence + 0.3 * float(reward)))
+
     @staticmethod
     def _mood(a, v):
         if a < 0.15:

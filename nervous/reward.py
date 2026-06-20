@@ -1,0 +1,294 @@
+"""The reward-learning keystone — the dopaminergic basal-ganglia loop (self-improvement over time).
+
+Biology: the brain improves behaviour over time without rewiring its whole cortex — a dopaminergic
+reward-prediction-error (RPE) signal (Schultz) trains a value cache in the basal ganglia, the amygdala
+tags surprising/affective events for preferential storage, and the hippocampus REPLAYS those tagged
+episodes during sleep to consolidate them into durable policy. eiDOS does the same, honestly within its
+constraints: the mind (Gemma-4-12B) is FROZEN — we cannot gradient-update its weights — so the policy is
+the LLM and the *learning* lives in the memory substrate:
+
+  - cortex (flexible policy)      -> the LLM tick
+  - basal ganglia (value cache)   -> a tiny tabular V(state,action) updated by Rescorla-Wagner/TD(0)
+  - dopamine (RPE)                -> reward - predicted, broadcast on the bus; nudges the neuromod state
+  - amygdala (emotional tag)      -> |RPE| x arousal -> consolidation priority
+  - hippocampus + sleep replay    -> re-applies the top-tagged experiences, distils LESSONS
+  - the lessons re-enter context  -> they bias the LLM's next action = the weight-free policy update
+
+The reward itself is computed from signals the tick ALREADY produces (success, real progress, the change
+in the felt body, mood valence, strain) — interoception defines what "good" means, so the creature learns
+to keep its own body well. State-dependent: the value key is prefixed with the felt-state, so it learns
+"when I feel strained, X helps" — which works even in creature mode (no objectives/plan).
+
+Honest-now: this is tabular TD learning + LLM policy, NOT deep RL. Pure observer of outcomes; never acts,
+never blocks the tick; fully guarded.
+"""
+import json
+import math
+import os
+import threading
+import time
+
+from .event import NervousEvent, Kind, Modality, Delivery, SCHEMA_VERSION
+
+# Reward weights (the "what is good" function). Interoception/affect define wellbeing, so the creature
+# learns to keep its own body at ease, make real progress, and not thrash.
+W_SUCCESS = 0.40     # the action succeeded vs failed
+W_PROGRESS = 0.35    # genuinely new knowledge / a new skill this tick (not re-confirming)
+W_FELT = 0.30        # the felt body got better (less distress) vs worse — the homeostatic core
+W_VALENCE = 0.15     # mood valence (neuromod affect)
+W_STRAIN = 0.15      # frustration / rumination penalty
+STRAIN_NORM = 3.0    # strain bump that counts as "fully strained"
+
+# felt overall -> a 0..1 wellbeing scalar (more at ease = higher)
+_WELLBEING = {"at ease": 1.0, "a little tense": 0.66, "strained": 0.33, "in distress": 0.0}
+
+
+def wellbeing(overall):
+    return _WELLBEING.get(overall, 0.66)   # unknown/absent -> neutral
+
+
+class RewardLearner:
+    def __init__(self, *, bus=None, neuromod=None, config=None, alpha=0.3, replay_alpha=0.15,
+                 value_path=None, experience_path=None, lessons_path=None,
+                 max_values=2000, max_experiences=600, save_every=10,
+                 lesson_min_count=3, lesson_min_abs=0.25, lessons_top=8):
+        self.bus = bus
+        self.neuromod = neuromod
+        self.alpha = float(alpha)
+        self.replay_alpha = float(replay_alpha)
+        self.max_values = int(max_values)
+        self.max_experiences = int(max_experiences)
+        self.save_every = int(save_every)
+        self.lesson_min_count = int(lesson_min_count)
+        self.lesson_min_abs = float(lesson_min_abs)
+        self.lessons_top = int(lessons_top)
+        if config is not None:
+            sd = config.state_dir
+            value_path = value_path or str(sd / "learned_values.json")
+            experience_path = experience_path or str(sd / "experience.jsonl")
+            lessons_path = lessons_path or str(sd / "learned_lessons.json")
+        self.value_path = value_path
+        self.experience_path = experience_path
+        self.lessons_path = lessons_path
+
+        self._lock = threading.Lock()
+        self.values = {}             # key -> {"v","n","situation","action","t"}
+        self._lessons = []           # list[str]
+        self._experiences = []       # in-memory ring (mirrors the jsonl tail) for replay/tests
+        self._prev_wellbeing = None  # felt wellbeing at the previous observe (for the delta)
+        self._since_save = 0
+        self.last = None             # last observe() result, for the monitor
+        self._load()
+
+    # ---- reward function -------------------------------------------------------------
+    def reward_of(self, *, success, made_progress, felt_delta, valence, strain, intrinsic=0.0):
+        """The scalar reward in [-1, 1]. Pure + testable."""
+        r = W_SUCCESS if success else -W_SUCCESS
+        if made_progress:
+            r += W_PROGRESS
+        r += W_FELT * float(felt_delta)
+        r += W_VALENCE * float(valence)
+        r -= W_STRAIN * min(1.0, max(0.0, float(strain)) / STRAIN_NORM)
+        r += float(intrinsic)
+        return max(-1.0, min(1.0, r))
+
+    # ---- the learning step (one per acting tick) -------------------------------------
+    def observe(self, *, situation="", action="", success=True, made_progress=False,
+                strain=0.0, intrinsic=0.0, tick=None):
+        """Compute the reward + RPE for this tick's action, update the value cache, log the experience,
+        and fire dopamine. Reads the felt body + mood from the bus/neuromod itself. Guarded by callers."""
+        overall = self._current_felt()
+        wb = wellbeing(overall)
+        prev = self._prev_wellbeing if self._prev_wellbeing is not None else wb
+        felt_delta = wb - prev
+        valence = float(getattr(self.neuromod, "valence", 0.0) or 0.0)
+        arousal = float(getattr(self.neuromod, "arousal", 0.3) or 0.3)
+
+        reward = self.reward_of(success=success, made_progress=made_progress,
+                                felt_delta=felt_delta, valence=valence, strain=strain,
+                                intrinsic=intrinsic)
+        key = self._key(situation, action, overall)
+        with self._lock:
+            entry = self.values.get(key)
+            predicted = entry["v"] if entry else 0.0
+            rpe = reward - predicted
+            v_new = predicted + self.alpha * rpe
+            self.values[key] = {"v": round(v_new, 4), "n": (entry["n"] + 1 if entry else 1),
+                                "situation": self._situation_label(situation, overall),
+                                "action": action, "t": _now()}
+            tag = abs(rpe) * (0.5 + 0.5 * arousal)
+            rec = {"tick": tick, "key": key, "situation": self._situation_label(situation, overall),
+                   "action": action, "reward": round(reward, 4), "predicted": round(predicted, 4),
+                   "rpe": round(rpe, 4), "tag": round(tag, 4), "success": bool(success)}
+            self._experiences.append(rec)
+            if len(self._experiences) > self.max_experiences:
+                self._experiences = self._experiences[-self.max_experiences:]
+            self._prev_wellbeing = wb
+            self.last = {"reward": round(reward, 4), "rpe": round(rpe, 4),
+                         "predicted": round(predicted, 4), "tag": round(tag, 4)}
+            self._evict_if_needed()
+            self._since_save += 1
+            do_save = self._since_save >= self.save_every
+
+        self._append_experience(rec)
+        if do_save:
+            self._save_values()
+            self._since_save = 0
+        # dopamine: a reward-prediction-error spike, broadcast + nudging the neuromodulatory state
+        self._fire_dopamine(reward, rpe, predicted)
+        if self.neuromod is not None and hasattr(self.neuromod, "observe_reward"):
+            try:
+                self.neuromod.observe_reward(rpe, reward)
+            except Exception:  # noqa: BLE001
+                pass
+        return self.last
+
+    # ---- sleep replay / consolidation ------------------------------------------------
+    def replay(self, *, top_k=24):
+        """Dream replay (called from the sleep cycle, low-arousal only): re-apply the highest-tagged
+        experiences (consolidation strengthens them), then distil durable LESSONS from the value cache.
+        Returns {replayed, lessons}."""
+        with self._lock:
+            batch = sorted(self._experiences, key=lambda r: r.get("tag", 0.0), reverse=True)[:int(top_k)]
+            for r in batch:
+                entry = self.values.get(r["key"])
+                if not entry:
+                    continue
+                entry["v"] = round(entry["v"] + self.replay_alpha * (r["reward"] - entry["v"]), 4)
+            lessons = self._distill_lessons()
+            self._lessons = lessons
+        self._save_values()
+        self._save_lessons()
+        return {"replayed": len(batch), "lessons": list(lessons)}
+
+    def _distill_lessons(self):
+        cand = [e for e in self.values.values()
+                if e["n"] >= self.lesson_min_count and abs(e["v"]) >= self.lesson_min_abs]
+        cand.sort(key=lambda e: abs(e["v"]) * math.log1p(e["n"]), reverse=True)
+        out = []
+        for e in cand[:self.lessons_top]:
+            sit = e.get("situation") or "in general"
+            act = e.get("action") or "that"
+            if e["v"] > 0:
+                out.append(f"When {sit}: \"{act}\" tends to go well (v={e['v']:+.2f}, n={e['n']}) — lean into it.")
+            else:
+                out.append(f"When {sit}: \"{act}\" tends to go badly (v={e['v']:+.2f}, n={e['n']}) — try another approach.")
+        return out
+
+    def lessons(self, situation=None, k=6):
+        """The learned-behaviour hints for context injection: lessons whose situation matches the current
+        one first, then the strongest global ones. Read-only; cheap."""
+        with self._lock:
+            ls = list(self._lessons)
+        if situation:
+            s = str(situation).lower()
+            ls.sort(key=lambda t: 0 if s and s in t.lower() else 1)
+        return ls[:int(k)]
+
+    # ---- helpers ---------------------------------------------------------------------
+    def _current_felt(self):
+        if self.bus is None:
+            return None
+        try:
+            ev = self.bus.retained_snapshot(Kind.interoceptive, Modality.intero)
+            if ev is None or not ev.payload_ref:
+                return None
+            raw = self.bus.payloads.get(ev.payload_ref)
+            d = json.loads(raw.decode("utf-8")) if raw else None
+            return d.get("overall") if isinstance(d, dict) else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _situation_label(situation, overall):
+        sit = (situation or "").strip()
+        feel = (overall or "").strip()
+        if sit and feel:
+            return f"{feel} · {sit}"
+        return sit or feel or ""
+
+    @staticmethod
+    def _key(situation, action, overall):
+        # felt-state prefix => state-dependent values (works even with no objective/plan)
+        return f"{(overall or '?')}::{(situation or '')}::{(action or '')}"[:300]
+
+    def _evict_if_needed(self):
+        if len(self.values) <= self.max_values:
+            return
+        # drop the least-reinforced, least-recent entries (lowest n, then oldest)
+        victims = sorted(self.values.items(), key=lambda kv: (kv[1]["n"], kv[1].get("t", 0)))
+        for k, _ in victims[: len(self.values) - self.max_values]:
+            self.values.pop(k, None)
+
+    def snapshot(self):
+        with self._lock:
+            return {"values": len(self.values), "experiences": len(self._experiences),
+                    "lessons": list(self._lessons), "last": dict(self.last) if self.last else None}
+
+    def _fire_dopamine(self, reward, rpe, predicted):
+        if self.bus is None:
+            return
+        try:
+            payload = json.dumps({"reward": round(reward, 4), "rpe": round(rpe, 4),
+                                  "predicted": round(predicted, 4)}, ensure_ascii=False).encode("utf-8")
+            ev = NervousEvent(SCHEMA_VERSION, "reward", Kind.reward, Modality.system,
+                              Delivery.fungible, salience=min(1.0, abs(rpe)), t=time.monotonic())
+            self.bus.publish(ev, payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ---- persistence (stdlib, atomic-ish; never raises) ------------------------------
+    def _load(self):
+        if self.value_path and os.path.exists(self.value_path):
+            try:
+                with open(self.value_path, encoding="utf-8") as f:
+                    self.values = json.load(f) or {}
+            except Exception:  # noqa: BLE001
+                self.values = {}
+        if self.lessons_path and os.path.exists(self.lessons_path):
+            try:
+                with open(self.lessons_path, encoding="utf-8") as f:
+                    self._lessons = json.load(f) or []
+            except Exception:  # noqa: BLE001
+                self._lessons = []
+
+    def _atomic_write(self, path, text):
+        if not path:
+            return
+        tmp = f"{path}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(text)
+        except Exception:  # noqa: BLE001
+            return
+        for _ in range(40):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                time.sleep(0.02)
+            except Exception:  # noqa: BLE001
+                return
+
+    def _save_values(self):
+        with self._lock:
+            data = json.dumps(self.values, ensure_ascii=False)
+        self._atomic_write(self.value_path, data)
+
+    def _save_lessons(self):
+        with self._lock:
+            data = json.dumps(self._lessons, ensure_ascii=False)
+        self._atomic_write(self.lessons_path, data)
+
+    def _append_experience(self, rec):
+        if not self.experience_path:
+            return
+        try:
+            with open(self.experience_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _now():
+    return int(time.time())

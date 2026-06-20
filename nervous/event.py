@@ -34,6 +34,9 @@ class Kind(str, enum.Enum):
     relevance_set = "relevance_set"   # core -> gate (goal relevance)
     modulation = "modulation"         # neuromodulatory state -> all (retained)
     capability = "capability"         # an organ advertises identity/version (retained, I8)
+    # learning / reward (the basal-ganglia / dopamine layer — self-improvement over time)
+    reward = "reward"                 # a dopaminergic reward-prediction-error spike (transient)
+    drive = "drive"                   # a homeostatic / intrinsic drive level e.g. curiosity (retained)
     # bus-emitted control / self-health (never produced by an organ directly)
     sequence_aborted = "sequence_aborted"            # an ordered stream aborted atomically
     reliable_undeliverable = "reliable_undeliverable"  # a reliable event could not be delivered (the "numbness" alarm)
@@ -67,7 +70,7 @@ RELIABLE_KINDS = frozenset({
 })
 
 # Kinds carried as retained (last-value-wins) global state.
-RETAINED_KINDS = frozenset({Kind.modulation, Kind.capability})
+RETAINED_KINDS = frozenset({Kind.modulation, Kind.capability, Kind.drive})
 
 # admit_priority floor added to salience for reliable kinds, so reliable always outranks fungible.
 RELIABLE_FLOOR = 1_000_000.0

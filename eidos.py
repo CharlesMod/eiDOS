@@ -601,6 +601,8 @@ def run_loop(config: Config, persona=None, wal=None):
     nervous_bus = None
     afferent = None
     nervous_gpu = None
+    nervous_neuromod = None
+    nervous_learner = None
     if getattr(config, "nervous_enabled", False):
         try:
             import nervous
@@ -610,9 +612,10 @@ def run_loop(config: Config, persona=None, wal=None):
             # speech-gate migration + escalated perception (P6); inert until a claimant acquires.
             nervous_gpu = nervous.GpuArbiter(bus=nervous_bus, log_path=str(config.nervous_gpu_leases_log_path))
             try:
-                nervous.NeuromodulatoryState(nervous_bus).start(2.0)   # Pillar 6: arousal + affect (mood)
+                nervous_neuromod = nervous.NeuromodulatoryState(nervous_bus)
+                nervous_neuromod.start(2.0)   # Pillar 6: arousal + affect (mood)
             except Exception:  # noqa: BLE001
-                pass
+                nervous_neuromod = None
             print(f"{pfx} nervous bus up ({getattr(config, 'nervous_transport', 'inproc')}); afferent + GPU arbiter + neuromod ready")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} nervous bus init failed (continuing without afferent): {_e}")
@@ -645,6 +648,23 @@ def run_loop(config: Config, persona=None, wal=None):
             print(f"{pfx} nervous monitor started — behind-the-curtain snapshot live")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} nervous monitor start failed (continuing): {_e}")
+
+    # The learning keystone (the dopaminergic basal-ganglia loop): a value cache + reward-prediction-error
+    # that learns from the OUTCOMES of actions, with a sleep cycle that REPLAYS the tagged experiences into
+    # durable lessons during calm lulls. The creature improves itself over time, in the memory substrate
+    # (the LLM weights are frozen). Guarded — a learning fault can never break the tick.
+    if nervous_bus is not None and getattr(config, "nervous_learning_enabled", True):
+        try:
+            from nervous.reward import RewardLearner
+            from nervous.sleep import SleepCycle
+            nervous_learner = RewardLearner(bus=nervous_bus, neuromod=nervous_neuromod, config=config)
+            SleepCycle(nervous_bus, neuromod=nervous_neuromod, learner=nervous_learner,
+                       sleep_arousal=getattr(config, "nervous_learning_sleep_arousal", 0.32),
+                       min_consolidate_interval_s=getattr(config, "nervous_learning_consolidate_interval_s", 120.0)
+                       ).start(getattr(config, "nervous_learning_sleep_interval_s", 10.0))
+            print(f"{pfx} reward learning + dream replay started — the creature learns from experience")
+        except Exception as _e:  # noqa: BLE001
+            print(f"{pfx} reward learning start failed (continuing): {_e}")
 
     while not _shutdown_requested:
         # --- Operator pause check ---
@@ -1258,6 +1278,18 @@ def run_loop(config: Config, persona=None, wal=None):
                 print(f"{pfx} Gate: whole backlog blocked — surfacing to Boss once")
         except Exception as _e:  # noqa: BLE001
             logger.warning("objective gate failed: %s", _e)
+
+        # --- Reward learning (the dopaminergic keystone): learn from THIS tick's outcome — compute the
+        #     reward (success + real progress + how the felt body changed − strain), update the value
+        #     cache via reward-prediction-error, log the experience, and fire dopamine. The learner reads
+        #     the felt body + mood itself. Sleep replays the tagged experiences into lessons. Guarded. ---
+        if nervous_learner is not None:
+            try:
+                nervous_learner.observe(situation=tick_situation, action=str(_act_sig),
+                                        success=tick_tool_success, made_progress=_made_progress,
+                                        strain=_strain_bump, tick=tick_number)
+            except Exception as _le:  # noqa: BLE001 - learning must never break the tick
+                logger.warning("reward learning failed: %s", _le)
 
         # --- Sleep ---
         tick_number += 1
