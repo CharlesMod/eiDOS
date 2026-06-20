@@ -141,8 +141,10 @@ Dean: wire in real **battery level** AND **solar intake**. Two distinct signals,
   IS the real charge; deep-night drawdown is a real famine).
 - **solar intake (watts)** → the *recharge rate* — food availability in its environment, abundant at
   midday, nothing at 3am. Modulates `feed()`/recovery rather than the reserve directly.
-- [ ] **M4.1** Investigate readable power: Windows battery API / UPS / solar inverter on the LAN /
-  smart watt-meter (e.g. a Tuya energy plug). Capture both charge % and PV watts if available.
+- [x] **M4.1 — DONE (2026-06-20).** Both Renogy devices are BLE-readable from gamingPC (bleak). Probe
+  `experiments/renogy_probe.py` proved it; live SOC + PV watts captured. Found the MPPT (`BT-TH-E353D900`
+  @ `C4:64:E3:53:D9:00`) AND the cluster inverter (`RNGRIU…` @ `C0:63:80:28:C0:86`). See the
+  [[renogy-ble-power]] memory for addresses, register map, and the LiFePO4 voltage-SOC method.
   - **CONFIRMED SOURCE (Dean, 2026-06-20): the solar system is a Renogy Rover 20A with Bluetooth (the
     BT-1/BT-2 module).** It exposes battery **state-of-charge %** AND **PV charging rate (watts/amps)**
     over BLE — exactly the two signals M4 needs, from one device. Read it via BLE (e.g. `bleak` on
@@ -151,8 +153,14 @@ Dean: wire in real **battery level** AND **solar intake**. Two distinct signals,
     publishes a retained `Kind.metabolism` power event (SOC + PV watts) → metabolism reads SOC as the
     reserve anchor and PV watts as the `feed()`/recovery multiplier. No Tuya watt-meter needed for the
     sense path; Tuya stays only for M4.3 (self-charging actuation).
-- [ ] **M4.2** If readable: battery% anchors the reserve, PV watts drives recovery → a real diurnal
-  rhythm (lively by day, husbanding itself at night). Else keep internal + the hook ready.
+- [x] **M4.2 — DONE (2026-06-20).** `nervous/power.py` `PowerMonitor` polls the MPPT, derives SOC from
+  real LiFePO4 voltage (NOT the controller's coulomb guess — Dean), and anchors the reserve via
+  `metabolism.anchor_soc`; publishes a retained `Kind.power` event. Default OFF; this node opts in
+  (`[nervous] power_enabled`). **Self-healing** (Dean uses the Renogy app, one BLE central at a time):
+  fail-open → keep last-good → STALE after 600s → solar-sim fallback → exponential backoff → auto
+  re-anchor on recovery. 13 tests; live-validated. `solar_charge_in` is now FALLBACK-only.
+  - Pending polish: live overnight to confirm the diurnal rhythm; optionally fold in the inverter's
+    battery-draw (its 0x0FA0 register map is TBD) for a fuller net-power picture.
 - [ ] **M4.3** (future) self-charging via a Tuya plug = "going to bed" — the creature seeks its charger
   when tired, the most biomimetic loop of all.
 

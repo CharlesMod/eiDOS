@@ -216,6 +216,19 @@ class Config:
     nervous_metabolism_solar_peak: float = 0.03      # per-tick charge at solar noon
     nervous_metabolism_solar_sunrise_h: float = 6.0  # local-hour daylight window (placeholder; PV reading replaces it)
     nervous_metabolism_solar_sunset_h: float = 20.0
+    # M4 real power — the Renogy MPPT over BLE (the real food source; replaces the solar placeholder).
+    # Default OFF: enabling it makes the creature poll Bluetooth. This node opts in via config.toml.
+    # Self-healing: when Dean's Renogy phone app holds the single BLE link, reads fail-open + back off
+    # + the reserve falls back to the internal sim, then re-anchors when the device is free again.
+    power_enabled: bool = False
+    power_mppt_address: str = ""                      # e.g. "C4:64:E3:53:D9:00" (BT-TH-… charge controller)
+    power_device_id: int = 255                        # modbus id (device answers as 1; 255 broadcast works)
+    power_poll_interval_s: float = 60.0
+    power_stale_after_s: float = 600.0                # after this with no read, the feed is STALE (sim takes over)
+    power_backoff_max_s: float = 600.0                # cap on exponential backoff while the device is busy
+    power_battery_cells: int = 8                      # LiFePO4 8S = 24V nominal
+    power_battery_capacity_ah: float = 100.0          # 24V 100Ah ≈ 2.56 kWh (for Wh framing)
+    power_battery_r_internal: float = 0.015           # ohms, for the resting-voltage correction
 
     @property
     def workspace(self) -> Path:
@@ -493,6 +506,15 @@ def load_config(path: str = "config.toml") -> Config:
         config.nervous_metabolism_solar_peak = float(nervous.get("metabolism_solar_peak", config.nervous_metabolism_solar_peak))
         config.nervous_metabolism_solar_sunrise_h = float(nervous.get("metabolism_solar_sunrise_h", config.nervous_metabolism_solar_sunrise_h))
         config.nervous_metabolism_solar_sunset_h = float(nervous.get("metabolism_solar_sunset_h", config.nervous_metabolism_solar_sunset_h))
+        config.power_enabled = nervous.get("power_enabled", config.power_enabled)
+        config.power_mppt_address = str(nervous.get("power_mppt_address", config.power_mppt_address))
+        config.power_device_id = int(nervous.get("power_device_id", config.power_device_id))
+        config.power_poll_interval_s = float(nervous.get("power_poll_interval_s", config.power_poll_interval_s))
+        config.power_stale_after_s = float(nervous.get("power_stale_after_s", config.power_stale_after_s))
+        config.power_backoff_max_s = float(nervous.get("power_backoff_max_s", config.power_backoff_max_s))
+        config.power_battery_cells = int(nervous.get("power_battery_cells", config.power_battery_cells))
+        config.power_battery_capacity_ah = float(nervous.get("power_battery_capacity_ah", config.power_battery_capacity_ah))
+        config.power_battery_r_internal = float(nervous.get("power_battery_r_internal", config.power_battery_r_internal))
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

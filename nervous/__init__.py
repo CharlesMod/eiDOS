@@ -21,6 +21,7 @@ from .reward import RewardLearner
 from .worldmodel import WorldModel
 from .curiosity import CuriosityDrive
 from .metabolism import Metabolism, hunger_to_bar, solar_charge_in
+from .power import PowerMonitor, lifepo4_soc, parse_mppt
 
 
 def build_bus(config, *, payload_store=None):
@@ -47,4 +48,5 @@ __all__ = [
     "PreFilter", "FrameDiffFilter", "VadFilter", "Exteroceptor",
     "SleepCycle", "NervousMonitor", "RewardLearner", "WorldModel", "CuriosityDrive",
     "Metabolism", "hunger_to_bar", "solar_charge_in",
+    "PowerMonitor", "lifepo4_soc", "parse_mppt",
 ]

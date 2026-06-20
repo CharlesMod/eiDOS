@@ -38,6 +38,7 @@ class Kind(str, enum.Enum):
     reward = "reward"                 # a dopaminergic reward-prediction-error spike (transient)
     drive = "drive"                   # a homeostatic / intrinsic drive level e.g. curiosity (retained)
     metabolism = "metabolism"         # the energy reserve / hunger level (homeostatic, retained)
+    power = "power"                   # real external power telemetry: battery SOC + solar watts (retained)
     # bus-emitted control / self-health (never produced by an organ directly)
     sequence_aborted = "sequence_aborted"            # an ordered stream aborted atomically
     reliable_undeliverable = "reliable_undeliverable"  # a reliable event could not be delivered (the "numbness" alarm)
@@ -71,7 +72,7 @@ RELIABLE_KINDS = frozenset({
 })
 
 # Kinds carried as retained (last-value-wins) global state.
-RETAINED_KINDS = frozenset({Kind.modulation, Kind.capability, Kind.drive, Kind.metabolism})
+RETAINED_KINDS = frozenset({Kind.modulation, Kind.capability, Kind.drive, Kind.metabolism, Kind.power})
 
 # admit_priority floor added to salience for reliable kinds, so reliable always outranks fungible.
 RELIABLE_FLOOR = 1_000_000.0

@@ -606,6 +606,7 @@ def run_loop(config: Config, persona=None, wal=None):
     nervous_worldmodel = None
     nervous_curiosity = None
     nervous_metabolism = None
+    nervous_power = None
     if getattr(config, "nervous_enabled", False):
         try:
             import nervous
@@ -640,6 +641,23 @@ def run_loop(config: Config, persona=None, wal=None):
                   f"archetype={nervous_metabolism.archetype}; it can tire and hunger")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} metabolism start failed (continuing): {_e}")
+
+    # M4: real power — poll the Renogy MPPT over BLE and anchor the reserve to real battery SOC. Default
+    # OFF; opt in via config. Self-healing: Dean using the Renogy phone app steals the single BLE link,
+    # so reads fail-open + back off and the reserve falls back to the internal sim until the device frees.
+    if (nervous_bus is not None and nervous_metabolism is not None
+            and getattr(config, "power_enabled", False) and getattr(config, "power_mppt_address", "")):
+        try:
+            from nervous.power import PowerMonitor
+            nervous_power = PowerMonitor(
+                nervous_bus, config=config, metabolism=nervous_metabolism,
+                interval_s=getattr(config, "power_poll_interval_s", 60.0),
+                stale_after_s=getattr(config, "power_stale_after_s", 600.0),
+                backoff_max_s=getattr(config, "power_backoff_max_s", 600.0)).start()
+            print(f"{pfx} power monitor started — reading MPPT {config.power_mppt_address} "
+                  f"(SOC anchors the reserve; fail-open if you're using the Renogy app)")
+        except Exception as _e:  # noqa: BLE001
+            print(f"{pfx} power monitor start failed (continuing on internal energy sim): {_e}")
 
     # P1a: start interoception — the first organ. The creature feels its body: host telemetry ->
     # coarse felt bars on the bus -> surfaced in context via the afferent intake. Guarded (I5).
@@ -1337,8 +1355,14 @@ def run_loop(config: Config, persona=None, wal=None):
                 _arousal = float(getattr(nervous_neuromod, "arousal", 0.3) or 0.3)
                 _resting = _arousal <= getattr(config, "nervous_metabolism_rest_arousal", 0.2)
                 _acted = tick_tool_name not in ("", "thought", "parse_error")
+                # Real power wins: when the MPPT reader has a FRESH reading it re-anchors the reserve to
+                # true SOC (in the monitor thread), so we don't add the fake solar curve — only the
+                # per-tick cognition/action drift since the last anchor. When power is stale/absent (e.g.
+                # Dean's app holds the BLE link), fall back to the solar placeholder so a plant still has
+                # a plausible diurnal rhythm.
                 _charge_in = 0.0
-                if (nervous_metabolism.archetype == "plant"
+                _power_fresh = nervous_power is not None and nervous_power.is_fresh()
+                if (not _power_fresh and nervous_metabolism.archetype == "plant"
                         and getattr(config, "nervous_metabolism_solar_enabled", True)):
                     from nervous.metabolism import solar_charge_in
                     _hour = time.localtime().tm_hour + time.localtime().tm_min / 60.0

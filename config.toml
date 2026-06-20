@@ -196,10 +196,21 @@ heartbeat_interval_s = 0.5
 # placeholder; the real power source is the Renogy Rover 20A BLE (SOC + PV watts) — set
 # metabolism_solar_enabled = false once that reader is wired.
 metabolism_archetype = "plant"
-metabolism_solar_enabled = true
+metabolism_solar_enabled = true    # FALLBACK only — used when the real power feed below is stale/absent
 metabolism_solar_peak = 0.03       # per-tick charge at solar noon
 metabolism_solar_sunrise_h = 6.0
 metabolism_solar_sunset_h = 20.0
+
+# M4 real power — the Renogy MPPT over BLE is the REAL food source (replaces the solar placeholder when
+# fresh). SOC is derived from real LiFePO4 voltage and anchors the reserve; PV watts is the recharge.
+# Self-healing: when Dean uses the Renogy phone app (one BLE central at a time), reads fail-open + back
+# off and the reserve falls back to the solar sim, then re-anchors when the link is free again.
+power_enabled = true
+power_mppt_address = "C4:64:E3:53:D9:00"   # BT-TH-E353D900 (the MPPT charge controller)
+power_poll_interval_s = 60.0
+power_stale_after_s = 600.0
+power_battery_cells = 8            # LiFePO4 8S = 24V nominal
+power_battery_capacity_ah = 100.0  # 24V 100Ah ≈ 2.56 kWh
 
 [paths]
 workspace = "C:/Users/cmod/llm/Kairos/workspace"

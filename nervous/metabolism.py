@@ -90,6 +90,7 @@ class Metabolism:
         # the eidos node runs as a "plant" via config (stationary + solar).
         self.archetype = str(archetype or "animal")
         self.energy = max(0.0, min(1.0, float(start_energy)))
+        self._anchored_at = 0.0   # monotonic time of the last real-SOC anchor (0 = never)
         self.save_every = int(save_every)
         self._since_save = 0
         self._lock = threading.Lock()
@@ -130,10 +131,28 @@ class Metabolism:
         return round(spent, 5)
 
     def feed(self, amount):
-        """Nourishment restores energy (M1: learning progress, mastery, connection, exploration; M4:
-        real solar charge). Clamped to [0,1]. Returns the new energy."""
+        """Nourishment restores energy. Clamped to [0,1]. Returns the new energy. (Mostly used by the
+        animal archetype / tests now; for a real-power node the reserve is ANCHORED to SOC instead.)"""
         with self._lock:
             self.energy = max(0.0, min(1.0, self.energy + float(amount)))
+            e = self.energy
+        self._publish()
+        return round(e, 4)
+
+    def anchor_soc(self, soc_percent):
+        """Set the reserve to the REAL battery state-of-charge (0..100%). This is the post-pivot truth
+        path: when a power reader has a fresh reading, the energy reserve IS the battery, not a sim. The
+        per-tick metabolize() drift between reads still applies (so thinking is still felt as spending);
+        each fresh reading re-anchors to reality. Ignores out-of-range / None (fail-safe). Returns energy."""
+        try:
+            s = float(soc_percent)
+        except (TypeError, ValueError):
+            return self.energy
+        if s != s or s < 0.0 or s > 100.0:   # NaN or out of range -> ignore (don't corrupt the reserve)
+            return self.energy
+        with self._lock:
+            self.energy = s / 100.0
+            self._anchored_at = time.monotonic()
             e = self.energy
         self._publish()
         return round(e, 4)
