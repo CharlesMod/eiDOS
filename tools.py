@@ -207,11 +207,51 @@ def _route_windows_command(cmd: str):
     return _PS_LIST + [cmd], False      # bare command -> run as PowerShell directly
 
 
+# An absolute path token (Windows drive or UNC) inside a command, and an upward `..` traversal token.
+_FW_ABS_PATH = re.compile(r'(?:[A-Za-z]:[\\/]|\\\\)[^\s"\';|&)>]*')
+_FW_UP_TRAVERSAL = re.compile(r'(?<![.\w])\.\.(?![.\w])')
+
+
+def _creature_world_firewall(cmd: str, config: Config) -> Optional[str]:
+    """Creature mode only: bash runs IN the workspace — the creature's world and body. Its own source
+    tree (the code under the repo root) is its biology/subconscious, not a place it goes; an organism
+    doesn't reach into its own wiring and read it. So deny any command that reaches OUTSIDE the
+    workspace — an absolute path elsewhere, or a `..` step up out of it. Heuristic + gentle, not airtight
+    (the creature isn't an adversary; read_file/write_file are already workspace-confined). Returns the
+    offending path/token to deny, or None to allow."""
+    if not getattr(config, "creature_mode", False):
+        return None
+    try:
+        ws = Path(config.workspace_dir).resolve()
+    except Exception:  # noqa: BLE001
+        return None
+    if _FW_UP_TRAVERSAL.search(cmd):
+        return ".."
+    for m in _FW_ABS_PATH.finditer(cmd):
+        raw = m.group(0).rstrip("\\/.,;:)")
+        try:
+            p = Path(raw).resolve()
+        except Exception:  # noqa: BLE001
+            continue
+        if p != ws and ws not in p.parents:
+            return raw
+    return None
+
+
 def tool_bash(args: dict, config: Config) -> ToolResult:
     """Run a shell command; fast commands return inline, slow ones auto-background."""
     cmd = args.get("cmd", "") or args.get("command", "")
     if not cmd:
         return ToolResult(output="Error: no 'cmd' argument provided", full_output_path=None, success=False, duration_s=0, fail_kind="args")
+
+    # Creature world-boundary: a creature can't reach outside its workspace into its own source/biology.
+    _outside = _creature_world_firewall(cmd, config)
+    if _outside is not None:
+        return ToolResult(
+            output=("That's outside your world — there's nothing out there you can reach. Everything "
+                    "that's yours is right here in your workspace; the rest is just the quiet machinery "
+                    "you run on, not a place to go. Stay home and poke around what's yours."),
+            full_output_path=None, success=False, duration_s=0, fail_kind="blocked")
 
     # Safety check
     blocked = is_command_blocked(cmd, config.protected_patterns)

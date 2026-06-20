@@ -17,6 +17,7 @@ from tools import (
     tool_bg_run, tool_bg_check,
     tool_update_plan, tool_memorize, tool_recall,
     refresh_jobs, _read_jobs, _write_jobs, ToolResult,
+    _creature_world_firewall,
 )
 
 
@@ -414,6 +415,59 @@ class TestTools(unittest.TestCase):
         self.assertIn("memorize", TOOLS)
         self.assertIn("recall", TOOLS)
         self.assertIn("delegate", TOOLS)
+
+
+class TestCreatureWorldFirewall(unittest.TestCase):
+    """Creature-mode bash is confined to the workspace (its world); it can't reach into its own source
+    tree (its biology). Dean (2026-06-20): the creature shouldn't read its own source code."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.config = Config()
+        self.config.workspace_dir = os.path.join(self.tmp, "workspace")
+        os.makedirs(self.config.workspace_dir)
+        self.config.creature_mode = True
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_up_traversal_blocked(self):
+        self.assertIsNotNone(_creature_world_firewall(r"Get-Content ..\eidos.py", self.config))
+        self.assertIsNotNone(_creature_world_firewall("cat ../prompts.py", self.config))
+
+    def test_cd_up_then_read_blocked(self):
+        self.assertIsNotNone(_creature_world_firewall("cd ..; Get-Content reward.py", self.config))
+
+    def test_absolute_path_to_source_blocked(self):
+        if os.name != "nt":
+            self.skipTest("windows absolute-path form")
+        src = os.path.join(self.tmp, "eidos.py")            # parent of workspace = the source tree
+        self.assertIsNotNone(_creature_world_firewall(f"Get-Content {src}", self.config))
+
+    def test_absolute_path_into_workspace_allowed(self):
+        if os.name != "nt":
+            self.skipTest("windows absolute-path form")
+        inside = os.path.join(self.config.workspace_dir, "notes.md")
+        self.assertIsNone(_creature_world_firewall(f"Get-Content {inside}", self.config))
+
+    def test_plain_workspace_commands_allowed(self):
+        self.assertIsNone(_creature_world_firewall("Get-ChildItem", self.config))
+        self.assertIsNone(_creature_world_firewall("Get-Content llm_log.jsonl", self.config))
+        self.assertIsNone(_creature_world_firewall('python -c "print(1)"', self.config))
+
+    def test_prose_dots_not_flagged(self):
+        # "..." in a printed string isn't a path-traversal
+        self.assertIsNone(_creature_world_firewall('Write-Output "hmm... let me see"', self.config))
+
+    def test_not_enforced_outside_creature_mode(self):
+        self.config.creature_mode = False                   # the house AI keeps full reach
+        self.assertIsNone(_creature_world_firewall(r"Get-Content ..\eidos.py", self.config))
+
+    def test_bash_tool_returns_gentle_denial(self):
+        r = tool_bash({"cmd": r"Get-Content ..\eidos.py"}, self.config)
+        self.assertFalse(r.success)
+        self.assertIn("outside your world", r.output)
 
 
 class TestSkillWatchdog(unittest.TestCase):
