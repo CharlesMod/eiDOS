@@ -206,9 +206,16 @@ class Config:
     # collapses to torpor the creature rests + recovers (hibernation, not death). The stakes that make
     # inaction costly so the creature acts like an organism instead of ruminating.
     nervous_metabolism_enabled: bool = True
-    nervous_metabolism_rest_arousal: float = 0.2     # at/below this arousal the creature is resting (recovers)
-    nervous_metabolism_learn_feed: float = 0.02      # M1: energy a full-learning-progress tick restores (nourishment)
-    nervous_metabolism_act_feed: float = 0.01        # M2.4: energy a SUCCESSFUL authored-skill call restores (mastery)
+    nervous_metabolism_rest_arousal: float = 0.2     # at/below this arousal the creature is resting (low-power dormancy)
+    # Post-pivot (2026-06-20): food = literal battery power. archetype "plant" = recharges from
+    # environmental power (solar) only; "animal" = also recharges by resting/docking. This node is a
+    # stationary solar-powered desktop → plant. Real power source = the Renogy Rover BLE (SOC + PV
+    # watts); until that reader exists, a plant uses the solar_charge_in() daylight placeholder.
+    nervous_metabolism_archetype: str = "plant"
+    nervous_metabolism_solar_enabled: bool = True    # interim solar daylight curve (plant); off once Renogy is wired
+    nervous_metabolism_solar_peak: float = 0.03      # per-tick charge at solar noon
+    nervous_metabolism_solar_sunrise_h: float = 6.0  # local-hour daylight window (placeholder; PV reading replaces it)
+    nervous_metabolism_solar_sunset_h: float = 20.0
 
     @property
     def workspace(self) -> Path:
@@ -481,8 +488,11 @@ def load_config(path: str = "config.toml") -> Config:
         config.nervous_learning_consolidate_interval_s = float(nervous.get("learning_consolidate_interval_s", config.nervous_learning_consolidate_interval_s))
         config.nervous_metabolism_enabled = nervous.get("metabolism_enabled", config.nervous_metabolism_enabled)
         config.nervous_metabolism_rest_arousal = float(nervous.get("metabolism_rest_arousal", config.nervous_metabolism_rest_arousal))
-        config.nervous_metabolism_learn_feed = float(nervous.get("metabolism_learn_feed", config.nervous_metabolism_learn_feed))
-        config.nervous_metabolism_act_feed = float(nervous.get("metabolism_act_feed", config.nervous_metabolism_act_feed))
+        config.nervous_metabolism_archetype = str(nervous.get("metabolism_archetype", config.nervous_metabolism_archetype))
+        config.nervous_metabolism_solar_enabled = nervous.get("metabolism_solar_enabled", config.nervous_metabolism_solar_enabled)
+        config.nervous_metabolism_solar_peak = float(nervous.get("metabolism_solar_peak", config.nervous_metabolism_solar_peak))
+        config.nervous_metabolism_solar_sunrise_h = float(nervous.get("metabolism_solar_sunrise_h", config.nervous_metabolism_solar_sunrise_h))
+        config.nervous_metabolism_solar_sunset_h = float(nervous.get("metabolism_solar_sunset_h", config.nervous_metabolism_solar_sunset_h))
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

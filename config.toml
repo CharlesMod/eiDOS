@@ -190,5 +190,16 @@ reliable_backpressure_max_s = 30.0
 admits_per_source_per_window = 1000
 heartbeat_interval_s = 0.5
 
+# Metabolism — food = literal battery power (2026-06-20 pivot). This node is a stationary,
+# solar-powered desktop → archetype "plant": recharges from environmental power (solar) only, never by
+# napping. ("animal" = a mobile bot that recharges by resting/docking.) The solar curve is the INTERIM
+# placeholder; the real power source is the Renogy Rover 20A BLE (SOC + PV watts) — set
+# metabolism_solar_enabled = false once that reader is wired.
+metabolism_archetype = "plant"
+metabolism_solar_enabled = true
+metabolism_solar_peak = 0.03       # per-tick charge at solar noon
+metabolism_solar_sunrise_h = 6.0
+metabolism_solar_sunset_h = 20.0
+
 [paths]
 workspace = "C:/Users/cmod/llm/Kairos/workspace"

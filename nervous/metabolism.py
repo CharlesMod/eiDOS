@@ -4,20 +4,29 @@ The first fresh-creature night proved survival / identity / calm — but the cre
 thoughts, ~3 actions): a free creature with no STAKES reverts to its training and just thinks. *A robot
 that sits on its charger all day is a flawed being.* Metabolism adds genuine scarcity: an **energy
 reserve** that DRAINS with living — and with cognition most of all (an LLM "thought" is the dearest
-metabolic act, the GPU at full tilt) — and is restored by REST (later: nourishing acts in M1, real
-solar power in M4).
+metabolic act, the GPU at full tilt).
+
+**Food = literal energy = available battery power (Dean, 2026-06-20 pivot).** The abstract-nutrient idea
+(learning-progress / mastery AS food) was retired from the ENERGY economy — it was a rabbit hole. The
+reserve IS the charge, and recharge comes from real power. How energy comes IN depends on the organism
+ARCHETYPE:
+  - **plant** (this stationary, solar-powered node) — autotroph: recharges PASSIVELY from environmental
+    power (`charge_in`, e.g. solar by day). It does not nap to refill; at night it husbands its reserve.
+  - **animal** — recharges by RESTING in place / docking (the `recovery` term while `resting`), i.e. a
+    mobile bot that sleeps at its charger. `charge_in` still applies if it's docked under power.
+The real power signal is the **Renogy Rover 20A Bluetooth** (SOC + PV watts); until that BLE reader
+exists, a plant uses `solar_charge_in()` — a simple daylight-curve placeholder.
 
 Low energy is FELT as **hunger** — a felt bar that is NOT baseline (unlike VRAM), so a depleting
 reserve genuinely worsens the body-feeling and rides the existing wellbeing→reward homeostatic loop
-(`felt.py` + `reward.py W_FELT`). The creature is already rewarded for keeping its body well, so empty
-rumination (cognition cost, no nourishment) becomes a net loss it learns to avoid — no scripted "stop
-ruminating" rule; the behavior falls out of the energy economy (loops, not guardrails).
+(`felt.py` + `reward.py W_FELT`). Empty rumination (cognition cost, no power in) becomes a net loss the
+creature learns to avoid — no scripted "stop ruminating" rule; it falls out of the economy (loops, not
+guardrails).
 
-This organ only tracks/recovers/publishes energy. It never acts, never blocks the tick, fully guarded.
-Tiredness→sleep coupling (M0.3) and the nutrient feeds (M1) wire in separately; `feed()` is the seam
-they'll call.
+This organ only tracks/recharges/publishes energy. It never acts, never blocks the tick, fully guarded.
 """
 import json
+import math
 import os
 import threading
 import time
@@ -27,8 +36,23 @@ from .event import NervousEvent, Kind, Modality, Delivery, SCHEMA_VERSION
 # Per-tick energy costs / recovery (defaults; all overridable via config). Thinking is the dearest act.
 BASAL_DRAIN = 0.001       # just being alive, per tick
 COGNITION_DRAIN = 0.004   # one LLM "thought" — the dearest metabolic event
-ACTION_DRAIN = 0.002      # a world-touching tool action (costs, but M1 lets such acts also NOURISH)
-REST_RECOVERY = 0.02      # resting / sleeping restores far faster than activity drains
+ACTION_DRAIN = 0.002      # a world-touching tool action
+REST_RECOVERY = 0.02      # an ANIMAL resting/docked recharges; a PLANT does not (it uses charge_in)
+
+# Solar placeholder (until the Renogy BLE reader lands). A daylight triangle: zero before sunrise /
+# after sunset, peaking at solar noon. Per-tick charge rate, so it composes with the per-tick drains.
+SOLAR_PEAK = 0.03         # per-tick charge at solar noon (must out-pace daytime drain to net-charge)
+SOLAR_SUNRISE_H = 6.0
+SOLAR_SUNSET_H = 20.0
+
+
+def solar_charge_in(hour, *, peak=SOLAR_PEAK, sunrise=SOLAR_SUNRISE_H, sunset=SOLAR_SUNSET_H):
+    """Interim plant power source: per-tick solar charge for a given local hour (float, 0..24).
+    A smooth half-sine over the daylight window, zero at night. Replaced by the Renogy PV reading."""
+    if hour <= sunrise or hour >= sunset or sunset <= sunrise:
+        return 0.0
+    frac = (hour - sunrise) / (sunset - sunrise)   # 0..1 across the day
+    return max(0.0, float(peak) * math.sin(math.pi * frac))
 
 # Hunger (= 1 - energy) -> felt-bar level. Low energy = high hunger = stress (NON-baseline in felt.py).
 HUNGER_ELEVATED = 0.30
@@ -53,7 +77,7 @@ class Metabolism:
 
     def __init__(self, bus=None, *, config=None, source="metabolism", start_energy=0.8,
                  basal=BASAL_DRAIN, cognition=COGNITION_DRAIN, action=ACTION_DRAIN,
-                 recovery=REST_RECOVERY, state_path=None, save_every=20):
+                 recovery=REST_RECOVERY, archetype="animal", state_path=None, save_every=20):
         self.bus = bus
         self.config = config
         self.source = source
@@ -61,6 +85,10 @@ class Metabolism:
         self.cognition = float(cognition)
         self.action = float(action)
         self.recovery = float(recovery)
+        # plant = recharges from environmental power (charge_in) only; animal = also recharges by
+        # resting/docking. The general class defaults to "animal" (intuitive nap-recovers organism);
+        # the eidos node runs as a "plant" via config (stationary + solar).
+        self.archetype = str(archetype or "animal")
         self.energy = max(0.0, min(1.0, float(start_energy)))
         self.save_every = int(save_every)
         self._since_save = 0
@@ -74,20 +102,23 @@ class Metabolism:
         self._load()
 
     # ---- the per-tick energy step ----------------------------------------------------
-    def metabolize(self, *, thought=True, acted=False, resting=False):
-        """One tick of the energy economy. Living costs energy; thinking costs most; acting costs (M1
-        lets acts nourish too); resting recovers. Returns energy SPENT this tick (>0 drain, <0 gain)."""
+    def metabolize(self, *, thought=True, acted=False, resting=False, charge_in=0.0):
+        """One tick of the energy economy. Living costs energy; thinking costs most; acting costs. Power
+        comes IN as `charge_in` (environmental power — a plant's solar; an animal's dock), and — for an
+        ANIMAL only — from resting/docking (`recovery`). A resting organism is dormant: it pays basal
+        but not cognition/action. Returns energy SPENT this tick (>0 net drain, <0 net gain)."""
         with self._lock:
             before = self.energy
-            if resting:
-                self.energy = min(1.0, self.energy + self.recovery)
-            else:
-                drain = self.basal
+            drain = self.basal
+            if not resting:                 # dormant body spends nothing on thought/action
                 if thought:
                     drain += self.cognition
                 if acted:
                     drain += self.action
-                self.energy = max(0.0, self.energy - drain)
+            gain = max(0.0, float(charge_in))                 # environmental power in (solar / dock)
+            if self.archetype == "animal" and resting:
+                gain += self.recovery                         # an animal naps/docks to recharge
+            self.energy = max(0.0, min(1.0, self.energy + gain - drain))
             spent = before - self.energy
             self._since_save += 1
             do_save = self._since_save >= self.save_every

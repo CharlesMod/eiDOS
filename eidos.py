@@ -626,14 +626,18 @@ def run_loop(config: Config, persona=None, wal=None):
             afferent = None
             nervous_gpu = None
 
-    # M0: metabolism — the energy economy (the organism's stakes). Drains with living + cognition (an
-    # LLM "thought" is the dearest act) + action; restored by rest. feed() is the seam M1's nutrients
-    # (and M4's real solar) will call. Created BEFORE interoception so its hunger folds into the body.
+    # M0: metabolism — the energy economy (the organism's stakes). Food = literal battery power
+    # (2026-06-20 pivot): drains with living + cognition (the dearest act) + action; recharges from
+    # environmental power. This node is a "plant" (stationary + solar) → recharges from solar charge_in;
+    # an "animal" would recharge by resting/docking. Real power source = Renogy BLE (SOC + PV watts);
+    # interim = the solar daylight placeholder. Created BEFORE interoception so its hunger folds in.
     if nervous_bus is not None and getattr(config, "nervous_metabolism_enabled", True):
         try:
             from nervous.metabolism import Metabolism
-            nervous_metabolism = Metabolism(bus=nervous_bus, config=config)
-            print(f"{pfx} metabolism started — energy {nervous_metabolism.energy:.2f}; it can tire and hunger")
+            nervous_metabolism = Metabolism(bus=nervous_bus, config=config,
+                                            archetype=getattr(config, "nervous_metabolism_archetype", "plant"))
+            print(f"{pfx} metabolism started — energy {nervous_metabolism.energy:.2f}; "
+                  f"archetype={nervous_metabolism.archetype}; it can tire and hunger")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} metabolism start failed (continuing): {_e}")
 
@@ -670,7 +674,7 @@ def run_loop(config: Config, persona=None, wal=None):
     if nervous_bus is not None and getattr(config, "nervous_learning_enabled", True):
         try:
             from nervous.reward import RewardLearner
-            from nervous.worldmodel import WorldModel, SURPRISE_MAX
+            from nervous.worldmodel import WorldModel
             from nervous.curiosity import CuriosityDrive
             from nervous.sleep import SleepCycle
             nervous_learner = RewardLearner(bus=nervous_bus, neuromod=nervous_neuromod, config=config)
@@ -1306,18 +1310,15 @@ def run_loop(config: Config, persona=None, wal=None):
         if nervous_learner is not None:
             try:
                 # world-model: how much did arriving HERE teach the model — LEARNING PROGRESS, not raw
-                # surprise, so chaos/noise can't feed (Loop A). Curiosity turns progress into a small
-                # intrinsic-reward bonus + restlessness; and genuine learning NOURISHES the metabolism —
-                # so acting-to-understand feeds the creature while empty rumination starves it.
+                # surprise, so chaos/noise can't drive it (Loop A). Curiosity turns progress into a small
+                # intrinsic-reward bonus + restlessness. (Pre-pivot this also FED the metabolism; post-pivot
+                # food = literal battery power, so learning no longer recharges energy — only curiosity.)
                 _intrinsic = 0.0
                 if nervous_worldmodel is not None and _wm_prev_sit is not None:
                     nervous_worldmodel.observe(_wm_prev_sit, _wm_prev_act, tick_situation)
                     _progress = float(getattr(nervous_worldmodel, "last_progress", 0.0) or 0.0)
                     if nervous_curiosity is not None:
                         _intrinsic = nervous_curiosity.observe(_progress)
-                    if nervous_metabolism is not None and _progress > 0.0:
-                        _feed = getattr(config, "nervous_metabolism_learn_feed", 0.02)
-                        nervous_metabolism.feed(min(1.0, _progress / SURPRISE_MAX) * _feed)
                 nervous_learner.observe(situation=tick_situation, action=str(_act_sig),
                                         success=tick_tool_success, made_progress=_made_progress,
                                         strain=_strain_bump, intrinsic=_intrinsic, tick=tick_number)
@@ -1325,22 +1326,29 @@ def run_loop(config: Config, persona=None, wal=None):
             except Exception as _le:  # noqa: BLE001 - learning must never break the tick
                 logger.warning("reward learning failed: %s", _le)
 
-        # --- Metabolism (M0): spend this tick's energy. Thinking is the dearest act; a world-touching
-        #     action costs (and, with M1, will nourish); when arousal has collapsed to torpor the
-        #     creature is RESTING and recovers. Low energy feeds back into neuromod as tiredness, which
-        #     drags arousal toward sleep before empty (hibernation, not death). Guarded. ---
+        # --- Metabolism (M0): spend this tick's energy, and take in power. Thinking is the dearest act;
+        #     a world-touching action costs more. Food = literal battery power (pivot): a PLANT (this
+        #     node) recharges from solar `charge_in`; an ANIMAL would recharge by resting/docking. When
+        #     arousal collapses to torpor the body is dormant (pays only basal). Low energy feeds back
+        #     into neuromod as tiredness, dragging arousal toward sleep before empty (hibernation, not
+        #     death). Solar is the interim placeholder until the Renogy BLE reader supplies real PV. ---
         if nervous_metabolism is not None:
             try:
                 _arousal = float(getattr(nervous_neuromod, "arousal", 0.3) or 0.3)
                 _resting = _arousal <= getattr(config, "nervous_metabolism_rest_arousal", 0.2)
                 _acted = tick_tool_name not in ("", "thought", "parse_error")
-                nervous_metabolism.metabolize(thought=True, acted=_acted, resting=_resting)
-                # M2.4 — accomplishment nutrient: a SUCCESSFUL authored-skill call nourishes (mastery).
-                # Built-ins don't directly feed (the LEARNING from using them feeds via M1); using a
-                # working skill you authored does. Reused-skill-feeds-often naturally rewards reliability.
-                if (tick_tool_success and _acted
-                        and tick_tool_name not in _BUILTIN_TOOL_NAMES):
-                    nervous_metabolism.feed(getattr(config, "nervous_metabolism_act_feed", 0.01))
+                _charge_in = 0.0
+                if (nervous_metabolism.archetype == "plant"
+                        and getattr(config, "nervous_metabolism_solar_enabled", True)):
+                    from nervous.metabolism import solar_charge_in
+                    _hour = time.localtime().tm_hour + time.localtime().tm_min / 60.0
+                    _charge_in = solar_charge_in(
+                        _hour,
+                        peak=getattr(config, "nervous_metabolism_solar_peak", 0.03),
+                        sunrise=getattr(config, "nervous_metabolism_solar_sunrise_h", 6.0),
+                        sunset=getattr(config, "nervous_metabolism_solar_sunset_h", 20.0))
+                nervous_metabolism.metabolize(thought=True, acted=_acted,
+                                              resting=_resting, charge_in=_charge_in)
                 if nervous_neuromod is not None:
                     nervous_neuromod.observe_energy(nervous_metabolism.energy)
             except Exception as _me:  # noqa: BLE001 - metabolism must never break the tick

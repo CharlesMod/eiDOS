@@ -4,6 +4,25 @@ Status: **DESIGN** (brainstormed with Dean, 2026-06-20). Build on branch `v3-ner
 guarded + config-gated like the rest of the nervous system. Builds on the learning layer
 (reward/world-model/curiosity/sleep) and the V3 afferent nervous system.
 
+> ## ⚠ PIVOT — 2026-06-20: food = LITERAL energy (battery power)
+> Dean called the abstract-nutrient model below (learning-progress / mastery / connection **as food**)
+> a **rabbit hole** and retired it from the **energy** economy. **From now on the energy reserve IS the
+> battery charge, and recharge comes from real power.** This makes solar / mechanised nodes inherently
+> power-aware. The energy picture differs by organism **archetype**:
+> - **plant** (this gamingPC node: stationary + oversized solar) — autotroph: recharges *passively from
+>   environmental power* (`charge_in` = solar by day); at night it lives off reserve and husbands. It
+>   does **not** nap to refill. **Default for this node.**
+> - **carnivore / animal** (a future mobile robot) — recharges by *eating / docking* or *sleeping in a
+>   fixed spot* (a den / charger). Energy-in requires seeking a place (the `recovery`-while-`resting` term).
+>
+> **The real food source is the Renogy Rover 20A Bluetooth** (SOC % + PV watts over BLE) — promoted
+> from "M4 later" to **the** power signal. Interim until that reader exists: `solar_charge_in()`, a
+> daylight-curve placeholder. **Shipped:** `metabolism.py` (archetype + `charge_in`), `config`
+> (`metabolism_archetype="plant"` + solar params), `eidos.py` (abstract feeds removed; solar wired),
+> creature prompt (power-aware "your energy comes from your battery" framing). Loops A/D below remain
+> valid as **behaviour/curiosity** signals — just **not as literal energy**. The sections below are kept
+> for that history; read them through the pivot lens.
+
 ## Why
 The first fresh-creature overnight run validated **survival, identity (a creature, not the house AI),
 and calm affect** — but the creature **ruminated all night (5067 thoughts, ~3 actions).** Root cause:
@@ -114,8 +133,10 @@ learner). Get this wrong and we've built a slot machine, not a creature.
 - [ ] **M3.2** Safety backstop: refractory / rate-limit on initiating contact. Tests (nagging
   self-extinguishes; cannot spam).
 
-### Phase M4 — Real solar/power layer (Phase 2)
-Dean: wire in real **battery level** AND **solar intake** when we can. Two distinct signals, two roles:
+### Phase M4 — Real solar/power layer — ★ NOW THE PRIMARY NEXT BUILD (post-pivot)
+The pivot makes this **the** food path, not a "phase 2" nicety: with abstract nutrients retired, real
+power is what feeds the plant. Build the Renogy BLE reader → it replaces `solar_charge_in()`.
+Dean: wire in real **battery level** AND **solar intake**. Two distinct signals, two roles:
 - **battery level (%)** → anchors / calibrates the creature's actual energy *reserve* (the health bar
   IS the real charge; deep-night drawdown is a real famine).
 - **solar intake (watts)** → the *recharge rate* — food availability in its environment, abundant at

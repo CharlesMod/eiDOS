@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from nervous import Metabolism, hunger_to_bar, NervousBus, Kind, Modality  # noqa: E402
+from nervous.metabolism import solar_charge_in  # noqa: E402
 from nervous.felt import to_felt, felt_state, stress_bars, BASELINE_SYSTEMS  # noqa: E402
 from nervous.interoception import Interoception  # noqa: E402
 
@@ -83,6 +84,46 @@ class TestMetabolismCore(unittest.TestCase):
         body = json.loads(bus.payloads.get(ev.payload_ref).decode("utf-8"))
         self.assertIn("energy", body)
         self.assertIn("hunger", body)
+
+
+class TestArchetypeAndPower(unittest.TestCase):
+    """Post-pivot (2026-06-20): food = literal battery power. A PLANT recharges only from environmental
+    power (charge_in / solar); an ANIMAL also recharges by resting/docking."""
+
+    def test_animal_recharges_by_resting(self):
+        a = Metabolism(start_energy=0.5, archetype="animal")
+        a.metabolize(resting=True)
+        self.assertGreater(a.energy, 0.5)            # an animal naps/docks to recover
+
+    def test_plant_does_not_recharge_by_resting(self):
+        # A plant resting with no power coming in just sits dormant (pays basal) — it does NOT refill.
+        p = Metabolism(start_energy=0.5, archetype="plant")
+        p.metabolize(resting=True, charge_in=0.0)
+        self.assertLess(p.energy, 0.5)               # no sun, no food — even at rest it ebbs
+        self.assertAlmostEqual(p.energy, 0.5 - p.basal, places=4)
+
+    def test_plant_recharges_from_charge_in(self):
+        p = Metabolism(start_energy=0.5, archetype="plant")
+        p.metabolize(thought=True, charge_in=0.05)   # bright sun out-paces a thinking tick
+        self.assertGreater(p.energy, 0.5)
+
+    def test_resting_body_pays_no_cognition(self):
+        # Dormant = no thought/action cost, only basal — both archetypes.
+        busy = Metabolism(start_energy=1.0, archetype="plant"); busy.metabolize(thought=True, acted=True)
+        dorm = Metabolism(start_energy=1.0, archetype="plant"); dorm.metabolize(thought=True, resting=True)
+        self.assertLess(busy.energy, dorm.energy)
+
+    def test_solar_curve_dark_at_night_peaks_midday(self):
+        self.assertEqual(solar_charge_in(3.0), 0.0)          # pre-dawn: nothing
+        self.assertEqual(solar_charge_in(23.0), 0.0)         # after dusk: nothing
+        self.assertEqual(solar_charge_in(6.0), 0.0)          # sunrise edge
+        noon = solar_charge_in(13.0, peak=0.03)              # ~solar noon (mid of 6..20)
+        self.assertGreater(noon, 0.02)
+        self.assertLessEqual(noon, 0.03 + 1e-9)              # never exceeds peak
+        self.assertGreater(solar_charge_in(13.0), solar_charge_in(8.0))   # midday > morning
+
+    def test_solar_curve_handles_degenerate_window(self):
+        self.assertEqual(solar_charge_in(12.0, sunrise=20.0, sunset=6.0), 0.0)  # inverted window → 0
 
 
 class TestHungerIsFelt(unittest.TestCase):
