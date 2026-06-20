@@ -92,11 +92,11 @@ learner). Get this wrong and we've built a slot machine, not a creature.
   energy/hunger. Full suite green. Commit.
 
 ### Phase M1 — Learning-progress nutrient (Loop A)
-- [ ] **M1.1** Extend `nervous/worldmodel.py`: track learning **progress** (prediction-error drop over
+- [x] **M1.1** Extend `nervous/worldmodel.py`: track learning **progress** (prediction-error drop over
   exposure / compression gain), not just instantaneous surprise.
-- [ ] **M1.2** Feed energy from genuine learning progress. Tests: noise/chaos does NOT feed
+- [x] **M1.2** Feed energy from genuine learning progress. Tests: noise/chaos does NOT feed
   (anti-TV-static); repetition satiates; a mastered domain stops feeding (frontier-seeking).
-- [ ] **M1.3** Wire into metabolism + reward; surface in behind-the-curtain. Commit.
+- [x] **M1.3** Wire into metabolism + reward; surface in behind-the-curtain. Commit.
 
 ### Phase M2 — Mastery + the SKILL REVAMP  ⚠ DESIGN-FIRST (do NOT execute until the design below is settled)
 - [ ] **M2.0** Finalize the skill-language design (section below) with Dean.
