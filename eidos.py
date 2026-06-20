@@ -600,16 +600,21 @@ def run_loop(config: Config, persona=None, wal=None):
     #     must NEVER break the tick loop (I5), so everything here is guarded. ---
     nervous_bus = None
     afferent = None
+    nervous_gpu = None
     if getattr(config, "nervous_enabled", False):
         try:
             import nervous
             nervous_bus = nervous.build_bus(config)
             afferent = nervous.AfferentContext.from_config(nervous_bus, config)
-            print(f"{pfx} nervous bus up ({getattr(config, 'nervous_transport', 'inproc')}); afferent intake ready")
+            # P2: the GPU lease arbiter (mind / TTS / escalated perception). Available for the
+            # speech-gate migration + escalated perception (P6); inert until a claimant acquires.
+            nervous_gpu = nervous.GpuArbiter(bus=nervous_bus, log_path=str(config.nervous_gpu_leases_log_path))
+            print(f"{pfx} nervous bus up ({getattr(config, 'nervous_transport', 'inproc')}); afferent intake + GPU arbiter ready")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} nervous bus init failed (continuing without afferent): {_e}")
             nervous_bus = None
             afferent = None
+            nervous_gpu = None
 
     # P1a: start interoception — the first organ. The creature feels its body: host telemetry ->
     # coarse felt bars on the bus -> surfaced in context via the afferent intake. Guarded (I5).

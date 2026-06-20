@@ -187,6 +187,7 @@ class Config:
     nervous_interoception_interval_s: float = 5.0       # P1a: interoception sampling cadence
     nervous_drop_log_name: str = "drop_events.jsonl"
     nervous_metrics_log_name: str = "nervous_metrics.jsonl"
+    nervous_gpu_leases_log_name: str = "gpu_leases.jsonl"   # P2: GPU arbiter grant/preempt/reclaim log
 
     @property
     def workspace(self) -> Path:
@@ -267,6 +268,10 @@ class Config:
     @property
     def nervous_metrics_log_path(self) -> Path:
         return self.state_dir / self.nervous_metrics_log_name
+
+    @property
+    def nervous_gpu_leases_log_path(self) -> Path:
+        return self.state_dir / self.nervous_gpu_leases_log_name
 
 
 def load_config(path: str = "config.toml") -> Config:
@@ -436,6 +441,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.nervous_interoception_interval_s = float(nervous.get("interoception_interval_s", config.nervous_interoception_interval_s))
         config.nervous_drop_log_name = nervous.get("drop_log_name", config.nervous_drop_log_name)
         config.nervous_metrics_log_name = nervous.get("metrics_log_name", config.nervous_metrics_log_name)
+        config.nervous_gpu_leases_log_name = nervous.get("gpu_leases_log_name", config.nervous_gpu_leases_log_name)
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)
