@@ -632,6 +632,20 @@ def run_loop(config: Config, persona=None, wal=None):
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} interoception start failed (continuing): {_e}")
 
+    # The nervous-system monitor — the operator's read-only "behind the curtain" window. It SUBSCRIBES
+    # to the bus (I6, never recomputes) and writes a compact snapshot the dashboard serves to its tab.
+    # Pure observer, fully guarded: a monitor fault can never touch the creature.
+    if nervous_bus is not None and getattr(config, "nervous_monitor_enabled", True):
+        try:
+            from nervous.monitor import NervousMonitor
+            NervousMonitor(nervous_bus, arbiter=nervous_gpu, config=config,
+                           snapshot_path=str(config.nervous_snapshot_path),
+                           interval_s=getattr(config, "nervous_monitor_interval_s", 1.0),
+                           feed_max=getattr(config, "nervous_monitor_feed_max", 48)).start()
+            print(f"{pfx} nervous monitor started — behind-the-curtain snapshot live")
+        except Exception as _e:  # noqa: BLE001
+            print(f"{pfx} nervous monitor start failed (continuing): {_e}")
+
     while not _shutdown_requested:
         # --- Operator pause check ---
         pause_path = config.workspace / "paused"

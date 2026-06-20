@@ -192,6 +192,10 @@ class Config:
     nervous_drop_log_name: str = "drop_events.jsonl"
     nervous_metrics_log_name: str = "nervous_metrics.jsonl"
     nervous_gpu_leases_log_name: str = "gpu_leases.jsonl"   # P2: GPU arbiter grant/preempt/reclaim log
+    nervous_monitor_enabled: bool = True            # the "behind the curtain" nervous-system snapshot for the dashboard
+    nervous_monitor_interval_s: float = 1.0         # how often the monitor writes its snapshot
+    nervous_monitor_feed_max: int = 48              # rolling event-feed length carried in the snapshot
+    nervous_snapshot_name: str = "nervous_snapshot.json"
 
     @property
     def workspace(self) -> Path:
@@ -276,6 +280,11 @@ class Config:
     @property
     def nervous_gpu_leases_log_path(self) -> Path:
         return self.state_dir / self.nervous_gpu_leases_log_name
+
+    @property
+    def nervous_snapshot_path(self) -> Path:
+        """The 'behind the curtain' nervous-system snapshot the monitor writes + the dashboard serves."""
+        return self.state_dir / self.nervous_snapshot_name
 
 
 def load_config(path: str = "config.toml") -> Config:
@@ -448,6 +457,10 @@ def load_config(path: str = "config.toml") -> Config:
         config.nervous_drop_log_name = nervous.get("drop_log_name", config.nervous_drop_log_name)
         config.nervous_metrics_log_name = nervous.get("metrics_log_name", config.nervous_metrics_log_name)
         config.nervous_gpu_leases_log_name = nervous.get("gpu_leases_log_name", config.nervous_gpu_leases_log_name)
+        config.nervous_monitor_enabled = nervous.get("monitor_enabled", config.nervous_monitor_enabled)
+        config.nervous_monitor_interval_s = float(nervous.get("monitor_interval_s", config.nervous_monitor_interval_s))
+        config.nervous_monitor_feed_max = nervous.get("monitor_feed_max", config.nervous_monitor_feed_max)
+        config.nervous_snapshot_name = nervous.get("snapshot_name", config.nervous_snapshot_name)
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

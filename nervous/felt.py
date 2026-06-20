@@ -50,6 +50,16 @@ def stress_bars(bars):
     return {k: v for k, v in bars.items() if v is not None and k not in BASELINE_SYSTEMS}
 
 
+def system_phrase(system, level):
+    """The felt phrase for ONE system at ONE level — the per-sense sub-function the monitor surfaces in
+    the 'behind the curtain' transduction stack. Baseline systems (VRAM = the resident mind) use the calm
+    posture phrasing. Returns '' for 'ok'/None/unknown (a system at ease has nothing to say)."""
+    if not level or level == "ok":
+        return ""
+    table = _BASELINE_PHRASE if system in BASELINE_SYSTEMS else _PHRASE
+    return table.get(system, {}).get(level, "")
+
+
 def to_felt(bars):
     """bars: {system -> 'ok'|'elevated'|'high'|'critical'} (None values ignored).
     Returns {'overall': <feeling word>, 'felt': [<phrase>, ...]} — the felt qualia.

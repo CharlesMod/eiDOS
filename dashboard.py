@@ -998,6 +998,9 @@ def _make_handler(config: Config):
                 data = build_metrics(config)
                 self._respond(200, "application/json", json.dumps(data))
 
+            elif self.path == "/api/nervous":
+                self._respond(200, "application/json", json.dumps(build_nervous(config)))
+
             elif self.path == "/api/control/status":
                 self._respond(200, "application/json", json.dumps(_ctrl_status(config)))
 
@@ -1889,6 +1892,65 @@ def get_gpu_stats(_cache={"t": 0.0, "v": {}}):
     _cache["t"] = now
     _cache["v"] = v
     return v
+
+
+def _raw_substrate(config):
+    """The bottom layer of the Pantheon reveal: the actual hardware numbers the creature never sees.
+    Read on the dashboard side (it already polls nvidia-smi), so the felt snapshot stays substrate-free."""
+    sub = {"gpu_name": None, "vram_used_gb": None, "vram_total_gb": None, "vram_pct": None,
+           "gpu_temp_c": None, "gpu_util": None, "gpu_power_w": None,
+           "cpu_pct": None, "ram_pct": None, "disk_free_gb": None}
+    try:
+        g = get_gpu_stats() or {}
+        mu, mt = g.get("mem_used"), g.get("mem_total")
+        sub["gpu_name"] = g.get("name")
+        sub["vram_used_gb"] = round(mu / 1024.0, 2) if mu is not None else None
+        sub["vram_total_gb"] = round(mt / 1024.0, 2) if mt is not None else None
+        sub["vram_pct"] = round(mu / mt * 100.0, 1) if (mu and mt) else None
+        sub["gpu_temp_c"] = g.get("temp")
+        sub["gpu_util"] = g.get("util")
+        sub["gpu_power_w"] = g.get("power")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        sub["cpu_pct"] = round(float(get_cpu_pct()), 1)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import safety
+        sub["ram_pct"] = round(float(safety.check_ram(100.0)[1]), 1)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import safety
+        sub["disk_free_gb"] = round(float(safety.check_disk_space(str(config.workspace), 0.0)[1]), 1)
+    except Exception:  # noqa: BLE001
+        pass
+    return sub
+
+
+def build_nervous(config):
+    """The 'behind the curtain' view: eiDOS's nervous-system snapshot (felt/mood/organs/bus/feed, written
+    by the in-process NervousMonitor) merged with the live RAW substrate the dashboard reads directly.
+    age_s tells the UI how fresh the snapshot is (None/large = eidos not ticking)."""
+    snap = _read_json(config.nervous_snapshot_path)
+    if not isinstance(snap, dict) or not snap:
+        snap = None
+    age = None
+    if snap and snap.get("ts"):
+        try:
+            age = round(time.time() - float(snap["ts"]), 1)
+        except (TypeError, ValueError):
+            age = None
+    st = _ctrl_status(config)
+    return {
+        "snapshot": snap,
+        "substrate": _raw_substrate(config),
+        "age_s": age,
+        "running": bool(st.get("running")),
+        "paused": bool(st.get("paused")),
+        "enabled": bool(getattr(config, "nervous_enabled", False)),
+    }
 
 
 def get_llm_stats(config, _cache={"t": 0.0, "v": {}}):

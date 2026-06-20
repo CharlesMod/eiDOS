@@ -807,6 +807,7 @@ body.wb-nocode #wb-code{display:none}
   <span id="nx-tabs">
     <button id="tab-st" class="on" onclick="wbTab(false)">station</button>
     <button id="tab-wb" onclick="wbTab(true)">workbench</button>
+    <button id="tab-nv" onclick="nvTab()" title="Peek behind the curtain — how the nervous system feels &amp; functions">behind the curtain</button>
   </span>
   <span id="nx-state">checking…</span>
   <button id="nx-start" onclick="nxCtl('start')">&#9654; Start (paused)</button>
@@ -2042,6 +2043,231 @@ async function rejectSelfEdit(id) {
     loadSelfEdits();
 }
 setInterval(loadSelfEdits, 12000); loadSelfEdits();
+</script>
+
+<style>
+/* ===== behind the curtain — the nervous system, peeled back ===== */
+#nv-panel{display:none;position:fixed;left:0;right:0;top:39px;bottom:0;z-index:550;
+  background:radial-gradient(120% 90% at 50% -10%, #0a1712 0%, #060a08 55%, #030504 100%);
+  overflow-y:auto;overflow-x:hidden;color:#9fe6b0;}
+body.nv-open #nv-panel{display:block}
+#nv-inner{max-width:1180px;margin:0 auto;padding:18px 18px 70px;}
+.nv-head{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;
+  border-bottom:1px solid #1a3a2a;padding-bottom:8px;margin-bottom:14px;}
+.nv-title{color:#ffb000;letter-spacing:4px;font-size:16px;text-shadow:0 0 10px rgba(255,176,0,.4);}
+.nv-title .nv-sub{color:#5a7a64;letter-spacing:1px;font-size:11px;margin-left:10px;text-transform:none;}
+.nv-status{font-size:11px;color:#7fb890;display:flex;align-items:center;gap:7px;}
+.nv-dot{width:9px;height:9px;border-radius:50%;background:#444;box-shadow:0 0 6px #444;}
+.nv-dot.live{background:#00ff41;box-shadow:0 0 9px #00ff41;animation:nvpulse 2s infinite;}
+.nv-dot.stale{background:#ffb000;box-shadow:0 0 9px #ffb000;}
+.nv-dot.off{background:#a33;box-shadow:0 0 9px #a33;}
+@keyframes nvpulse{0%,100%{opacity:1}50%{opacity:.3}}
+.nv-layer{margin:0 0 16px;}
+.nv-layer-tag{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#5f8a6e;margin-bottom:7px;}
+.nv-felt .nv-felt2{border:1px solid #1c5a35;border-radius:8px;padding:18px 20px;
+  background:linear-gradient(180deg, rgba(0,255,65,.05), rgba(0,0,0,.25));}
+.nv-felt-overall{font-size:30px;letter-spacing:1px;color:#00ff41;text-shadow:0 0 18px rgba(0,255,65,.45);}
+.nv-felt-phrases{margin-top:8px;}
+.nv-pill{display:inline-block;border:1px solid #2a6a44;border-radius:12px;padding:1px 10px;margin:4px 6px 0 0;font-size:11px;color:#cfeed8;}
+.nv-mood{margin-top:14px;display:flex;align-items:center;gap:18px;flex-wrap:wrap;font-size:12px;color:#9fd;}
+.nv-gauge{display:flex;align-items:center;gap:7px;}
+.nv-gl{color:#6a9a7a;font-size:10px;letter-spacing:1px;text-transform:uppercase;}
+.nv-meter{width:120px;height:8px;border:1px solid #244;border-radius:4px;background:#071109;overflow:hidden;}
+.nv-meter > i{display:block;height:100%;background:#00ff41;box-shadow:0 0 8px rgba(0,255,65,.6);}
+.nv-stack{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;}
+@media(max-width:760px){.nv-stack{grid-template-columns:repeat(2,1fr)}}
+.nv-col{border:1px solid #163524;border-radius:6px;background:#070d0a;overflow:hidden;}
+.nv-sys-name{font-size:9px;letter-spacing:1px;color:#6a9a7a;text-transform:uppercase;padding:6px;text-align:center;background:#0a1410;}
+.nv-base-tag{font-size:8px;color:#5ab;border:1px solid #246;border-radius:8px;padding:0 5px;margin-left:5px;}
+.nv-felt-cell{padding:9px 6px;min-height:48px;font-size:11px;color:#bfe9c9;border-bottom:1px solid #0e2a1a;
+  display:flex;align-items:center;justify-content:center;text-align:center;}
+.nv-bar-cell{padding:6px;text-align:center;border-bottom:1px solid #0e2a1a;font-size:10px;letter-spacing:1px;text-transform:uppercase;}
+.nv-raw-cell{padding:9px 6px;text-align:center;}
+.nv-raw-num{font-size:20px;color:#eafff0;}
+.nv-raw-lbl{font-size:9px;color:#5f8a6e;letter-spacing:1px;text-transform:uppercase;margin-top:2px;}
+.nv-organs{display:flex;align-items:stretch;gap:5px;overflow-x:auto;padding-bottom:6px;}
+.nv-node{flex:0 0 auto;min-width:118px;max-width:150px;border:1px solid #163524;border-radius:6px;background:#070d0a;padding:8px;opacity:.5;transition:opacity .3s,box-shadow .3s;}
+.nv-node.on{opacity:1;border-color:#1c5a35;box-shadow:0 0 12px rgba(0,255,65,.18);}
+.nv-node.term{background:#0a1410;border-style:dashed;}
+.nv-nn{font-size:11px;color:#ffd27a;letter-spacing:1px;}
+.nv-nr{font-size:9px;color:#5f8a6e;margin:2px 0 5px;line-height:1.3;}
+.nv-nd{font-size:10px;color:#cfeed8;}
+.nv-nt{font-size:8px;color:#557;margin-top:4px;}
+.nv-arrow{flex:0 0 auto;align-self:center;color:#2a6a44;font-size:14px;}
+.nv-bus{display:grid;grid-template-columns:1fr 1.2fr;gap:12px;}
+@media(max-width:760px){.nv-bus{grid-template-columns:1fr}}
+.nv-bus-meters{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;align-content:start;}
+.nv-stat{border:1px solid #163524;border-radius:6px;background:#070d0a;padding:8px 10px;}
+.nv-sv{font-size:20px;color:#eafff0;}
+.nv-sl{font-size:9px;color:#5f8a6e;letter-spacing:1px;text-transform:uppercase;}
+.nv-stat.warn{border-color:#a33;box-shadow:0 0 10px rgba(255,60,60,.22);}
+.nv-stat.warn .nv-sv{color:#ff6a6a;}
+.nv-feed-wrap{border:1px solid #163524;border-radius:6px;background:#050907;display:flex;flex-direction:column;min-height:0;}
+.nv-feed-head{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#5f8a6e;padding:7px 9px;border-bottom:1px solid #0e2a1a;}
+.nv-feed{padding:4px 0;max-height:236px;overflow-y:auto;font-size:11px;}
+.nv-frow{display:flex;align-items:center;gap:8px;padding:2px 9px;border-bottom:1px solid #08160e;animation:nvin .4s;}
+@keyframes nvin{from{opacity:0;transform:translateX(-6px)}to{opacity:1}}
+.nv-fcls{width:8px;height:8px;border-radius:2px;flex:0 0 auto;}
+.nv-fk{color:#cfeed8;flex:0 0 132px;}
+.nv-fm{color:#7fb890;flex:0 0 58px;}
+.nv-fs{color:#5f8a6e;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.nv-fsal{color:#ffd27a;flex:0 0 auto;font-size:10px;}
+.nv-substrate{display:grid;grid-template-columns:repeat(auto-fit,minmax(116px,1fr));gap:8px;
+  border:1px solid #2a2616;border-radius:8px;padding:12px;background:linear-gradient(180deg, rgba(120,90,0,.05), rgba(0,0,0,.25));}
+.nv-sub-cell{text-align:center;}
+.nv-subv{font-size:18px;color:#ffe7b0;}
+.nv-subl{font-size:9px;color:#8a7a4e;letter-spacing:1px;text-transform:uppercase;margin-top:2px;}
+.nv-dim{opacity:.32;filter:grayscale(.4);transition:opacity .4s;}
+</style>
+
+<div id="nv-panel"><div id="nv-inner">
+  <div class="nv-head">
+    <div class="nv-title">BEHIND THE CURTAIN<span class="nv-sub">the nervous system, peeled back — one felt line, a whole anatomy beneath</span></div>
+    <div class="nv-status"><span id="nv-dot" class="nv-dot"></span><span id="nv-stat">connecting…</span></div>
+  </div>
+  <div class="nv-layer nv-felt">
+    <div class="nv-layer-tag">&#9650; what it feels — the qualia</div>
+    <div class="nv-felt2">
+      <div class="nv-felt-overall" id="nv-overall">—</div>
+      <div class="nv-felt-phrases" id="nv-phrases"></div>
+      <div class="nv-mood" id="nv-moodbox"></div>
+    </div>
+  </div>
+  <div class="nv-layer" id="nv-stack-layer">
+    <div class="nv-layer-tag">&#8593; transduction — raw telemetry becomes sensation</div>
+    <div class="nv-stack" id="nv-stack"></div>
+  </div>
+  <div class="nv-layer" id="nv-organs-layer">
+    <div class="nv-layer-tag">&#8673; organs — the fast parallel periphery feeding the slow serial core</div>
+    <div class="nv-organs" id="nv-organs"></div>
+  </div>
+  <div class="nv-layer" id="nv-bus-layer">
+    <div class="nv-layer-tag">&#8593; the bus — one dumb seam, four delivery classes</div>
+    <div class="nv-bus">
+      <div class="nv-bus-meters" id="nv-bus-meters"></div>
+      <div class="nv-feed-wrap">
+        <div class="nv-feed-head">live nervous traffic — newest first</div>
+        <div class="nv-feed" id="nv-feed"></div>
+      </div>
+    </div>
+  </div>
+  <div class="nv-layer">
+    <div class="nv-layer-tag">&#9660; the substrate — what it actually runs on (it never perceives this)</div>
+    <div class="nv-substrate" id="nv-substrate"></div>
+  </div>
+</div></div>
+
+<script>
+/* ===== behind the curtain ===== */
+(function(){
+  var nvTimer=null;
+  var NV_SYS=[
+    {k:'cpu',label:'compute',raw:'cpu_pct',unit:'%'},
+    {k:'ram',label:'memory',raw:'ram_pct',unit:'%'},
+    {k:'vram',label:'mind · VRAM',raw:'vram_pct',unit:'%'},
+    {k:'gpu_temp',label:'warmth',raw:'gpu_temp_c',unit:'°C'},
+    {k:'disk',label:'long-term',raw:'disk_free_gb',unit:'GB free'}
+  ];
+  function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+  function setOn(id,on){var e=document.getElementById(id); if(e)e.classList.toggle('on',!!on);}
+  function ocolor(o){return {'at ease':'#00ff41','a little tense':'#cfd33a','strained':'#ffb000','in distress':'#ff4040'}[o]||'#8aacaa';}
+  function lcolor(l,base){ if(base) return '#5ab2dd'; return {'ok':'#2a8a4a','elevated':'#ccaa00','high':'#ee8800','critical':'#ee3333'}[l]||'#456;'.slice(0,4); }
+  function ccolor(c){return {'fungible':'#2a8a4a','ordered':'#33cccc','reliable':'#ffb000','retained':'#7799ff'}[c]||'#456';}
+  function ndur(s){ s=Math.round(s||0); if(s<60)return s+'s'; var m=Math.floor(s/60); if(m<60)return m+'m'; return Math.floor(m/60)+'h'+(m%60)+'m'; }
+
+  window.nvTab=function(){
+    document.body.classList.remove('wb');
+    document.body.classList.add('nv-open');
+    setOn('tab-nv',true); setOn('tab-st',false); setOn('tab-wb',false);
+    nvPoll();
+    if(nvTimer)clearInterval(nvTimer);
+    nvTimer=setInterval(nvPoll,1200);
+  };
+  window.nvClose=function(){
+    document.body.classList.remove('nv-open');
+    if(nvTimer){clearInterval(nvTimer);nvTimer=null;}
+    var wb=document.body.classList.contains('wb');
+    setOn('tab-nv',false); setOn('tab-wb',wb); setOn('tab-st',!wb);
+  };
+  ['tab-st','tab-wb'].forEach(function(id){var b=document.getElementById(id); if(b)b.addEventListener('click',window.nvClose);});
+
+  function nvPoll(){
+    fetch('/api/nervous').then(function(r){return r.json();}).then(nvRender).catch(function(){
+      var d=document.getElementById('nv-dot'),s=document.getElementById('nv-stat');
+      if(d)d.className='nv-dot off'; if(s)s.textContent='dashboard unreachable';
+    });
+  }
+
+  function nvRender(data){
+    var snap=data&&data.snapshot, sub=(data&&data.substrate)||{};
+    var dot=document.getElementById('nv-dot'), stat=document.getElementById('nv-stat');
+    var live = !!(data&&data.running&&snap&&(data.age_s==null||data.age_s<15));
+    var stale = !!(snap&&data&&data.running&&data.age_s!=null&&data.age_s>=15);
+    if(!data||!data.enabled){ dot.className='nv-dot off'; stat.textContent='nervous system disabled'; }
+    else if(live){ var rate=(snap.bus&&snap.bus.rate_per_s!=null)?snap.bus.rate_per_s.toFixed(1):'0';
+      dot.className='nv-dot live'; stat.textContent='awake · '+rate+' events/s · uptime '+ndur(snap.uptime_s); }
+    else if(stale){ dot.className='nv-dot stale'; stat.textContent='snapshot '+Math.round(data.age_s)+'s old — the creature may be paused'; }
+    else { dot.className='nv-dot off'; stat.textContent=(data&&data.running)?'no nervous snapshot yet':'the creature is not awake — its nervous system is dark'; }
+    ['nv-stack-layer','nv-organs-layer','nv-bus-layer'].forEach(function(id){var e=document.getElementById(id); if(e)e.classList.toggle('nv-dim',!live);});
+
+    var felt=(snap&&snap.felt)||{}, mood=(snap&&snap.mood)||{};
+    var overall=felt.overall||'—', col=ocolor(overall);
+    var ov=document.getElementById('nv-overall'); ov.textContent='body feels '+overall; ov.style.color=col; ov.style.textShadow='0 0 18px '+col+'66';
+    var ph=document.getElementById('nv-phrases'), phrases=felt.felt||[];
+    ph.innerHTML = phrases.length ? phrases.map(function(p){return '<span class="nv-pill">'+esc(p)+'</span>';}).join('') : '<span style="color:#5f8a6e;font-size:12px">nothing amiss</span>';
+    var mb=document.getElementById('nv-moodbox');
+    if(mood&&mood.mood!=null){
+      var ar=Math.max(0,Math.min(1,+mood.arousal||0)), va=Math.max(-1,Math.min(1,+mood.valence||0)), vp=(va+1)/2*100;
+      mb.innerHTML='<div class="nv-gauge"><span class="nv-gl">mood</span><b style="color:'+col+'">'+esc(mood.mood)+'</b></div>'+
+        '<div class="nv-gauge"><span class="nv-gl">arousal</span><span class="nv-meter"><i style="width:'+(ar*100).toFixed(0)+'%"></i></span><span style="color:#9fd">'+ar.toFixed(2)+'</span></div>'+
+        '<div class="nv-gauge"><span class="nv-gl">valence</span><span class="nv-meter"><i style="width:'+vp.toFixed(0)+'%;background:'+(va<0?'#ff5a5a':'#00ff41')+'"></i></span><span style="color:#9fd">'+(va>=0?'+':'')+va.toFixed(2)+'</span></div>';
+    } else mb.innerHTML='<span style="color:#5f8a6e">mood not yet formed</span>';
+
+    var trans=(snap&&snap.transduction)||{}, bars=felt.bars||{}, basel=(snap&&snap.baseline_systems)||[];
+    document.getElementById('nv-stack').innerHTML = NV_SYS.map(function(s){
+      var t=trans[s.k]||{level:bars[s.k]||null,phrase:'',baseline:basel.indexOf(s.k)>=0};
+      var lvl=t.level||'—', base=!!t.baseline, lc=lcolor(t.level,base), raw=sub[s.raw];
+      var cell=t.phrase?esc(t.phrase):((t.level==='ok')?'<span style="color:#2a8a4a">at ease</span>':'—');
+      return '<div class="nv-col"><div class="nv-sys-name">'+esc(s.label)+(base?'<span class="nv-base-tag">posture</span>':'')+'</div>'+
+        '<div class="nv-felt-cell">'+cell+'</div>'+
+        '<div class="nv-bar-cell" style="color:'+lc+'">'+esc(lvl)+'</div>'+
+        '<div class="nv-raw-cell"><div class="nv-raw-num">'+esc(raw==null?'—':raw)+'</div><div class="nv-raw-lbl">'+esc(s.unit)+'</div></div></div>';
+    }).join('');
+
+    var organs=(snap&&snap.organs)||[], nodes=[];
+    nodes.push('<div class="nv-node term on"><div class="nv-nn">substrate</div><div class="nv-nr">the host hardware</div><div class="nv-nd">'+esc(sub.gpu_name||'host')+'</div></div>');
+    organs.forEach(function(o){
+      nodes.push('<div class="nv-arrow">&#9656;</div>');
+      nodes.push('<div class="nv-node'+(o.active?' on':'')+'"><div class="nv-nn">'+esc(o.name)+'</div><div class="nv-nr">'+esc(o.role)+'</div>'+
+        '<div class="nv-nd">'+esc(o.detail||'—')+'</div><div class="nv-nt">'+(o.last_s==null?'idle':(o.last_s+'s ago · '+o.count))+'</div></div>');
+    });
+    nodes.push('<div class="nv-arrow">&#9656;</div>');
+    nodes.push('<div class="nv-node term'+(live?' on':'')+'"><div class="nv-nn">core context</div><div class="nv-nr">the deliberative mind</div><div class="nv-nd">admitted to the volatile tail</div></div>');
+    document.getElementById('nv-organs').innerHTML=nodes.join('');
+
+    var bus=(snap&&snap.bus)||{};
+    var meters=[['published','published'],['delivered','delivered'],['dropped','dropped'],['undeliverable','undeliverable'],['retained_topics','retained'],['subscribers','subscribers']];
+    document.getElementById('nv-bus-meters').innerHTML=meters.map(function(m){
+      var v=bus[m[0]], warn=((m[0]==='undeliverable'||m[0]==='dropped')&&v>0);
+      return '<div class="nv-stat'+(warn?' warn':'')+'"><div class="nv-sv">'+(v==null?'—':v)+'</div><div class="nv-sl">'+m[1]+'</div></div>';
+    }).join('');
+
+    var feed=(snap&&snap.feed)||[];
+    document.getElementById('nv-feed').innerHTML = feed.length ? feed.map(function(f){
+      return '<div class="nv-frow"><span class="nv-fcls" title="'+esc(f.delivery)+'" style="background:'+ccolor(f.delivery)+'"></span>'+
+        '<span class="nv-fk">'+esc(f.kind)+'</span><span class="nv-fm">'+esc(f.modality)+'</span>'+
+        '<span class="nv-fs">'+esc(f.source)+'</span><span class="nv-fsal">'+(f.salience!=null?'sal '+f.salience:'')+'</span></div>';
+    }).join('') : '<div style="padding:10px;color:#5f8a6e">no traffic yet</div>';
+
+    var cells=[['vram_used_gb','VRAM used GB'],['vram_total_gb','VRAM total'],['vram_pct','VRAM %'],
+      ['gpu_temp_c','GPU °C'],['gpu_util','GPU util %'],['gpu_power_w','GPU watts'],
+      ['cpu_pct','CPU %'],['ram_pct','RAM %'],['disk_free_gb','disk free GB']];
+    document.getElementById('nv-substrate').innerHTML=cells.map(function(c){
+      var v=sub[c[0]];
+      return '<div class="nv-sub-cell"><div class="nv-subv">'+(v==null?'—':v)+'</div><div class="nv-subl">'+c[1]+'</div></div>';
+    }).join('');
+  }
+})();
 </script>
 </body>
 </html>
