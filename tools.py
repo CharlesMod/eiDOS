@@ -1808,6 +1808,21 @@ def execute_tool(call: ToolCall, config: Config) -> ToolResult:
             result = _run_skill_under_watchdog(call, handler, config, timeout_s)
         else:
             result = handler(call.args, config)
+        # Contract guard: ToolResult.output is typed `str`, but a SELF-AUTHORED skill can return a
+        # dict/list/number and nothing upstream stops it. check_boss_presence v1.0.20 returned a dict
+        # ({'presence':..,'raw_data':..}); the tick-loop display slice `(result.output or "")[:160]`
+        # then raised `KeyError: slice` and crash-looped the WHOLE creature (tick 14066, 2026-06-20 —
+        # 6 deterministic deaths in ~70s; the watchdog stood down with no last_good to roll back to).
+        # A tool's output *type* must never kill the mind: normalize anything non-str to a readable
+        # string at this single chokepoint every tool flows through. None is left alone (downstream
+        # `or ""` handles it); dicts/lists become compact JSON the creature can still reason over.
+        if isinstance(result, ToolResult) and result.output is not None and not isinstance(result.output, str):
+            try:
+                result.output = (json.dumps(result.output, ensure_ascii=False, default=str)
+                                 if isinstance(result.output, (dict, list))
+                                 else str(result.output))
+            except Exception:  # noqa: BLE001 — last resort: stringification must never crash the loop
+                result.output = str(result.output)
         # Invariant: every failure leaves typed. Tools that haven't set a specific
         # fail_kind yet get the generic backstop.
         if isinstance(result, ToolResult) and not result.success and not result.fail_kind:

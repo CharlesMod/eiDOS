@@ -259,6 +259,40 @@ class TestTools(unittest.TestCase):
         for name in TOOLS:
             self.assertIn(name, TOOLS)
 
+    def test_nonstr_output_normalized_not_fatal(self):
+        """Regression (2026-06-20, tick 14066): the self-authored skill check_boss_presence v1.0.20
+        returned ToolResult.output as a DICT; the tick loop's `(result.output or "")[:160]` then
+        raised `KeyError: slice` and crash-looped the WHOLE creature 6× in ~70s. A tool's output
+        TYPE must never kill the mind — execute_tool normalizes any non-str output to a string."""
+        from tools import TOOLS
+        def _dict_skill(args, config):
+            return ToolResult(output={"presence": False, "raw_data": [1, 2, 3]},
+                              full_output_path=None, success=True, duration_s=0)
+        TOOLS["_dict_skill_test"] = _dict_skill   # not a builtin -> runs the skill path (where the bug lived)
+        try:
+            res = execute_tool(ToolCall(tool="_dict_skill_test", args={}, raw=""), self.config)
+        finally:
+            TOOLS.pop("_dict_skill_test", None)
+        self.assertIsInstance(res.output, str)            # normalized to a string
+        self.assertIn("presence", res.output)             # content preserved as JSON
+        self.assertTrue(res.success)                      # success unchanged
+        # the exact operation that killed the creature is now safe:
+        _ = (res.output or "")[:160].replace("\n", " ")
+
+    def test_none_output_passthrough(self):
+        """None output is left alone — downstream `(output or "")` already handles it; it must not
+        become the literal string 'None'."""
+        from tools import TOOLS
+        def _none_skill(args, config):
+            return ToolResult(output=None, full_output_path=None, success=True, duration_s=0)
+        TOOLS["_none_skill_test"] = _none_skill
+        try:
+            res = execute_tool(ToolCall(tool="_none_skill_test", args={}, raw=""), self.config)
+        finally:
+            TOOLS.pop("_none_skill_test", None)
+        self.assertIsNone(res.output)
+        _ = (res.output or "")[:160]   # still safe
+
     # --- update_plan ---
 
     def test_update_plan_success(self):
