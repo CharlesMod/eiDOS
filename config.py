@@ -183,6 +183,8 @@ class Config:
     nervous_heartbeat_interval_s: float = 0.5           # the trivial sense cadence
     nervous_context_max_chars: int = 1500               # P3: per-tick afferent block budget (volatile tail)
     nervous_context_max_events: int = 12                # P3: max admitted events rendered into context per tick
+    nervous_interoception_enabled: bool = True          # P1a: the first organ (host telemetry → felt bars)
+    nervous_interoception_interval_s: float = 5.0       # P1a: interoception sampling cadence
     nervous_drop_log_name: str = "drop_events.jsonl"
     nervous_metrics_log_name: str = "nervous_metrics.jsonl"
 
@@ -430,6 +432,8 @@ def load_config(path: str = "config.toml") -> Config:
             "heartbeat_interval_s", config.nervous_heartbeat_interval_s))
         config.nervous_context_max_chars = nervous.get("context_max_chars", config.nervous_context_max_chars)
         config.nervous_context_max_events = nervous.get("context_max_events", config.nervous_context_max_events)
+        config.nervous_interoception_enabled = nervous.get("interoception_enabled", config.nervous_interoception_enabled)
+        config.nervous_interoception_interval_s = float(nervous.get("interoception_interval_s", config.nervous_interoception_interval_s))
         config.nervous_drop_log_name = nervous.get("drop_log_name", config.nervous_drop_log_name)
         config.nervous_metrics_log_name = nervous.get("metrics_log_name", config.nervous_metrics_log_name)
 

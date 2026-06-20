@@ -611,6 +611,18 @@ def run_loop(config: Config, persona=None, wal=None):
             nervous_bus = None
             afferent = None
 
+    # P1a: start interoception — the first organ. The creature feels its body: host telemetry ->
+    # coarse felt bars on the bus -> surfaced in context via the afferent intake. Guarded (I5).
+    if nervous_bus is not None and getattr(config, "nervous_interoception_enabled", True):
+        try:
+            from nervous.interoception import Interoception
+            Interoception(nervous_bus,
+                          interval_s=getattr(config, "nervous_interoception_interval_s", 5.0),
+                          config=config).start()
+            print(f"{pfx} interoception organ started — the creature feels its body")
+        except Exception as _e:  # noqa: BLE001
+            print(f"{pfx} interoception start failed (continuing): {_e}")
+
     while not _shutdown_requested:
         # --- Operator pause check ---
         pause_path = config.workspace / "paused"
