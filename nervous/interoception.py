@@ -106,12 +106,14 @@ def worst_salience(bars):
 
 
 class Interoception:
-    def __init__(self, bus, *, source="interoception", interval_s=5.0, config=None, reader=None):
+    def __init__(self, bus, *, source="interoception", interval_s=5.0, config=None, reader=None,
+                 metabolism=None):
         self.bus = bus
         self.source = source
         self.interval_s = float(interval_s)
         self.config = config
         self.reader = reader or (lambda: read_host_telemetry(config))
+        self.metabolism = metabolism   # M0: fold the creature's hunger into the felt body (NON-baseline)
         self._stop = threading.Event()
         self._thread = None
 
@@ -131,6 +133,13 @@ class Interoception:
         except Exception:
             return None
         bars = {k: v for k, v in felt_bars(raw).items() if v is not None}
+        # M0: the creature's hunger is interoception too — fold the metabolism's energy bar in so it
+        # rides the SAME felt-state (one source of truth). Non-baseline → a hungry body feels worse.
+        if self.metabolism is not None:
+            try:
+                bars["energy"] = self.metabolism.hunger_bar()
+            except Exception:  # noqa: BLE001
+                pass
         if not bars:
             return None
         # P1b: the single felt-state projection {bars, overall, felt} — one source of truth (I6),

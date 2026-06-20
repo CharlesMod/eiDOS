@@ -20,6 +20,7 @@ from .monitor import NervousMonitor
 from .reward import RewardLearner
 from .worldmodel import WorldModel
 from .curiosity import CuriosityDrive
+from .metabolism import Metabolism, hunger_to_bar
 
 
 def build_bus(config, *, payload_store=None):
@@ -45,4 +46,5 @@ __all__ = [
     "NeuromodulatoryState",
     "PreFilter", "FrameDiffFilter", "VadFilter", "Exteroceptor",
     "SleepCycle", "NervousMonitor", "RewardLearner", "WorldModel", "CuriosityDrive",
+    "Metabolism", "hunger_to_bar",
 ]

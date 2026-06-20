@@ -26,6 +26,9 @@ _PHRASE = {
     "disk": {"elevated": "disk getting full", "high": "disk nearly full", "critical": "out of disk"},
     "cpu": {"elevated": "working hard", "high": "straining", "critical": "pegged"},
     "gpu_temp": {"elevated": "warming", "high": "running hot", "critical": "overheating"},
+    # Metabolism (M0): hunger = a depleting energy reserve. NOT baseline — a hungry body genuinely
+    # feels worse, which is the whole point (it rides wellbeing→reward so the creature seeks to feed).
+    "energy": {"elevated": "peckish", "high": "hungry", "critical": "starving"},
 }
 
 # Baseline systems are felt as calm POSTURE, never stress. The mind is resident on the GPU and fills
