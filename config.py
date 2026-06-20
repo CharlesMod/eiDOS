@@ -181,6 +181,8 @@ class Config:
     nervous_admits_per_source_per_window: int = 1000    # I10 fair-admission token bucket
     nervous_admission_window_s: float = 1.0
     nervous_heartbeat_interval_s: float = 0.5           # the trivial sense cadence
+    nervous_context_max_chars: int = 1500               # P3: per-tick afferent block budget (volatile tail)
+    nervous_context_max_events: int = 12                # P3: max admitted events rendered into context per tick
     nervous_drop_log_name: str = "drop_events.jsonl"
     nervous_metrics_log_name: str = "nervous_metrics.jsonl"
 
@@ -426,6 +428,8 @@ def load_config(path: str = "config.toml") -> Config:
             "admission_window_s", config.nervous_admission_window_s))
         config.nervous_heartbeat_interval_s = float(nervous.get(
             "heartbeat_interval_s", config.nervous_heartbeat_interval_s))
+        config.nervous_context_max_chars = nervous.get("context_max_chars", config.nervous_context_max_chars)
+        config.nervous_context_max_events = nervous.get("context_max_events", config.nervous_context_max_events)
         config.nervous_drop_log_name = nervous.get("drop_log_name", config.nervous_drop_log_name)
         config.nervous_metrics_log_name = nervous.get("metrics_log_name", config.nervous_metrics_log_name)
 

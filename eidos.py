@@ -595,6 +595,22 @@ def run_loop(config: Config, persona=None, wal=None):
                 print(f"{pfx} Still waiting for LLM server... ({_health_wait}s)")
             time.sleep(5)
 
+    # --- V3 nervous system (P3): the deliberative core's afferent intake. Inert until an organ
+    #     publishes (no organs at P3, so this is a no-op for behaviour). A sensory init/drain failure
+    #     must NEVER break the tick loop (I5), so everything here is guarded. ---
+    nervous_bus = None
+    afferent = None
+    if getattr(config, "nervous_enabled", False):
+        try:
+            import nervous
+            nervous_bus = nervous.build_bus(config)
+            afferent = nervous.AfferentContext.from_config(nervous_bus, config)
+            print(f"{pfx} nervous bus up ({getattr(config, 'nervous_transport', 'inproc')}); afferent intake ready")
+        except Exception as _e:  # noqa: BLE001
+            print(f"{pfx} nervous bus init failed (continuing without afferent): {_e}")
+            nervous_bus = None
+            afferent = None
+
     while not _shutdown_requested:
         # --- Operator pause check ---
         pause_path = config.workspace / "paused"
@@ -766,6 +782,14 @@ def run_loop(config: Config, persona=None, wal=None):
             tension = int(_act["frustration"]) if _act else max(0, tick_number - last_progress_tick)
         except Exception:  # noqa: BLE001
             tension = max(0, tick_number - last_progress_tick)
+        # V3 afferent intake (P3): drain admitted sensory events for this tick (non-blocking,
+        # batched into the volatile situation tail). Empty until an organ publishes.
+        afferent_block = ""
+        if afferent is not None:
+            try:
+                afferent_block, _aff_n = afferent.drain_block()
+            except Exception:  # noqa: BLE001 - a sensory bug must never break the tick (I5)
+                afferent_block = ""
         messages = assemble_context(
             config,
             tick_number=tick_number,
@@ -773,6 +797,7 @@ def run_loop(config: Config, persona=None, wal=None):
             loop_detected=loop_detected,
             repeat_count=repeat_count,
             tension=tension,
+            afferent_block=afferent_block,
         )
 
         # Log context size for monitoring

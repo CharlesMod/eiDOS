@@ -181,6 +181,7 @@ def assemble_context(
     repeat_count: int = 0,
     max_ticks: int = 0,
     tension: int = 0,
+    afferent_block: str = "",
 ) -> list[dict]:
     """Assemble the full messages list in fixed order for one tick.
 
@@ -188,9 +189,12 @@ def assemble_context(
     Each variable section is budget-capped; overruns are logged to ctx_overruns.jsonl.
 
     Briefing structure: Standing Orders → durable blob → history thread → situation → salience → tick prompt.
+    `afferent_block` (V3 nervous system, P3): admitted sensory events for this tick, injected into the
+    volatile situation tail — KV-safe (the stable prefix and history turns are untouched).
     """
     return _assemble_briefing(config, tick_number, goal_start_time,
-                              loop_detected, repeat_count, max_ticks, tension)
+                              loop_detected, repeat_count, max_ticks, tension,
+                              afferent_block=afferent_block)
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +628,7 @@ def _assemble_briefing(
     repeat_count: int = 0,
     max_ticks: int = 0,
     tension: int = 0,
+    afferent_block: str = "",
 ) -> list[dict]:
     """Briefing model: Standing Orders → Mission → Intelligence → Situation → Tick.
 
@@ -752,6 +757,12 @@ def _assemble_briefing(
 
     # Presence (time / tick / still-running jobs / alerts) — changes EVERY tick.
     situation.append(_build_presence(config, tick_number, goal_start_time))
+
+    # Afferent senses (V3 nervous system, P3) — admitted NervousEvents for THIS tick, batched into
+    # the volatile situation (KV-safe: never the stable prefix or the history turns). Empty until an
+    # organ publishes, so this is a no-op for today's behaviour.
+    if afferent_block:
+        situation.append("## Afferent (senses)\n" + afferent_block)
 
     # Boss's messages + the messages YOU already sent him. Surfacing your own standing messages stops
     # the "ask Boss for the MQTT creds again" re-ping loop: if you already asked and he hasn't
