@@ -22,6 +22,40 @@ class TestParser(unittest.TestCase):
         result = parse_tool_call(text)
         self.assertIsNone(result)
 
+    # --- the bare `toolname {json}` format the creature prompt teaches (2026-06-20: creature-mode
+    #     emitted exactly this and the parser DROPPED every call as "thought" — the gagged creature) ---
+    def test_bare_format_simple(self):
+        result = parse_tool_call('bash {"cmd": "ls -la"}')
+        self.assertIsNotNone(result)
+        self.assertEqual(result.tool, "bash")
+        self.assertEqual(result.args, {"cmd": "ls -la"})
+
+    def test_bare_format_after_a_thought(self):
+        text = 'I feel the urge to act.\n\nbash {"cmd": "echo hi"}'
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.tool, "bash")
+
+    def test_bare_format_nested_escaped_json(self):
+        # the creature's actual t146 call: a python one-liner with escaped quotes + a Windows path.
+        # A greedy/lazy regex mangles this; brace-matching survives it.
+        text = ('I will write the schema.\n'
+                'bash {"cmd":"python -c \\"import json; open(r\'C:\\\\x.json\',\'w\').write(\'{}\')\\""}')
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.tool, "bash")
+        self.assertIn("python -c", result.args["cmd"])
+
+    def test_bare_text_arg(self):
+        result = parse_tool_call('bash df -h')
+        self.assertIsNotNone(result)
+        self.assertEqual(result.tool, "bash")
+        self.assertEqual(result.args, {"cmd": "df -h"})
+
+    def test_bare_does_not_false_trigger_on_prose(self):
+        self.assertIsNone(parse_tool_call("I keep bashing my head and should note that down later."))
+        self.assertIsNone(parse_tool_call("my plan note {a vague reminder to self, not json}"))
+
     def test_malformed_json(self):
         text = '<tool>bash</tool>\n<args>{cmd: "ls"}</args>'
         result = parse_tool_call(text)

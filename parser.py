@@ -97,6 +97,33 @@ def _clean_json(s: str) -> str:
     return s
 
 
+def _balanced_braces(s: str, start: int) -> Optional[str]:
+    """From s[start]=='{', return the balanced {...} substring, string- and escape-aware. None if it
+    never closes. Lets us extract a tool-call's JSON args even when they contain nested braces or
+    escaped quotes (e.g. a `python -c "..."` one-liner), which a greedy/lazy regex mangles."""
+    if start >= len(s) or s[start] != "{":
+        return None
+    depth, in_str, esc, quote = 0, False, False, ""
+    for i in range(start, len(s)):
+        c = s[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == quote:
+                in_str = False
+        elif c in "\"'":
+            in_str, quote = True, c
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return s[start:i + 1]
+    return None
+
+
 # Tools whose first (required) arg is a plain text string.
 # When the model emits raw text instead of JSON, we wrap it automatically.
 _TEXT_ARG_TOOLS = {
@@ -174,6 +201,32 @@ def parse_tool_call(text: str) -> Optional[ToolCall]:
             args = _try_parse_json(m.group(2).strip())
             if args is not None:
                 return ToolCall(tool=name, args=args, raw=m.group(0))
+
+    # Fallback: the BARE `toolname {json}` format the creature prompt ITSELF teaches (no angle brackets),
+    # e.g.  bash {"cmd":"..."}  /  create_skill {...}. Small models emit this constantly. Without it,
+    # creature-mode tool calls were silently swallowed as "thought" — the true cause of the "rumination"
+    # (the overnight 5067-thoughts/3-actions creature was acting every tick; the calls were DROPPED, not
+    # absent). Guards against false positives: the tool name must (a) start a line — so prose that merely
+    # mentions a tool can't trigger — and (b) be a KNOWN tool, with (c) brace-matched, parseable JSON.
+    for m in re.finditer(r'(?:^|\n)[ \t>*\-]*([a-zA-Z_]\w*)[ \t]*\{', text):
+        name = m.group(1).lower()
+        if name not in known or name in _reserved:
+            continue
+        brace = m.end() - 1  # the '{'
+        blob = _balanced_braces(text, brace)
+        if not blob:
+            continue
+        args = _try_parse_json(blob)
+        if args is not None:
+            return ToolCall(tool=name, args=args, raw=text[m.start(1):brace + len(blob)])
+
+    # Bare text-arg form with no JSON at all: a known text-arg tool at line start, e.g.  bash df -h
+    for m in re.finditer(r'(?:^|\n)[ \t>*\-]*([a-zA-Z_]\w*)[ \t]+(\S.*)', text):
+        name = m.group(1).lower()
+        if name in _TEXT_ARG_TOOLS and name in known:
+            body = m.group(2).strip()
+            if body and not body.startswith(("{", "[", "<")):
+                return ToolCall(tool=name, args={_TEXT_ARG_TOOLS[name]: body}, raw=m.group(0).strip())
 
     return None
 
