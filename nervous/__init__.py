@@ -15,6 +15,7 @@ from .change import Novelty, ChangeDetector
 from .efferent import Effector, SelfModel, ReflexArc, Proprioceptor
 from .neuromod import NeuromodulatoryState
 from .exteroception import PreFilter, FrameDiffFilter, VadFilter, Exteroceptor
+from .sleep import SleepCycle
 
 
 def build_bus(config, *, payload_store=None):
@@ -39,4 +40,5 @@ __all__ = [
     "Effector", "SelfModel", "ReflexArc", "Proprioceptor",
     "NeuromodulatoryState",
     "PreFilter", "FrameDiffFilter", "VadFilter", "Exteroceptor",
+    "SleepCycle",
 ]
