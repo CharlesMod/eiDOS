@@ -670,7 +670,7 @@ def run_loop(config: Config, persona=None, wal=None):
     if nervous_bus is not None and getattr(config, "nervous_learning_enabled", True):
         try:
             from nervous.reward import RewardLearner
-            from nervous.worldmodel import WorldModel
+            from nervous.worldmodel import WorldModel, SURPRISE_MAX
             from nervous.curiosity import CuriosityDrive
             from nervous.sleep import SleepCycle
             nervous_learner = RewardLearner(bus=nervous_bus, neuromod=nervous_neuromod, config=config)
@@ -1305,14 +1305,19 @@ def run_loop(config: Config, persona=None, wal=None):
         #     the felt body + mood itself. Sleep replays the tagged experiences into lessons. Guarded. ---
         if nervous_learner is not None:
             try:
-                # world-model: how novel was arriving at THIS situation from the previous (situation,
-                # action)? curiosity turns that surprise into a small intrinsic-reward bonus (and grows
-                # restless during predictable lulls). The bonus reinforces exploring the unknown.
+                # world-model: how much did arriving HERE teach the model — LEARNING PROGRESS, not raw
+                # surprise, so chaos/noise can't feed (Loop A). Curiosity turns progress into a small
+                # intrinsic-reward bonus + restlessness; and genuine learning NOURISHES the metabolism —
+                # so acting-to-understand feeds the creature while empty rumination starves it.
                 _intrinsic = 0.0
                 if nervous_worldmodel is not None and _wm_prev_sit is not None:
-                    _surprise = nervous_worldmodel.observe(_wm_prev_sit, _wm_prev_act, tick_situation)
+                    nervous_worldmodel.observe(_wm_prev_sit, _wm_prev_act, tick_situation)
+                    _progress = float(getattr(nervous_worldmodel, "last_progress", 0.0) or 0.0)
                     if nervous_curiosity is not None:
-                        _intrinsic = nervous_curiosity.observe(_surprise)
+                        _intrinsic = nervous_curiosity.observe(_progress)
+                    if nervous_metabolism is not None and _progress > 0.0:
+                        _feed = getattr(config, "nervous_metabolism_learn_feed", 0.02)
+                        nervous_metabolism.feed(min(1.0, _progress / SURPRISE_MAX) * _feed)
                 nervous_learner.observe(situation=tick_situation, action=str(_act_sig),
                                         success=tick_tool_success, made_progress=_made_progress,
                                         strain=_strain_bump, intrinsic=_intrinsic, tick=tick_number)

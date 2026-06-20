@@ -29,6 +29,30 @@ class TestWorldModel(unittest.TestCase):
         self.assertGreater(novel, predictable)       # a never-before-seen outcome surprises more
         self.assertGreaterEqual(wm.snapshot()["contexts"], 1)
 
+    def test_learning_progress_feeds_then_satiates(self):
+        # M1 / Loop A: learning a REPEATABLE pattern nourishes (positive progress), and satiates as it's
+        # mastered (progress decays) → frontier-seeking, not endless grinding of the known.
+        wm = WorldModel()
+        early = late = 0.0
+        for i in range(20):
+            wm.observe("room", "look", "same_view")
+            if i < 6:
+                early += wm.last_progress
+            elif i >= 14:
+                late += wm.last_progress
+        self.assertGreater(early, 0.0)               # genuine learning feeds
+        self.assertGreater(early, late)              # and tapers as the pattern is mastered (satiety)
+
+    def test_noise_never_feeds(self):
+        # The TV-static problem self-resolves: a fresh outcome EVERY time never repeats, so the model
+        # never "gets better" at it → zero learning progress → no food. Chaos can't be farmed.
+        wm = WorldModel()
+        total = 0.0
+        for i in range(20):
+            wm.observe("static", "look", f"frame_{i}")   # different outcome every tick = pure noise
+            total += wm.last_progress
+        self.assertEqual(total, 0.0)
+
 
 class TestCuriosity(unittest.TestCase):
     def test_novelty_yields_intrinsic_reward(self):

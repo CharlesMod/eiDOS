@@ -205,6 +205,7 @@ class Config:
     # inaction costly so the creature acts like an organism instead of ruminating.
     nervous_metabolism_enabled: bool = True
     nervous_metabolism_rest_arousal: float = 0.2     # at/below this arousal the creature is resting (recovers)
+    nervous_metabolism_learn_feed: float = 0.02      # M1: energy a full-learning-progress tick restores (nourishment)
 
     @property
     def workspace(self) -> Path:
@@ -476,6 +477,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.nervous_learning_consolidate_interval_s = float(nervous.get("learning_consolidate_interval_s", config.nervous_learning_consolidate_interval_s))
         config.nervous_metabolism_enabled = nervous.get("metabolism_enabled", config.nervous_metabolism_enabled)
         config.nervous_metabolism_rest_arousal = float(nervous.get("metabolism_rest_arousal", config.nervous_metabolism_rest_arousal))
+        config.nervous_metabolism_learn_feed = float(nervous.get("metabolism_learn_feed", config.nervous_metabolism_learn_feed))
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

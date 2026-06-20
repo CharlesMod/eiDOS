@@ -20,14 +20,17 @@ SURPRISE_MAX = 6.0   # cap on -log2 p (an unseen transition ~= maximally novel)
 
 
 class WorldModel:
-    def __init__(self, *, config=None, path=None, max_contexts=3000, save_every=20):
+    def __init__(self, *, config=None, path=None, max_contexts=3000, save_every=20, progress_beta=0.7):
         if config is not None and path is None:
             path = str(config.state_dir / "world_model.json")
         self.path = path
         self.max_contexts = int(max_contexts)
         self.save_every = int(save_every)
+        self.progress_beta = float(progress_beta)
         self._lock = threading.Lock()
         self.transitions = {}      # context_key -> {next_situation: count}
+        self._sema = {}            # context_key -> EMA of surprise (for learning-progress, M1)
+        self.last_progress = 0.0   # learning progress of the most recent observe() (the nutrient signal)
         self._since_save = 0
         self._load()
 
@@ -37,16 +40,28 @@ class WorldModel:
 
     def observe(self, situation, action, next_situation):
         """Record that (situation, action) was followed by next_situation. Returns the surprise of that
-        transition BEFORE this update (how novel arriving here was)."""
+        transition BEFORE this update (how novel arriving here was), and stashes `last_progress` — the
+        LEARNING PROGRESS (M1): how much the model just got BETTER at predicting this context.
+
+        Progress is the nutrient signal (Loop A). It is gated on RE-encountering a transition: only a
+        repeat can show the model improving, so pure noise (a fresh outcome every time — TV static)
+        never feeds, while a learnable pattern feeds a burst that decays to ~0 as it's mastered (satiety,
+        then frontier-seeking). This is why we measure learning progress, not raw surprise."""
         s = self.surprise(situation, action, next_situation)
         ck = self._ck(situation, action)
+        nk = str(next_situation or "")
         with self._lock:
             d = self.transitions.get(ck)
             if d is None:
                 d = {}
                 self.transitions[ck] = d
-            nk = str(next_situation or "")
-            d[nk] = d.get(nk, 0) + 1
+            c = d.get(nk, 0)                       # times THIS exact transition seen before (0 = first)
+            prev_ema = self._sema.get(ck)
+            # only a re-encountered transition whose surprise fell below the running average is "learning"
+            progress = max(0.0, prev_ema - s) if (c >= 1 and prev_ema is not None) else 0.0
+            self._sema[ck] = s if prev_ema is None else (prev_ema * self.progress_beta + s * (1.0 - self.progress_beta))
+            self.last_progress = round(progress, 4)
+            d[nk] = c + 1
             self._evict_if_needed()
             self._since_save += 1
             do_save = self._since_save >= self.save_every
@@ -87,6 +102,7 @@ class WorldModel:
         victims = sorted(self.transitions.items(), key=lambda kv: sum(kv[1].values()))
         for k, _ in victims[: len(self.transitions) - self.max_contexts]:
             self.transitions.pop(k, None)
+            self._sema.pop(k, None)
 
     def _load(self):
         if self.path and os.path.exists(self.path):
