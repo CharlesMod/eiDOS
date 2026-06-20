@@ -61,6 +61,21 @@ class TestNeuromod(unittest.TestCase):
         self.assertGreater(nm.arousal, base)             # spikes
         self.assertLessEqual(nm.arousal, base + 0.1 + 1e-9)   # but bounded
 
+    def test_exhaustion_collapses_arousal_toward_sleep(self):
+        # M0.3: above the exhaustion floor, energy doesn't sap arousal; near-empty, arousal collapses
+        # toward sleep (torpor) so the creature RESTS before flatlining — hibernation, not death.
+        bus = NervousBus()
+        self.addCleanup(bus.close)
+        nm = NeuromodulatoryState(bus, baseline_arousal=0.3, exhaustion_energy=0.15)
+        nm.observe_energy(0.8)                              # well-fed
+        for _ in range(20):
+            nm.observe_interoception({"bars": {}})
+        self.assertGreater(nm.arousal, 0.2)                # rests near baseline when fed
+        nm.observe_energy(0.0)                              # reserve empty
+        for _ in range(40):
+            nm.observe_interoception({"bars": {}})
+        self.assertLess(nm.arousal, 0.15)                  # collapsed into the sleep range (torpor)
+
     def test_modulation_published_retained(self):
         bus = NervousBus()
         self.addCleanup(bus.close)

@@ -605,6 +605,7 @@ def run_loop(config: Config, persona=None, wal=None):
     nervous_learner = None
     nervous_worldmodel = None
     nervous_curiosity = None
+    nervous_metabolism = None
     if getattr(config, "nervous_enabled", False):
         try:
             import nervous
@@ -625,6 +626,17 @@ def run_loop(config: Config, persona=None, wal=None):
             afferent = None
             nervous_gpu = None
 
+    # M0: metabolism — the energy economy (the organism's stakes). Drains with living + cognition (an
+    # LLM "thought" is the dearest act) + action; restored by rest. feed() is the seam M1's nutrients
+    # (and M4's real solar) will call. Created BEFORE interoception so its hunger folds into the body.
+    if nervous_bus is not None and getattr(config, "nervous_metabolism_enabled", True):
+        try:
+            from nervous.metabolism import Metabolism
+            nervous_metabolism = Metabolism(bus=nervous_bus, config=config)
+            print(f"{pfx} metabolism started — energy {nervous_metabolism.energy:.2f}; it can tire and hunger")
+        except Exception as _e:  # noqa: BLE001
+            print(f"{pfx} metabolism start failed (continuing): {_e}")
+
     # P1a: start interoception — the first organ. The creature feels its body: host telemetry ->
     # coarse felt bars on the bus -> surfaced in context via the afferent intake. Guarded (I5).
     if nervous_bus is not None and getattr(config, "nervous_interoception_enabled", True):
@@ -632,7 +644,7 @@ def run_loop(config: Config, persona=None, wal=None):
             from nervous.interoception import Interoception
             Interoception(nervous_bus,
                           interval_s=getattr(config, "nervous_interoception_interval_s", 5.0),
-                          config=config).start()
+                          config=config, metabolism=nervous_metabolism).start()
             print(f"{pfx} interoception organ started — the creature feels its body")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} interoception start failed (continuing): {_e}")
@@ -1307,6 +1319,21 @@ def run_loop(config: Config, persona=None, wal=None):
                 _wm_prev_sit, _wm_prev_act = tick_situation, str(_act_sig)
             except Exception as _le:  # noqa: BLE001 - learning must never break the tick
                 logger.warning("reward learning failed: %s", _le)
+
+        # --- Metabolism (M0): spend this tick's energy. Thinking is the dearest act; a world-touching
+        #     action costs (and, with M1, will nourish); when arousal has collapsed to torpor the
+        #     creature is RESTING and recovers. Low energy feeds back into neuromod as tiredness, which
+        #     drags arousal toward sleep before empty (hibernation, not death). Guarded. ---
+        if nervous_metabolism is not None:
+            try:
+                _arousal = float(getattr(nervous_neuromod, "arousal", 0.3) or 0.3)
+                _resting = _arousal <= getattr(config, "nervous_metabolism_rest_arousal", 0.2)
+                _acted = tick_tool_name not in ("", "thought", "parse_error")
+                nervous_metabolism.metabolize(thought=True, acted=_acted, resting=_resting)
+                if nervous_neuromod is not None:
+                    nervous_neuromod.observe_energy(nervous_metabolism.energy)
+            except Exception as _me:  # noqa: BLE001 - metabolism must never break the tick
+                logger.warning("metabolism failed: %s", _me)
 
         # --- Sleep ---
         tick_number += 1

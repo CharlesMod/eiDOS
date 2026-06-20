@@ -27,6 +27,7 @@ from .felt import BASELINE_SYSTEMS, system_phrase
 _ORGANS = [
     ("interoception", "feels the body — telemetry → felt bars",        (Kind.interoceptive,)),
     ("neuromod",      "neuromodulation — arousal + affect (mood)",     (Kind.modulation,)),
+    ("metabolism",    "energy economy — hunger + tiredness (stakes)",  (Kind.metabolism,)),
     ("reward",        "reward learning — value cache + dopamine (RPE)", (Kind.reward,)),
     ("curiosity",     "curiosity drive — novelty → intrinsic reward",   (Kind.drive,)),
     ("gpu_arbiter",   "GPU residency — who holds the one GPU",         (Kind.capability,)),
@@ -215,6 +216,13 @@ class NervousMonitor:
                 if not mood:
                     return "—"
                 return f"{mood.get('mood','?')} · arousal {float(mood.get('arousal',0)):.2f} · valence {float(mood.get('valence',0)):+.2f}"
+            if name == "metabolism":
+                meta = self._retained_json(Kind.metabolism, Modality.intero)
+                if not meta:
+                    return "—"
+                bar = meta.get("bar", "ok")
+                tag = "full" if bar == "ok" else f"{bar} hunger"
+                return f"energy {float(meta.get('energy', 0)):.2f} · {tag}"
             if name == "gpu_arbiter":
                 return f"holder: {holder}" if holder else "free (no lease held)"
             if name == "bus":

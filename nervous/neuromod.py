@@ -19,13 +19,19 @@ _SEVERITY = {None: 0.0, "ok": 0.0, "elevated": 0.4, "high": 0.7, "critical": 1.0
 
 class NeuromodulatoryState:
     def __init__(self, bus, *, source="neuromod", baseline_arousal=0.3, decay=0.85,
-                 drive_floor_cap=0.55):
+                 drive_floor_cap=0.55, exhaustion_energy=0.15):
         self.bus = bus
         self.source = source
         self.baseline = float(baseline_arousal)
         self.decay = float(decay)
         self.arousal = float(baseline_arousal)
         self.valence = 0.0                       # -1 (bad) .. +1 (good)
+        # Metabolism (M0.3): tiredness ramps in only once the energy reserve is nearly spent; it then
+        # drags arousal toward sleep (torpor) so the creature RESTS before hitting empty — hibernation,
+        # not death. Moderate hunger still RAISES arousal via interoception pressure (the foraging drive);
+        # this is the deeper exhaustion collapse on top of that.
+        self.exhaustion_energy = float(exhaustion_energy)
+        self.tiredness = 0.0
         # A slow drive (e.g. curiosity restlessness) can raise a BOUNDED arousal floor — a tonic "itch"
         # the body settles at, never above drive_floor_cap. This replaced an unbounded per-tick bump that
         # pinned an idle creature's arousal at 1.0 (2026-06-20: newborn creature stuck "vigilant", looping).
@@ -44,8 +50,18 @@ class NeuromodulatoryState:
         pressure = max((_SEVERITY.get(v, 0.0) for v in stress_bars(bars).values()), default=0.0)
         with self._lock:
             target = max(self.baseline, pressure, self.drive_floor)
+            target *= (1.0 - self.tiredness)   # exhaustion drags arousal toward sleep (torpor)
             self.arousal = self.arousal * self.decay + target * (1.0 - self.decay)
             self.valence = -pressure
+
+    def observe_energy(self, energy):
+        """Metabolism feedback (M0.3): as the energy reserve nears empty the creature tires, and arousal
+        collapses toward sleep so it rests BEFORE flatlining. tiredness is 0 above the exhaustion floor,
+        ramping to 1 at empty. (Above the floor, hunger still raises arousal as the foraging drive.)"""
+        e = max(0.0, min(1.0, float(energy)))
+        thr = self.exhaustion_energy or 1e-6
+        with self._lock:
+            self.tiredness = 0.0 if e >= thr else (thr - e) / thr
 
     def bump(self, amount):
         """A threat/novelty spike raises arousal immediately (the startle response)."""

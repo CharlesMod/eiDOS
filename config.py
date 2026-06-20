@@ -200,6 +200,11 @@ class Config:
     nervous_learning_sleep_interval_s: float = 10.0  # how often the sleep cycle checks whether to dream
     nervous_learning_sleep_arousal: float = 0.32     # consolidate (dream) when arousal is at/below this (calm)
     nervous_learning_consolidate_interval_s: float = 120.0  # but dream at most this often (throttle)
+    # M0: metabolism — the energy economy. Thinking drains the reserve; hunger is felt; when arousal
+    # collapses to torpor the creature rests + recovers (hibernation, not death). The stakes that make
+    # inaction costly so the creature acts like an organism instead of ruminating.
+    nervous_metabolism_enabled: bool = True
+    nervous_metabolism_rest_arousal: float = 0.2     # at/below this arousal the creature is resting (recovers)
 
     @property
     def workspace(self) -> Path:
@@ -469,6 +474,8 @@ def load_config(path: str = "config.toml") -> Config:
         config.nervous_learning_sleep_interval_s = float(nervous.get("learning_sleep_interval_s", config.nervous_learning_sleep_interval_s))
         config.nervous_learning_sleep_arousal = float(nervous.get("learning_sleep_arousal", config.nervous_learning_sleep_arousal))
         config.nervous_learning_consolidate_interval_s = float(nervous.get("learning_consolidate_interval_s", config.nervous_learning_consolidate_interval_s))
+        config.nervous_metabolism_enabled = nervous.get("metabolism_enabled", config.nervous_metabolism_enabled)
+        config.nervous_metabolism_rest_arousal = float(nervous.get("metabolism_rest_arousal", config.nervous_metabolism_rest_arousal))
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)
