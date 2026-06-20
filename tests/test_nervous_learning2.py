@@ -43,11 +43,15 @@ class TestCuriosity(unittest.TestCase):
         self.addCleanup(bus.close)
         nm = NeuromodulatoryState(bus, baseline_arousal=0.2)
         a0 = nm.arousal
-        cur = CuriosityDrive(bus=bus, neuromod=nm, boredom_threshold=0.3, boredom_arousal_bump=0.1)
+        cur = CuriosityDrive(bus=bus, neuromod=nm, boredom_threshold=0.3, restless_arousal_max=0.5)
         for _ in range(30):
             cur.observe(0.0)                         # a long predictable lull
         self.assertGreater(cur.snapshot()["restlessness"], 0.3)   # restlessness builds
-        self.assertGreater(nm.arousal, a0)                        # the itch to explore raises arousal
+        self.assertGreater(nm.drive_floor, 0.0)                   # which sets a bounded arousal floor (the itch)
+        for _ in range(25):
+            nm.observe_interoception({"bars": {}})   # the body relaxes toward that floor
+        self.assertGreater(nm.arousal, a0)           # arousal rose — the urge to explore
+        self.assertLessEqual(nm.arousal, 0.6)        # but BOUNDED — never the old pin-at-1.0 ratchet
 
     def test_drive_event_published(self):
         bus = NervousBus()

@@ -18,13 +18,19 @@ _SEVERITY = {None: 0.0, "ok": 0.0, "elevated": 0.4, "high": 0.7, "critical": 1.0
 
 
 class NeuromodulatoryState:
-    def __init__(self, bus, *, source="neuromod", baseline_arousal=0.3, decay=0.85):
+    def __init__(self, bus, *, source="neuromod", baseline_arousal=0.3, decay=0.85,
+                 drive_floor_cap=0.55):
         self.bus = bus
         self.source = source
         self.baseline = float(baseline_arousal)
         self.decay = float(decay)
         self.arousal = float(baseline_arousal)
         self.valence = 0.0                       # -1 (bad) .. +1 (good)
+        # A slow drive (e.g. curiosity restlessness) can raise a BOUNDED arousal floor — a tonic "itch"
+        # the body settles at, never above drive_floor_cap. This replaced an unbounded per-tick bump that
+        # pinned an idle creature's arousal at 1.0 (2026-06-20: newborn creature stuck "vigilant", looping).
+        self.drive_floor = 0.0
+        self.drive_floor_cap = float(drive_floor_cap)
         self.sub = bus.subscribe(topics={(Kind.interoceptive, Modality.intero)})
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -37,7 +43,7 @@ class NeuromodulatoryState:
         # is posture, not a stressor, so the creature never "sweats" over its own brain being resident.
         pressure = max((_SEVERITY.get(v, 0.0) for v in stress_bars(bars).values()), default=0.0)
         with self._lock:
-            target = max(self.baseline, pressure)
+            target = max(self.baseline, pressure, self.drive_floor)
             self.arousal = self.arousal * self.decay + target * (1.0 - self.decay)
             self.valence = -pressure
 
@@ -46,12 +52,22 @@ class NeuromodulatoryState:
         with self._lock:
             self.arousal = min(1.0, self.arousal + float(amount))
 
+    def set_drive_floor(self, amount):
+        """A slow drive sets a BOUNDED tonic arousal floor (e.g. curiosity restlessness = the itch to
+        explore). arousal relaxes toward this floor via observe_interoception; phasic threat/reward
+        spikes ride above it and decay back. Bounded by drive_floor_cap so a drive can never pin
+        arousal at 1.0 the way the old per-tick bump did."""
+        with self._lock:
+            self.drive_floor = max(0.0, min(self.drive_floor_cap, float(amount)))
+
     def observe_reward(self, rpe, reward):
         """Dopamine: a reward-prediction-error spike raises arousal (the surprise is salient) and nudges
         valence toward the reward's sign (it felt good / bad). Transient — interoception still sets the
         baseline mood; this is the phasic dopamine bump on top."""
         with self._lock:
-            self.arousal = min(1.0, self.arousal + 0.5 * abs(float(rpe)))
+            # Capped phasic bump: a high-RPE newborn (every action novel, V starts at 0) would otherwise
+            # slam arousal to 1.0 every tick. A single surprise lifts arousal by at most 0.15.
+            self.arousal = min(1.0, self.arousal + min(0.15, 0.5 * abs(float(rpe))))
             self.valence = max(-1.0, min(1.0, self.valence + 0.3 * float(reward)))
 
     @staticmethod

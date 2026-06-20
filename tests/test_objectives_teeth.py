@@ -61,5 +61,24 @@ class TestGateStrainTeeth(unittest.TestCase):
         self.assertEqual(self._frust() - before, objectives.FRUST_FAIL)
 
 
+class TestCreatureModeNoHouseAgenda(unittest.TestCase):
+    """A creature is born with NO preset agenda. The hardcoded _SEED is the house-AI's six-point
+    mission; planting it makes a fresh creature fixate on cameras/GLaDOS/LAN no matter how clean its
+    workspace (2026-06-20). ensure_seeded must plant nothing in creature mode."""
+
+    def _fresh(self, creature):
+        cfg = Config()
+        cfg.workspace_dir = tempfile.mkdtemp()
+        cfg.creature_mode = creature
+        objectives.ensure_seeded(cfg, 1)
+        return objectives.list_objectives(cfg)
+
+    def test_creature_mode_seeds_no_objectives(self):
+        self.assertEqual(self._fresh(creature=True), [])     # a creature carries no house agenda
+
+    def test_house_mode_still_seeds(self):
+        self.assertGreater(len(self._fresh(creature=False)), 0)   # the house AI still gets its backlog
+
+
 if __name__ == "__main__":
     unittest.main()

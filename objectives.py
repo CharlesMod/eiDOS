@@ -79,6 +79,13 @@ _SEED = [
 
 
 def ensure_seeded(config, tick_number: int = 0) -> None:
+    # A creature is born with NO preset agenda. The hardcoded _SEED below is the HOUSE-AI's six-point
+    # mission (map the LAN, GLaDOS voice, IP cameras, run a device, learn Boss) — planting it makes a
+    # creature act like the house assistant no matter how clean its workspace (2026-06-20: a freshly
+    # reset Lv.1 creature immediately fixated on cameras/GLaDOS/RTSP because these were seeded at boot).
+    # In creature mode it forms its own objectives via add(), or carries none and simply is.
+    if getattr(config, "creature_mode", False):
+        return
     data = _load(config)
     if data.get("objectives"):
         return

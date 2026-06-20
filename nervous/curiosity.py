@@ -24,12 +24,15 @@ INTRINSIC_SCALE = 0.15     # max novelty bonus added to a tick's reward (small �
 
 
 class CuriosityDrive:
-    def __init__(self, *, bus=None, neuromod=None, decay=0.9, boredom_arousal_bump=0.06,
+    def __init__(self, *, bus=None, neuromod=None, decay=0.9, restless_arousal_max=0.5,
                  boredom_threshold=0.7):
         self.bus = bus
         self.neuromod = neuromod
         self.decay = float(decay)
-        self.boredom_arousal_bump = float(boredom_arousal_bump)
+        # Restlessness past the threshold raises a BOUNDED arousal floor (a gentle itch), ramping to at
+        # most restless_arousal_max. This replaced a +bump EVERY tick that ratcheted an idle creature's
+        # arousal to 1.0 and pinned it there (the newborn-creature agitation loop, 2026-06-20).
+        self.restless_arousal_max = float(restless_arousal_max)
         self.boredom_threshold = float(boredom_threshold)
         self.level = 0.0           # restlessness 0..1 — rises when bored (predictable), falls on novelty
         self.last_novelty = 0.0
@@ -46,9 +49,13 @@ class CuriosityDrive:
             self.level = max(0.0, min(1.0, self.level * self.decay + (1.0 - novelty) * (1.0 - self.decay)))
             self.last_novelty = round(novelty, 3)
             restless = self.level
-        if self.neuromod is not None and restless > self.boredom_threshold:
+        if self.neuromod is not None:
             try:
-                self.neuromod.bump(self.boredom_arousal_bump)   # the itch to go look at something
+                # Map restlessness ABOVE the threshold to a bounded arousal floor (0 below threshold,
+                # ramping to restless_arousal_max at full restlessness) — a tonic itch the body settles
+                # at, not a per-tick ratchet. Falls back to 0 the moment novelty satisfies curiosity.
+                over = max(0.0, (restless - self.boredom_threshold) / max(1e-6, 1.0 - self.boredom_threshold))
+                self.neuromod.set_drive_floor(over * self.restless_arousal_max)
             except Exception:  # noqa: BLE001
                 pass
         self._publish(restless, novelty, intrinsic)
