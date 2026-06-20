@@ -224,6 +224,22 @@ def parse_tool_call(text: str) -> Optional[ToolCall]:
         if args is not None:
             return ToolCall(tool=name, args=args, raw=text[m.start(1):brace + len(blob)])
 
+    # Code-fence-with-language-tag form: ```bash\n{json}\n```  — the toolname is the fence's LANGUAGE
+    # label and the JSON args sit on the following line(s). Observed live (2026-06-20): the model emits
+    # this intermittently; without it those ticks are dropped as false "thought (no action)". Only a
+    # KNOWN tool as the tag triggers it (a plain ```json block has no tool and is correctly ignored).
+    for m in re.finditer(r'```[ \t]*([a-zA-Z_]\w*)[ \t]*\r?\n\s*\{', text):
+        name = m.group(1).lower()
+        if name not in known or name in _reserved:
+            continue
+        brace = text.index("{", m.end() - 1)
+        blob = _balanced_braces(text, brace)
+        if not blob:
+            continue
+        args = _try_parse_json(blob)
+        if args is not None:
+            return ToolCall(tool=name, args=args, raw=text[m.start(1):brace + len(blob)])
+
     # Bare text-arg form with no JSON at all: a known text-arg tool at line start, e.g.  bash df -h
     for m in re.finditer(r'(?:^|\n)[ \t>*\-`]*([a-zA-Z_]\w*)[ \t]+(\S.*)', text):
         name = m.group(1).lower()

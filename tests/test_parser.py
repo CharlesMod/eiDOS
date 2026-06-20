@@ -74,6 +74,19 @@ class TestParser(unittest.TestCase):
         self.assertEqual(result.tool, "bash")
         self.assertEqual(result.args["cmd"], "ls -la")
 
+    def test_fenced_language_tag_form(self):
+        # The live t192/t194 format: the toolname is the code-fence LANGUAGE tag, JSON on the next line.
+        text = ('Since the recursive list failed, a cleaner command:\n\n'
+                '```bash\n{"cmd":"Get-ChildItem -Path C:\\\\x -Recurse"}\n```')
+        result = parse_tool_call(text)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.tool, "bash")
+        self.assertIn("Get-ChildItem", result.args["cmd"])
+
+    def test_fenced_language_tag_unknown_tool_ignored(self):
+        # a plain ```json fenced block is NOT a tool call (json isn't a known tool)
+        self.assertIsNone(parse_tool_call('here is data\n```json\n{"x": 1}\n```'))
+
     def test_bare_text_arg_in_backticks(self):
         result = parse_tool_call("`bash df -h`")
         self.assertIsNotNone(result)
