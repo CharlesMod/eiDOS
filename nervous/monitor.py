@@ -27,6 +27,7 @@ from .felt import BASELINE_SYSTEMS, system_phrase
 _ORGANS = [
     ("interoception", "feels the body — telemetry → felt bars",        (Kind.interoceptive,)),
     ("neuromod",      "neuromodulation — arousal + affect (mood)",     (Kind.modulation,)),
+    ("power",         "metabolic intake — battery SOC + solar (real food)", (Kind.power,)),
     ("metabolism",    "energy economy — hunger + tiredness (stakes)",  (Kind.metabolism,)),
     ("reward",        "reward learning — value cache + dopamine (RPE)", (Kind.reward,)),
     ("curiosity",     "curiosity drive — novelty → intrinsic reward",   (Kind.drive,)),
@@ -156,6 +157,7 @@ class NervousMonitor:
             "felt": felt,                              # {bars, overall, felt}
             "mood": mood,                              # {arousal, valence, mood}
             "transduction": transduction,              # per-system {level, phrase, baseline} (raw->bar->felt)
+            "power": self._retained_json(Kind.power, Modality.device),  # Renogy MPPT: SOC, solar watts, etc.
             "gpu_holder": holder,
             "baseline_systems": list(BASELINE_SYSTEMS),
             "bus": {**stats, "rate_per_s": self._rate(stats, now)},
@@ -216,6 +218,13 @@ class NervousMonitor:
                 if not mood:
                     return "—"
                 return f"{mood.get('mood','?')} · arousal {float(mood.get('arousal',0)):.2f} · valence {float(mood.get('valence',0)):+.2f}"
+            if name == "power":
+                pw = self._retained_json(Kind.power, Modality.device)
+                if not pw or pw.get("soc") is None:
+                    return "no battery link (using internal sim)"
+                pv = pw.get("pv_power")
+                flow = f" · +{pv}W solar" if pv else " · no sun"
+                return f"SOC {float(pw['soc']):.0f}% · {float(pw.get('battery_voltage', 0)):.1f}V{flow}"
             if name == "metabolism":
                 meta = self._retained_json(Kind.metabolism, Modality.intero)
                 if not meta:

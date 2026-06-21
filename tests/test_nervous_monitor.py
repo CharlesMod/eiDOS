@@ -37,6 +37,33 @@ class TestMonitor(unittest.TestCase):
         self.assertIn("distress", intero["detail"])
         self.assertTrue(any(f["kind"] == "interoceptive" for f in snap["feed"]))  # event crossed the bus
 
+    def test_power_reading_surfaces_in_snapshot_and_organ(self):
+        import json as _json
+        from nervous.event import NervousEvent, Kind, Modality, Delivery, SCHEMA_VERSION
+        bus = NervousBus()
+        self.addCleanup(bus.close)
+        mon = NervousMonitor(bus)
+        reading = {"soc": 98.0, "battery_voltage": 27.3, "net_current": 1.2,
+                   "pv_power": 596, "pv_voltage": 31.4, "load_power": 12, "controller_soc": 95}
+        ev = NervousEvent(SCHEMA_VERSION, "power", Kind.power, Modality.device,
+                          Delivery.retained, salience=0.02)
+        bus.publish(ev, _json.dumps(reading).encode("utf-8"))
+        snap = mon.tick()
+        self.assertIn("power", snap)
+        self.assertEqual(snap["power"]["soc"], 98.0)
+        self.assertEqual(snap["power"]["pv_power"], 596)
+        organ = next(o for o in snap["organs"] if o["name"] == "power")
+        self.assertIn("98%", organ["detail"])
+        self.assertIn("596W", organ["detail"])
+
+    def test_power_absent_is_graceful(self):
+        bus = NervousBus()
+        self.addCleanup(bus.close)
+        snap = NervousMonitor(bus).tick()
+        self.assertIsNone(snap["power"])
+        organ = next(o for o in snap["organs"] if o["name"] == "power")
+        self.assertIn("no battery link", organ["detail"])
+
     def test_gpu_holder_reflects_the_arbiter(self):
         bus = NervousBus()
         self.addCleanup(bus.close)
