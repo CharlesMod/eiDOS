@@ -2240,24 +2240,28 @@ body.nv-open #nv-panel{display:block}
         '<div class="nv-gauge"><span class="nv-gl">valence</span><span class="nv-meter"><i style="width:'+vp.toFixed(0)+'%;background:'+(va<0?'#ff5a5a':'#00ff41')+'"></i></span><span style="color:#9fd">'+(va>=0?'+':'')+va.toFixed(2)+'</span></div>';
     } else mb.innerHTML='<span style="color:#5f8a6e">mood not yet formed</span>';
 
-    var pw=(snap&&snap.power)||null, pwEl=document.getElementById('nv-power');
+    // Power is served by the dashboard's OWN poll (data.power), so it's live even when eidos is stopped;
+    // fall back to the eidos snapshot only if the cache is somehow absent.
+    var pw=(data&&data.power)||(snap&&snap.power)||null, pwEl=document.getElementById('nv-power');
+    var pwAge=(data&&data.power_age_s!=null)?data.power_age_s:null;
+    var pwStale=(data&&data.power_fresh===false);
     if(pw&&pw.soc!=null){
       var soc=Math.max(0,Math.min(100,+pw.soc||0));
       var pv=+pw.pv_power||0, net=+pw.net_current||0;
       var socCol=soc<25?'#ff5a5a':(soc<50?'#ffb000':'#00ff41');
-      var flow = pv>0 ? '<span style="color:#00ff41">&#9650; charging '+pv+'W from the sun</span>'
-        : (net<0?'<span style="color:#ffb000">&#9660; discharging '+Math.abs(net).toFixed(1)+'A</span>':'<span style="color:#5f8a6e">idle — holding charge</span>');
+      var flow = pwStale ? '<span style="color:#ffb000">&#9888; stale '+(pwAge!=null?Math.round(pwAge)+'s old':'')+' — last seen (Renogy app in use?)</span>'
+        : (pv>0 ? '<span style="color:#00ff41">&#9650; charging '+pv+'W from the sun</span>'
+        : (net<0?'<span style="color:#ffb000">&#9660; discharging '+Math.abs(net).toFixed(1)+'A</span>':'<span style="color:#5f8a6e">idle — holding charge</span>'));
       var cells=[[pw.battery_voltage,'volts'],[pw.pv_power,'solar W'],[pw.pv_voltage,'PV volts'],
         [pw.load_power,'load W'],[pw.net_current,'net A'],[pw.controller_soc,'ctrl SOC']];
       pwEl.innerHTML =
-        '<div class="nv-soc"><div class="nv-soc-top"><span class="nv-soc-pct" style="color:'+socCol+'">'+soc.toFixed(0)+'%</span>'+
-        '<span class="nv-soc-lbl">battery · LiFePO4 24V 100Ah</span></div>'+
-        '<div class="nv-soc-bar"><i style="width:'+soc.toFixed(0)+'%;background:'+(soc<25?'#ff5a5a':'linear-gradient(90deg,#0a8a3a,#00ff41)')+'"></i></div>'+
+        '<div class="nv-soc"><div class="nv-soc-top"><span class="nv-soc-pct" style="color:'+(pwStale?'#8893a5':socCol)+'">'+soc.toFixed(0)+'%</span>'+
+        '<span class="nv-soc-lbl">battery · LiFePO4 24V 100Ah'+(pwStale||pwAge==null?'':' · '+Math.round(pwAge)+'s ago')+'</span></div>'+
+        '<div class="nv-soc-bar"><i style="width:'+soc.toFixed(0)+'%;background:'+(pwStale?'#3a4452':(soc<25?'#ff5a5a':'linear-gradient(90deg,#0a8a3a,#00ff41)'))+'"></i></div>'+
         '<div class="nv-pw-flow">'+flow+'</div></div>'+
         '<div class="nv-pw-cells">'+cells.map(function(c){return '<div class="nv-pw-cell"><div class="nv-pw-v">'+(c[0]==null?'—':esc(c[0]))+'</div><div class="nv-pw-l">'+c[1]+'</div></div>';}).join('')+'</div>';
     } else {
-      pwEl.innerHTML='<span style="color:#5f8a6e;font-size:12px">no battery link — running on the internal energy sim'+
-        ((data&&data.running)?' (waiting for the first MPPT read, or you\'re using the Renogy app)':'')+'</span>';
+      pwEl.innerHTML='<span style="color:#5f8a6e;font-size:12px">no battery link — the dashboard isn\'t getting MPPT reads yet (you may be on the Renogy app, or it\'s still connecting)</span>';
     }
 
     var trans=(snap&&snap.transduction)||{}, bars=felt.bars||{}, basel=(snap&&snap.baseline_systems)||[];

@@ -186,5 +186,80 @@ class TestSelfHealing(unittest.TestCase):
         self.assertFalse(pm.is_fresh())
 
 
+class TestSharedCache(unittest.TestCase):
+    """The always-on dashboard owns the single BLE poll and writes a shared cache; eidos and the panel
+    READ it — so battery/solar stays live even when eidos is paused/stopped, with one radio owner."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+        self.cache = str(Path(self.dir) / "power_latest.json")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_write_then_read_roundtrip_fresh(self):
+        from nervous.power import write_power_cache, read_power_cache
+        reading = parse_mppt(_frame(_good_regs()))
+        write_power_cache(self.cache, reading)
+        c = read_power_cache(self.cache, max_age_s=600.0)
+        self.assertIsNotNone(c)
+        self.assertTrue(c["fresh"])
+        self.assertEqual(c["reading"]["pv_power"], 601)
+        self.assertLess(c["age_s"], 5.0)
+
+    def test_absent_cache_is_none(self):
+        from nervous.power import read_power_cache
+        self.assertIsNone(read_power_cache(self.cache))
+
+    def test_old_reading_reads_stale(self):
+        # a reading written long ago is served but marked NOT fresh (panel shows "stale", sim takes over)
+        from nervous.power import read_power_cache
+        old = {"reading": parse_mppt(_frame(_good_regs())), "ts": __import__("time").time() - 1000.0}
+        Path(self.cache).write_text(json.dumps(old), encoding="utf-8")
+        c = read_power_cache(self.cache, max_age_s=600.0)
+        self.assertIsNotNone(c)
+        self.assertFalse(c["fresh"])
+        self.assertGreater(c["age_s"], 600.0)
+
+    def test_dashboard_poll_writes_cache_eidos_consumes_it(self):
+        # End-to-end: the dashboard's BLE poller writes the cache; an eidos-side monitor reads it via
+        # cache_reader and anchors its metabolism — the radio is polled exactly ONCE (by the dashboard).
+        from nervous.power import cache_reader
+        ble_reads = {"n": 0}
+
+        def fake_ble():
+            ble_reads["n"] += 1
+            return parse_mppt(_frame(_good_regs(batt_dV=268)))
+
+        dash = PowerMonitor(None, reader=fake_ble, metabolism=None, cache_path=self.cache)
+        self.assertIsNotNone(dash.poll_once())                 # dashboard does the ONE real BLE read
+        self.assertEqual(ble_reads["n"], 1)
+
+        bus = NervousBus(); self.addCleanup(bus.close)
+        met = FakeMetabolism()
+        eidos = PowerMonitor(bus, reader=cache_reader(None, self.cache, max_age_s=600.0), metabolism=met)
+        reading = eidos.poll_once()                            # eidos consumes the cache (no BLE)
+        self.assertIsNotNone(reading)
+        self.assertEqual(ble_reads["n"], 1)                    # still ONE radio read — no contention
+        self.assertEqual(len(met.anchored), 1)                 # metabolism anchored to the shared reading
+        self.assertIsNotNone(bus.retained_snapshot(Kind.power, Modality.device))
+
+    def test_cache_reader_fails_open_when_stale(self):
+        # a stale/absent cache makes the eidos-side reader raise → the monitor's fail-open path engages
+        from nervous.power import cache_reader
+        reader = cache_reader(None, self.cache, max_age_s=600.0)
+        with self.assertRaises(IOError):
+            reader()                                           # absent
+        old = {"reading": parse_mppt(_frame(_good_regs())), "ts": __import__("time").time() - 5000.0}
+        Path(self.cache).write_text(json.dumps(old), encoding="utf-8")
+        with self.assertRaises(IOError):
+            reader()                                           # present but stale
+        pm = PowerMonitor(None, reader=reader, metabolism=FakeMetabolism())
+        self.assertIsNone(pm.poll_once())                      # fail-open: None, never raises
+        self.assertFalse(pm.is_fresh())
+
+
 if __name__ == "__main__":
     unittest.main()

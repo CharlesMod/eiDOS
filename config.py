@@ -291,6 +291,13 @@ class Config:
         return self.state_dir / "chat_hold.json"
 
     @property
+    def power_cache_path(self) -> Path:
+        """Shared latest-power reading: the always-on dashboard polls the Renogy MPPT and writes here;
+        eidos and the behind-the-curtain panel read it (so battery/solar is live even when eidos is
+        stopped). In state_dir → skeleton, so the creature never reads the raw file (it feels it via the bus)."""
+        return self.state_dir / "power_latest.json"
+
+    @property
     def self_guide_path(self) -> Path:
         return self.workspace / "self_guide.md"
 

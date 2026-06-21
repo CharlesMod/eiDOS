@@ -20,10 +20,53 @@ The BLE read is injected (`reader=`) so the self-healing logic is testable witho
 Reference: github.com/cyrils/renogy-bt. Probe/feasibility: experiments/renogy_probe.py.
 """
 import json
+import os
 import threading
 import time
 
 from .event import NervousEvent, Kind, Modality, Delivery, SCHEMA_VERSION
+
+
+# ---- shared cache: ONE poller (the always-on dashboard) owns the radio; eidos + the panel READ -------
+def write_power_cache(path, reading):
+    """Atomically write the latest reading + a WALL-CLOCK ts to a file two processes share. The dashboard
+    service is the single BLE poller (so battery/solar stays live even when eidos is paused/stopped) and
+    writes this; eidos and the behind-the-curtain panel read it. Wall time (not monotonic) so the age is
+    comparable across processes. Never raises."""
+    try:
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"reading": dict(reading), "ts": time.time()}, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def read_power_cache(path, *, max_age_s=600.0):
+    """Read the shared cache → {reading, ts, age_s, fresh} or None if absent/unreadable. Never raises."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        reading = d.get("reading")
+        if not isinstance(reading, dict):
+            return None
+        ts = float(d.get("ts") or 0.0)
+        age = max(0.0, time.time() - ts)
+        return {"reading": reading, "ts": ts, "age_s": round(age, 1), "fresh": age <= float(max_age_s)}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def cache_reader(config, cache_path, *, max_age_s=600.0):
+    """A reader callable for a PowerMonitor that CONSUMES the shared cache instead of hitting BLE — so
+    eidos anchors its metabolism to the dashboard's single poll (one radio owner, no contention). Raises
+    when the cache is stale/absent so the monitor's own fail-open path marks it stale → solar fallback."""
+    def _read():
+        c = read_power_cache(cache_path, max_age_s=max_age_s)
+        if not c or not c["fresh"]:
+            raise IOError("power cache stale/absent")
+        return c["reading"]
+    return _read
 
 WRITE_CHAR = "0000ffd1-0000-1000-8000-00805f9b34fb"
 NOTIFY_CHAR = "0000fff1-0000-1000-8000-00805f9b34fb"
@@ -154,12 +197,17 @@ class PowerMonitor:
     so Dean using the Renogy app (stealing the single BLE link) degrades gracefully instead of breaking."""
 
     def __init__(self, bus, *, config=None, source="power", reader=None, metabolism=None,
-                 interval_s=60.0, stale_after_s=600.0, backoff_max_s=600.0, clock=time.monotonic):
+                 interval_s=60.0, stale_after_s=600.0, backoff_max_s=600.0, clock=time.monotonic,
+                 cache_path=None):
         self.bus = bus
         self.config = config
         self.source = source
         self.reader = reader or (default_reader(config) if config is not None else None)
         self.metabolism = metabolism
+        # Set only on the dashboard's BLE poller: each good read is written to a shared cache so other
+        # processes (eidos, the panel) can consume it. The eidos-side monitor reads the cache and leaves
+        # this None (it must not re-stamp what it read as a fresh reading).
+        self.cache_path = str(cache_path) if cache_path else None
         self.interval_s = float(interval_s)
         self.stale_after_s = float(stale_after_s)
         self.backoff_max_s = float(backoff_max_s)
@@ -211,6 +259,9 @@ class PowerMonitor:
             self._last_ok = self._clock()
             self._fails = 0
             self._last_err = ""
+        # The radio owner (dashboard) publishes the reading to the shared cache for everyone else.
+        if self.cache_path:
+            write_power_cache(self.cache_path, reading)
         # anchor the reserve to truth (guarded — metabolism faults must not kill the monitor)
         if self.metabolism is not None:
             try:

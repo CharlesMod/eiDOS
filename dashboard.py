@@ -1943,6 +1943,17 @@ def build_nervous(config):
         except (TypeError, ValueError):
             age = None
     st = _ctrl_status(config)
+    # Power comes from the dashboard's OWN cache (it owns the radio), so the panel is live regardless of
+    # whether eidos is running — that's the whole point of moving the poll out of the eidos child.
+    power, power_age, power_fresh = None, None, None
+    try:
+        from nervous.power import read_power_cache
+        pc = read_power_cache(str(config.power_cache_path),
+                              max_age_s=getattr(config, "power_stale_after_s", 600.0))
+        if pc:
+            power, power_age, power_fresh = pc["reading"], pc["age_s"], pc["fresh"]
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "snapshot": snap,
         "substrate": _raw_substrate(config),
@@ -1950,6 +1961,9 @@ def build_nervous(config):
         "running": bool(st.get("running")),
         "paused": bool(st.get("paused")),
         "enabled": bool(getattr(config, "nervous_enabled", False)),
+        "power": power,            # live battery/solar from the dashboard's poll (eidos-independent)
+        "power_age_s": power_age,
+        "power_fresh": power_fresh,
     }
 
 
@@ -2054,6 +2068,24 @@ def main():
     import threading
     threading.Thread(target=_watchdog_loop, args=(config,), daemon=True).start()
     print("[watchdog] armed — eiDOS auto-restart-on-crash enabled")
+
+    # Power: the always-on dashboard owns the SINGLE Renogy BLE poll and writes a shared cache, so
+    # battery/solar stays live on the behind-the-curtain panel even when eidos is paused/stopped — and
+    # eidos consumes that same cache (one radio owner, no contention). Guarded: a BLE/bleak fault, or a
+    # busy device (Dean on the Renogy app), must never wound the dashboard — it just leaves the cache stale.
+    if getattr(config, "power_enabled", False) and getattr(config, "power_mppt_address", ""):
+        try:
+            from nervous.power import PowerMonitor, default_reader
+            config.state_dir.mkdir(parents=True, exist_ok=True)
+            PowerMonitor(None, config=config, metabolism=None, reader=default_reader(config),
+                         cache_path=str(config.power_cache_path),
+                         interval_s=getattr(config, "power_poll_interval_s", 60.0),
+                         stale_after_s=getattr(config, "power_stale_after_s", 600.0),
+                         backoff_max_s=getattr(config, "power_backoff_max_s", 600.0)).start()
+            print(f"[dashboard] power poller started — owns the Renogy BLE radio; battery/solar "
+                  f"live even when eidos is stopped")
+        except Exception as _pe:  # noqa: BLE001
+            print(f"[dashboard] power poller start failed (continuing): {_pe}")
     print(f"[dashboard] Serving on http://0.0.0.0:{port}")
     print(f"[dashboard] Reading from {config.workspace}")
     try:

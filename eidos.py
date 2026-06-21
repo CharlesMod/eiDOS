@@ -642,20 +642,24 @@ def run_loop(config: Config, persona=None, wal=None):
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} metabolism start failed (continuing): {_e}")
 
-    # M4: real power — poll the Renogy MPPT over BLE and anchor the reserve to real battery SOC. Default
-    # OFF; opt in via config. Self-healing: Dean using the Renogy phone app steals the single BLE link,
-    # so reads fail-open + back off and the reserve falls back to the internal sim until the device frees.
+    # M4: real power — anchor the reserve to real battery SOC. The always-on DASHBOARD owns the single
+    # Renogy BLE radio and writes a shared cache; eidos CONSUMES that cache (no second BLE contender) and
+    # anchors its metabolism to it. So battery/solar stays live on the panel even when eidos is paused/
+    # stopped, the radio has one owner, and Dean using the Renogy app just makes the cache go stale → the
+    # reserve fails-open to the internal solar sim until the link frees. Default OFF; opt in via config.
     if (nervous_bus is not None and nervous_metabolism is not None
             and getattr(config, "power_enabled", False) and getattr(config, "power_mppt_address", "")):
         try:
-            from nervous.power import PowerMonitor
+            from nervous.power import PowerMonitor, cache_reader
+            _pstale = getattr(config, "power_stale_after_s", 600.0)
             nervous_power = PowerMonitor(
                 nervous_bus, config=config, metabolism=nervous_metabolism,
+                reader=cache_reader(config, str(config.power_cache_path), max_age_s=_pstale),
                 interval_s=getattr(config, "power_poll_interval_s", 60.0),
-                stale_after_s=getattr(config, "power_stale_after_s", 600.0),
+                stale_after_s=_pstale,
                 backoff_max_s=getattr(config, "power_backoff_max_s", 600.0)).start()
-            print(f"{pfx} power monitor started — reading MPPT {config.power_mppt_address} "
-                  f"(SOC anchors the reserve; fail-open if you're using the Renogy app)")
+            print(f"{pfx} power monitor started — anchoring to the dashboard's shared MPPT cache "
+                  f"(dashboard owns the radio; falls back to the solar sim if the cache goes stale)")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} power monitor start failed (continuing on internal energy sim): {_e}")
 
