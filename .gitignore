@@ -30,3 +30,6 @@ preserved_nuggets.local.toml
 
 # embedding model (90MB ONNX + tokenizer) — fetch with `python setup_embedding.py`, never commit
 models/
+
+# learned battery model (runtime data, persists across wipes — not source)
+battery_profile.json

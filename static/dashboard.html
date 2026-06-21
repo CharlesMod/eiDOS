@@ -2110,6 +2110,8 @@ body.nv-open #nv-panel{display:block}
 .nv-soc-bar{width:100%;height:13px;border:1px solid #244;border-radius:7px;background:#071109;overflow:hidden;}
 .nv-soc-bar > i{display:block;height:100%;box-shadow:0 0 10px rgba(0,255,65,.6);transition:width .6s;}
 .nv-pw-flow{font-size:11px;letter-spacing:1px;}
+.nv-pw-calib{font-size:9px;color:#5f8a6e;letter-spacing:.5px;margin-top:4px;}
+.nv-pw-calib b{color:#7fb890;font-weight:normal;}
 .nv-pw-cells{display:flex;flex-wrap:wrap;gap:8px;flex:1;}
 .nv-pw-cell{border:1px solid #163524;border-radius:6px;background:#070d0a;padding:8px 12px;min-width:74px;text-align:center;}
 .nv-pw-v{font-size:18px;color:#eafff0;}
@@ -2255,13 +2257,24 @@ body.nv-open #nv-panel{display:block}
         : (net>0.1 ? '<span style="color:#00ff41">&#9650; charging '+net.toFixed(1)+'A'+(pv>0?' ('+pv+'W solar in)':'')+'</span>'
         : (net<-0.1 ? '<span style="color:#ffb000">&#9660; discharging '+Math.abs(net).toFixed(1)+'A'+(pv>0?' — '+pv+'W solar can\'t cover the '+load+'W load':'')+'</span>'
         : '<span style="color:#5f8a6e">idle — holding charge</span>'));
+      // learned-profile calibration state (the battery profiler): fused once both endpoints are known,
+      // else "still calibrating" with what's been learned so far (cutoff is observe-only).
+      var calib;
+      if(pw.soc_method==='fusion'){
+        calib='<b>learned</b> · full '+pw.v_full+'V · cutoff '+pw.v_empty+'V · '+pw.capacity_ah+'Ah usable · fused (V+coulomb)';
+      } else {
+        var bits=[pw.v_full?('full '+pw.v_full+'V learned'):'full not seen yet',
+                  pw.v_empty?('cutoff '+pw.v_empty+'V'):'cutoff not seen yet'];
+        calib='<b>calibrating</b> · '+bits.join(' · ')+(pw.profile_samples?(' · '+pw.profile_samples+' samples'):'')+' · voltage-only for now';
+      }
       var cells=[[pw.battery_voltage,'volts'],[pw.pv_power,'solar W'],[pw.pv_voltage,'PV volts'],
         [pw.load_power,'load W'],[pw.net_current,'net A'],[pw.controller_soc,'ctrl SOC']];
       pwEl.innerHTML =
         '<div class="nv-soc"><div class="nv-soc-top"><span class="nv-soc-pct" style="color:'+(pwStale?'#8893a5':socCol)+'">'+soc.toFixed(0)+'%</span>'+
         '<span class="nv-soc-lbl">battery · LiFePO4 24V 100Ah'+(pwStale||pwAge==null?'':' · '+Math.round(pwAge)+'s ago')+'</span></div>'+
         '<div class="nv-soc-bar"><i style="width:'+soc.toFixed(0)+'%;background:'+(pwStale?'#3a4452':(soc<25?'#ff5a5a':'linear-gradient(90deg,#0a8a3a,#00ff41)'))+'"></i></div>'+
-        '<div class="nv-pw-flow">'+flow+'</div></div>'+
+        '<div class="nv-pw-flow">'+flow+'</div>'+
+        '<div class="nv-pw-calib">'+calib+'</div></div>'+
         '<div class="nv-pw-cells">'+cells.map(function(c){return '<div class="nv-pw-cell"><div class="nv-pw-v">'+(c[0]==null?'—':esc(c[0]))+'</div><div class="nv-pw-l">'+c[1]+'</div></div>';}).join('')+'</div>';
     } else {
       pwEl.innerHTML='<span style="color:#5f8a6e;font-size:12px">no battery link — the dashboard isn\'t getting MPPT reads yet (you may be on the Renogy app, or it\'s still connecting)</span>';

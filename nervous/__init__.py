@@ -23,6 +23,7 @@ from .curiosity import CuriosityDrive
 from .metabolism import Metabolism, hunger_to_bar, solar_charge_in
 from .power import (PowerMonitor, lifepo4_soc, parse_mppt,
                     read_power_cache, write_power_cache, cache_reader)
+from .battery_profiler import BatteryProfiler
 
 
 def build_bus(config, *, payload_store=None):
@@ -51,4 +52,5 @@ __all__ = [
     "Metabolism", "hunger_to_bar", "solar_charge_in",
     "PowerMonitor", "lifepo4_soc", "parse_mppt",
     "read_power_cache", "write_power_cache", "cache_reader",
+    "BatteryProfiler",
 ]

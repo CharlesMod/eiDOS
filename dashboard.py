@@ -2076,14 +2076,25 @@ def main():
     if getattr(config, "power_enabled", False) and getattr(config, "power_mppt_address", ""):
         try:
             from nervous.power import PowerMonitor, default_reader
+            from nervous.battery_profiler import BatteryProfiler
             config.state_dir.mkdir(parents=True, exist_ok=True)
-            PowerMonitor(None, config=config, metabolism=None, reader=default_reader(config),
+            # The profiler learns this pack's true 0→100 over time (voltage+coulomb fusion) and persists
+            # OUTSIDE the workspace, so it keeps calibrating 24/7 (even when eidos sleeps) and survives
+            # wipes. It wraps the BLE reader: read → learn → enrich the reading's SOC → cache.
+            _profiler = BatteryProfiler(
+                path=str(config.battery_profile_path),
+                cells=int(getattr(config, "power_battery_cells", 8) or 8),
+                r_internal=float(getattr(config, "power_battery_r_internal", 0.015) or 0.015),
+                capacity_nameplate_ah=float(getattr(config, "power_battery_capacity_ah", 100.0) or 100.0))
+            _base_reader = default_reader(config)
+            PowerMonitor(None, config=config, metabolism=None,
+                         reader=lambda: _profiler.ingest(_base_reader()),
                          cache_path=str(config.power_cache_path),
                          interval_s=getattr(config, "power_poll_interval_s", 60.0),
                          stale_after_s=getattr(config, "power_stale_after_s", 600.0),
                          backoff_max_s=getattr(config, "power_backoff_max_s", 600.0)).start()
-            print(f"[dashboard] power poller started — owns the Renogy BLE radio; battery/solar "
-                  f"live even when eidos is stopped")
+            print(f"[dashboard] power poller started — owns the Renogy BLE radio + learns the battery "
+                  f"profile; live even when eidos is stopped")
         except Exception as _pe:  # noqa: BLE001
             print(f"[dashboard] power poller start failed (continuing): {_pe}")
     print(f"[dashboard] Serving on http://0.0.0.0:{port}")

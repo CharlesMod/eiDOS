@@ -298,6 +298,13 @@ class Config:
         return self.state_dir / "power_latest.json"
 
     @property
+    def battery_profile_path(self) -> Path:
+        """The learned battery model (true v_full/v_empty/capacity, fused SOC). Lives OUTSIDE the
+        workspace — at the repo root, not under workspace/ — so a creature wipe never erases hardware
+        knowledge that took weeks of observation to learn. Gitignored runtime data."""
+        return Path(self.workspace_dir).parent / "battery_profile.json"
+
+    @property
     def self_guide_path(self) -> Path:
         return self.workspace / "self_guide.md"
 
