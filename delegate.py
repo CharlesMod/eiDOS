@@ -45,6 +45,17 @@ Hard rules, in addition to the task you were given:
   you could not verify.
 """
 
+# Appended only in creature mode: the delegate is building software the creature itself will run.
+CREATURE_BUILDER_RULES = """
+--- You are building FOR a small digital creature ---
+The creature lives in this home and will SEE and RUN what you make — this is its workshop. So:
+- Leave a clear, RUNNABLE result in your working directory: one obvious entry point (e.g. run.sh or
+  a single named script) and a one-line note in a README of exactly how to run it.
+- Keep it small and self-contained. The creature has a plain Linux shell (WSL) and runs things with
+  simple commands; prefer a single script or a venv over sprawling structure.
+- Everything outside your working directory is the creature's own home — do not touch it.
+"""
+
 _NAME_SANITIZE = re.compile(r"[^A-Za-z0-9_\-]+")
 _RESEARCH_TOOLS = "read,grep,find,ls"
 # Tool names whose events indicate a file was touched, and the arg keys that carry paths.
@@ -53,6 +64,12 @@ _PATH_KEYS = ("path", "file_path", "filePath", "filename")
 
 
 def _delegate_root(config: Config) -> Path:
+    """Where the delegate's per-job sandboxes live. For the CREATURE this is a `workshop/` folder INSIDE
+    its home burrow — so the software its builder-self makes is the creature's own to see, run, and send
+    the builder back to improve (the loop is closed). For the house-AI, a sandbox under the workspace."""
+    if getattr(config, "creature_mode", False):
+        from tools import _creature_root  # single source of truth for the home root (creates it)
+        return _creature_root(config) / "workshop"
     return config.workspace / "delegate"
 
 
@@ -96,8 +113,8 @@ def _cwd_denied(config: Config, cwd: Path) -> str:
     if _under(c, sandbox):
         return ""
     if _under(c, _norm(REPO_ROOT)):
-        return ("the Kairos repo is off-limits to the delegate (only its own sandbox "
-                "under workspace/delegate/) — pick a different cwd or omit it")
+        return (f"the Kairos repo is off-limits to the delegate (only its own sandbox "
+                f"under {_delegate_root(config)}) — pick a different cwd or omit it")
     for d in (getattr(config, "delegate_allowed_dirs", None) or []):
         try:
             if _under(c, _norm(d)):
@@ -118,8 +135,9 @@ def _write_house_rules(config: Config) -> Path:
     root = _delegate_root(config)
     root.mkdir(parents=True, exist_ok=True)
     rules = root / "house_rules.md"
-    if not rules.exists():
-        rules.write_text(HOUSE_RULES, encoding="utf-8")
+    body = HOUSE_RULES + (CREATURE_BUILDER_RULES if getattr(config, "creature_mode", False) else "")
+    # Always (re)write — a creature/house mode switch must never leave stale rules behind.
+    rules.write_text(body, encoding="utf-8")
     return rules
 
 
@@ -195,10 +213,21 @@ def tool_delegate(args: dict, config: Config) -> ToolResult:
         cwd = Path(prior_meta["cwd"])
     else:
         raw = str(args.get("name") or "").strip() or f"d{int(time.time()) % 100000}"
-        base = "dlg_" + _NAME_SANITIZE.sub("_", raw).strip("_")[:40]
+        _clean = _NAME_SANITIZE.sub("_", raw).strip("_")[:40]
+        # In the creature's workshop every folder IS a build, so the "dlg_" prefix is just noise and it
+        # breaks name round-tripping (it names "clock", continues "clock"). House-AI keeps the prefix.
+        base = _clean if getattr(config, "creature_mode", False) else ("dlg_" + _clean)
         name = base
         job_dir = _delegate_root(config) / base
-        cwd = Path(str(args.get("cwd"))) if args.get("cwd") else job_dir
+        if args.get("cwd"):
+            _raw_cwd = Path(str(args.get("cwd")))
+            # The creature names a workshop folder ("clock"), not a full path — root a relative cwd under
+            # its workshop so it lands in its home, reachable and runnable.
+            if getattr(config, "creature_mode", False) and not _raw_cwd.is_absolute():
+                _raw_cwd = _delegate_root(config) / _raw_cwd
+            cwd = _raw_cwd
+        else:
+            cwd = job_dir
 
     denied = _cwd_denied(config, cwd if cont or args.get("cwd") else job_dir)
     if denied:

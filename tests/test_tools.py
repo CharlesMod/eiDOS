@@ -418,8 +418,9 @@ class TestTools(unittest.TestCase):
 
 
 class TestCreatureWorldFirewall(unittest.TestCase):
-    """Creature-mode bash is confined to the workspace (its world); it can't reach into its own source
-    tree (its biology). Dean (2026-06-20): the creature shouldn't read its own source code."""
+    """Creature-mode bash is confined to its HOME burrow (workspace/home) — its whole world. It can't
+    reach its source tree (its biology) NOR the workspace bookkeeping one level up (logs, persona, the
+    knowledge index) — all skeleton. Dean (2026-06-20): hide the creature's skeleton from itself."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -445,15 +446,24 @@ class TestCreatureWorldFirewall(unittest.TestCase):
         src = os.path.join(self.tmp, "eidos.py")            # parent of workspace = the source tree
         self.assertIsNotNone(_creature_world_firewall(f"Get-Content {src}", self.config))
 
-    def test_absolute_path_into_workspace_allowed(self):
+    def test_absolute_path_into_home_allowed(self):
         if os.name != "nt":
             self.skipTest("windows absolute-path form")
-        inside = os.path.join(self.config.workspace_dir, "notes.md")
+        from tools import _creature_root
+        inside = os.path.join(str(_creature_root(self.config)), "notes.md")   # the home burrow = its world
         self.assertIsNone(_creature_world_firewall(f"Get-Content {inside}", self.config))
 
-    def test_plain_workspace_commands_allowed(self):
+    def test_absolute_path_into_workspace_skeleton_blocked(self):
+        if os.name != "nt":
+            self.skipTest("windows absolute-path form")
+        # The workspace root is skeleton now — one level ABOVE the home burrow — so its bookkeeping
+        # (the LLM log, persona json, the knowledge index) is outside the creature's world: denied.
+        skeleton = os.path.join(self.config.workspace_dir, "llm_log.jsonl")
+        self.assertIsNotNone(_creature_world_firewall(f"Get-Content {skeleton}", self.config))
+
+    def test_plain_home_commands_allowed(self):
         self.assertIsNone(_creature_world_firewall("Get-ChildItem", self.config))
-        self.assertIsNone(_creature_world_firewall("Get-Content llm_log.jsonl", self.config))
+        self.assertIsNone(_creature_world_firewall("Get-Content notes.txt", self.config))
         self.assertIsNone(_creature_world_firewall('python -c "print(1)"', self.config))
 
     def test_prose_dots_not_flagged(self):
@@ -551,7 +561,7 @@ class TestWslShellAndEncoding(unittest.TestCase):
 
     def test_firewall_allows_workspace_linux_commands(self):
         from tools import _creature_world_firewall as fw
-        for ok in ("ls -F", "grep -r fins .", "cat creature.json", "find . -name '*.json'",
+        for ok in ("ls -F", "grep -r fins .", "cat notes.txt", "find . -name '*.json'",
                    "ls | head -5"):
             self.assertIsNone(fw(ok, self.config), ok)
 
@@ -566,13 +576,22 @@ class TestWslShellAndEncoding(unittest.TestCase):
         self.assertIn("ok", _read_text_robust(p / "bad.txt"))              # never raises
 
     def test_write_then_read_roundtrip_unicode(self):
-        ws = self.config.workspace_dir
+        from tools import _creature_root
         tool_write_file({"path": "note.txt", "content": "spark ✦ café"}, self.config)
         r = tool_read_file({"path": "note.txt"}, self.config)
         self.assertTrue(r.success)
         self.assertIn("✦", r.output)
-        # written as real UTF-8 on disk (not cp1252)
-        self.assertEqual(Path(ws, "note.txt").read_bytes(), "spark ✦ café".encode("utf-8"))
+        # lands in the creature's HOME burrow (not the workspace root) and is real UTF-8 on disk
+        self.assertEqual((_creature_root(self.config) / "note.txt").read_bytes(),
+                         "spark ✦ café".encode("utf-8"))
+
+    def test_skeleton_file_unreachable_via_read_file(self):
+        # A platform bookkeeping file at the workspace root is skeleton — read_file (home-confined)
+        # must refuse to reach up out of the burrow to it.
+        Path(self.config.workspace_dir, "persona.json").write_text("{}", encoding="utf-8")
+        r = tool_read_file({"path": "../persona.json"}, self.config)
+        self.assertFalse(r.success)
+        self.assertIn("outside your world", r.output)
 
 
 class TestSkillWatchdog(unittest.TestCase):

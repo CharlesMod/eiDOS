@@ -41,10 +41,14 @@ def _save_full_output(config: Config, tick_id: str, stream: str, content: str) -
     return str(path)
 
 
-def _truncate(text: str, limit: int, full_path: Optional[str]) -> str:
-    """Truncate text to limit chars, appending pointer to full output."""
+def _truncate(text: str, limit: int, full_path: Optional[str], creature: bool = False) -> str:
+    """Truncate text to limit chars, appending a pointer to the full output. For the creature we never
+    name the on-disk overflow file (it lives in the skeleton, outside its world — a path it can't reach
+    would only confuse it); we just tell it the rest was trimmed and to narrow down."""
     if len(text) <= limit:
         return text
+    if creature:
+        return text[:limit] + f"\n[trimmed to {limit} chars — narrow it down (grep/head) to see more]"
     suffix = f"\n[truncated at {limit} chars"
     if full_path:
         suffix += f", full output: {full_path}"
@@ -74,21 +78,46 @@ def _win_to_wsl_path(winpath: str) -> str:
     return p
 
 
-def _normalize_workspace_path(path: str, config: Config) -> Path:
-    """Resolve a file path against the workspace, stripping redundant workspace prefix.
+# The creature's home burrow — the ONE name for the subdir inside the workspace that is its whole world.
+CREATURE_HOME_DIRNAME = "home"
 
-    The model often emits "workspace/foo.md" because the prompt says
-    'Working directory: workspace/'. That creates workspace/workspace/foo.md.
-    Strip the leading workspace dir name to avoid double-nesting.
+
+def _creature_root(config: Config) -> Path:
+    """The single source of truth for the creature's reachable world.
+
+    A creature lives in its burrow — `workspace/home/` — which holds ONLY the things it makes. All the
+    platform's bookkeeping (logs, heartbeat, the knowledge index, episodic vectors, persona/creature
+    json, jobs ledger, outputs) lives one level up in the workspace and is its *skeleton*: the quiet
+    machinery it runs on, never a place it goes. By rooting the creature at home, that skeleton sits
+    OUTSIDE its reachable root and is hidden by the very same containment rule that hides the source
+    tree — one boundary, not a growing blocklist. The creature reaches its memory through memorize/
+    recall, never by reading those files. The house-AI eidos is not a creature and uses the full
+    workspace unchanged."""
+    if getattr(config, "creature_mode", False):
+        home = Path(config.workspace_dir) / CREATURE_HOME_DIRNAME
+        try:
+            home.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return home
+    return Path(config.workspace_dir)
+
+
+def _normalize_workspace_path(path: str, config: Config) -> Path:
+    """Resolve a relative file path against the creature's reachable root (its home burrow, or the full
+    workspace for the house-AI), stripping a redundant leading root-name the model sometimes prepends.
+
+    The model often echoes its own location back ("home/foo", or "workspace/foo" from the old prompt),
+    which would nest a second level (home/home/foo). Strip the leading root dir name to avoid that.
     """
+    root = _creature_root(config)
     p = Path(path)
     if not p.is_absolute():
-        # Strip leading workspace dir name (e.g. "workspace/foo" -> "foo")
-        ws_name = Path(config.workspace_dir).name
         parts = p.parts
-        if parts and parts[0] == ws_name:
+        # Strip a leading echo of the root dir name (e.g. "home/foo" -> "foo", "workspace/foo" -> "foo").
+        if parts and parts[0] in (root.name, Path(config.workspace_dir).name):
             p = Path(*parts[1:]) if len(parts) > 1 else Path(".")
-        p = Path(config.workspace_dir) / p
+        p = root / p
     return p
 
 
@@ -316,7 +345,7 @@ def _wsl_popen(cmd: str, config: Config) -> list:
     """List-form WSL invocation: run the creature's bash inside WSL, cwd'd to the workspace mount, so it
     uses real Linux commands + short relative paths. No cmd.exe/PowerShell in the path → no quote hell."""
     distro = getattr(config, "creature_wsl_distro", "Ubuntu-24.04")
-    wslws = _win_to_wsl_path(str(Path(config.workspace_dir).resolve()))
+    wslws = _win_to_wsl_path(str(_creature_root(config).resolve()))
     return ["wsl.exe", "-d", distro, "--cd", wslws, "-e", "bash", "-lc", cmd]
 
 
@@ -329,24 +358,25 @@ _FW_UP_TRAVERSAL = re.compile(r'(?<![.\w])\.\.(?![.\w])')
 
 
 def _creature_world_firewall(cmd: str, config: Config) -> Optional[str]:
-    """Creature mode only: bash runs IN the workspace — the creature's world and body. Its own source
-    tree (the code under the repo root) is its biology/subconscious, not a place it goes; an organism
-    doesn't reach into its own wiring and read it. So deny any command that reaches OUTSIDE the workspace.
-    Covers BOTH shells: PowerShell (`C:\\…\\Kairos\\eidos.py`) and WSL (`/mnt/c/…/Kairos/eidos.py`,
-    `/etc/…`, `~/…`) — WSL must never be an escape hatch around the source firewall. Heuristic + gentle,
-    not airtight (the creature isn't an adversary; read_file/write_file are already workspace-confined).
-    Returns the offending path/token to deny, or None to allow."""
+    """Creature mode only: bash runs IN the creature's home burrow — its whole world. EVERYTHING outside
+    that root is skeleton: its source tree (its biology) AND the workspace's own bookkeeping (logs,
+    heartbeat, the knowledge index, episodic vectors, persona/creature json) that live one level up. An
+    organism doesn't reach into its own wiring and read it, so deny any command that reaches OUTSIDE the
+    home root. One boundary hides both — not a growing blocklist. Covers BOTH shells: PowerShell
+    (`C:\\…\\Kairos\\eidos.py`) and WSL (`/mnt/c/…/persona.json`, `/etc/…`, `~/…`, `../llm_log.jsonl`) —
+    WSL must never be an escape hatch. Heuristic + gentle (the creature isn't an adversary; read/write
+    are home-confined too). Returns the offending path/token to deny, or None to allow."""
     if not getattr(config, "creature_mode", False):
         return None
     try:
-        ws = Path(config.workspace_dir).resolve()
+        ws = _creature_root(config).resolve()
     except Exception:  # noqa: BLE001
         return None
     if _FW_UP_TRAVERSAL.search(cmd):
         return ".."
     if _FW_HOME.search(cmd):
         return "~"
-    # Windows absolute paths (must resolve under the workspace).
+    # Windows absolute paths (must resolve under the home root).
     for m in _FW_ABS_PATH.finditer(cmd):
         raw = m.group(0).rstrip("\\/.,;:)")
         try:
@@ -355,7 +385,7 @@ def _creature_world_firewall(cmd: str, config: Config) -> Optional[str]:
             continue
         if p != ws and ws not in p.parents:
             return raw
-    # POSIX absolute paths (WSL): must sit under the workspace's /mnt mount. String-prefix check, since
+    # POSIX absolute paths (WSL): must sit under the home root's /mnt mount. String-prefix check, since
     # /mnt paths don't resolve on Windows; `..` is already denied above so the prefix can't be fooled.
     wslws = _win_to_wsl_path(str(ws)).lower().rstrip("/")
     for m in _FW_POSIX_ABS.finditer(cmd):
@@ -372,13 +402,14 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
     if not cmd:
         return ToolResult(output="Error: no 'cmd' argument provided", full_output_path=None, success=False, duration_s=0, fail_kind="args")
 
-    # Creature world-boundary: a creature can't reach outside its workspace into its own source/biology.
+    # Creature world-boundary: a creature can't reach outside its home burrow into its skeleton (its
+    # source/biology AND the workspace bookkeeping one level up).
     _outside = _creature_world_firewall(cmd, config)
     if _outside is not None:
         return ToolResult(
             output=("That's outside your world — there's nothing out there you can reach. Everything "
-                    "that's yours is right here in your workspace; the rest is just the quiet machinery "
-                    "you run on, not a place to go. Stay home and poke around what's yours."),
+                    "that's yours is right here at home; the rest is just the quiet machinery you run "
+                    "on, not a place to go. Stay home and poke around what's yours."),
             full_output_path=None, success=False, duration_s=0, fail_kind="blocked")
 
     # Safety check
@@ -474,7 +505,7 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                 stdout=out_file,
                 stderr=subprocess.STDOUT,
                 text=True,
-                cwd=str(config.workspace),
+                cwd=str(_creature_root(config)),
                 **popen_kwargs,
             )
             # ASYNC BY DEFAULT (fire-and-forget). The command runs in the background and
@@ -570,7 +601,8 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
         if len(combined) > config.output_truncation_chars:
             full_path = _save_full_output(config, tick_id, "bash", combined)
 
-        output = _truncate(combined, config.output_truncation_chars, full_path)
+        output = _truncate(combined, config.output_truncation_chars, full_path,
+                           creature=getattr(config, "creature_mode", False))
 
         return ToolResult(
             output=output,
@@ -614,9 +646,11 @@ def tool_write_file(args: dict, config: Config) -> ToolResult:
         p = _normalize_workspace_path(path, config)
         # Prevent path traversal outside workspace
         resolved = p.resolve()
-        workspace_resolved = Path(config.workspace_dir).resolve()
+        workspace_resolved = _creature_root(config).resolve()
         if not str(resolved).startswith(str(workspace_resolved) + os.sep) and resolved != workspace_resolved:
-            return ToolResult(output="Error: path escapes workspace directory", full_output_path=None, success=False, duration_s=time.monotonic() - start)
+            _msg = ("Error: that's outside your world — keep to your own things, named the short way (notes.txt)."
+                    if getattr(config, "creature_mode", False) else "Error: path escapes workspace directory")
+            return ToolResult(output=_msg, full_output_path=None, success=False, duration_s=time.monotonic() - start)
         # Anti-brick guard: managed files must go through their own tools, not raw write_file.
         _bn = resolved.name.lower()
         if _bn in ("self_guide.md", "self_guide_proposed.md"):
@@ -650,15 +684,18 @@ def tool_read_file(args: dict, config: Config) -> ToolResult:
         p = _normalize_workspace_path(path, config)
         # Prevent path traversal outside workspace
         resolved = p.resolve()
-        workspace_resolved = Path(config.workspace_dir).resolve()
+        workspace_resolved = _creature_root(config).resolve()
         if not str(resolved).startswith(str(workspace_resolved) + os.sep) and resolved != workspace_resolved:
-            return ToolResult(output="Error: path escapes workspace directory", full_output_path=None, success=False, duration_s=time.monotonic() - start)
+            _msg = ("Error: that's outside your world — keep to your own things, named the short way (notes.txt)."
+                    if getattr(config, "creature_mode", False) else "Error: path escapes workspace directory")
+            return ToolResult(output=_msg, full_output_path=None, success=False, duration_s=time.monotonic() - start)
         content = _read_text_robust(resolved)   # BOM-aware + errors='replace' — a read NEVER fails on
         tick_id = time.strftime("%Y%m%d_%H%M%S")  # encoding (PowerShell writes UTF-16; cp1252 happens too)
         full_path = None
         if len(content) > config.output_truncation_chars:
             full_path = _save_full_output(config, tick_id, "read", content)
-        output = _truncate(content, config.output_truncation_chars, full_path)
+        output = _truncate(content, config.output_truncation_chars, full_path,
+                           creature=getattr(config, "creature_mode", False))
         return ToolResult(output=output, full_output_path=full_path, success=True, duration_s=time.monotonic() - start)
     except OSError as e:
         return ToolResult(output=f"Error reading file: {e}", full_output_path=None, success=False, duration_s=time.monotonic() - start)
@@ -707,7 +744,7 @@ def tool_bg_run(args: dict, config: Config) -> ToolResult:
         if _creature_uses_wsl(config):
             _bg_arg, _bg_shell, _bg_cwd = _wsl_popen(cmd, config), False, None
         else:
-            _bg_arg, _bg_shell, _bg_cwd = cmd, True, str(config.workspace)
+            _bg_arg, _bg_shell, _bg_cwd = cmd, True, str(_creature_root(config))
         with open(out_path, "w") as out_file:
             proc = subprocess.Popen(
                 _bg_arg,
@@ -1673,25 +1710,28 @@ def tool_http_request(args: dict, config: Config) -> ToolResult:
         full_path = None
         if len(text) > config.output_truncation_chars:
             full_path = _save_full_output(config, time.strftime("%Y%m%d_%H%M%S"), "http", text)
-        out = _truncate(text, config.output_truncation_chars, full_path)
+        out = _truncate(text, config.output_truncation_chars, full_path,
+                        creature=getattr(config, "creature_mode", False))
         return ToolResult(output=f"HTTP {status} · {ctype or 'no-type'} · {len(raw)}B\n{out}",
                           full_output_path=full_path, success=ok, duration_s=dur)
-    # binary → save to a file
+    # binary → save to a file (in the creature's home so the path it's told is one it can actually reach)
+    _root = _creature_root(config)
     ext = {"audio/wav": ".wav", "audio/x-wav": ".wav", "audio/mpeg": ".mp3", "audio/mp3": ".mp3",
            "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "application/pdf": ".pdf"}.get(
                ct.split(";")[0].strip(), ".bin")
     save = (args.get("save") or args.get("out") or "").strip()
     if save:
-        p = save if os.path.isabs(save) else str(config.workspace / save)
+        p = save if os.path.isabs(save) else str(_root / save)
     else:
-        p = str(config.workspace / f"http_{time.strftime('%Y%m%d_%H%M%S')}{ext}")
+        p = str(_root / f"http_{time.strftime('%Y%m%d_%H%M%S')}{ext}")
     try:
         with open(p, "wb") as f:
             f.write(raw)
     except Exception as e:  # noqa: BLE001
         return ToolResult(output=f"HTTP {status} {ctype} {len(raw)}B but save failed: {e}",
                           full_output_path=None, success=False, duration_s=dur)
-    return ToolResult(output=f"HTTP {status} · {ctype} · {len(raw)}B binary saved to {p}",
+    _shown = os.path.basename(p) if getattr(config, "creature_mode", False) else p
+    return ToolResult(output=f"HTTP {status} · {ctype} · {len(raw)}B binary saved to {_shown}",
                       full_output_path=p, success=ok, duration_s=dur)
 
 
