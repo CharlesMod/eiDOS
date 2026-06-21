@@ -629,8 +629,11 @@ def tool_write_file(args: dict, config: Config) -> ToolResult:
         except Exception:  # noqa: BLE001
             pass
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(content, encoding="utf-8")   # EXPLICIT utf-8: Windows default is cp1252,
-        duration = time.monotonic() - start              # which silently corrupts unicode + breaks read-back
+        # EXPLICIT utf-8 (Windows default cp1252 silently corrupts unicode + breaks read-back) and
+        # newline="" so text mode does NOT translate \n -> \r\n: the file must byte-match what was
+        # written, or read_file round-trips with stray \r and WSL bash (grep / string `=`) breaks on it.
+        resolved.write_text(content, encoding="utf-8", newline="")
+        duration = time.monotonic() - start
         return ToolResult(output=f"Written {len(content)} chars to {path}", full_output_path=None, success=True, duration_s=duration)
     except OSError as e:
         return ToolResult(output=f"Error writing file: {e}", full_output_path=None, success=False, duration_s=time.monotonic() - start)
