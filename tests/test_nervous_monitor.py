@@ -54,7 +54,23 @@ class TestMonitor(unittest.TestCase):
         self.assertEqual(snap["power"]["pv_power"], 596)
         organ = next(o for o in snap["organs"] if o["name"] == "power")
         self.assertIn("98%", organ["detail"])
-        self.assertIn("596W", organ["detail"])
+        self.assertIn("charging", organ["detail"])   # net_current +1.2A → charging (not "there's sun")
+
+    def test_power_discharging_despite_solar(self):
+        # THE bug Dean caught: solar coming in (pv>0) but the load exceeds it, so net current is negative
+        # → the readout must say DISCHARGING, never "charging" just because the sun is up.
+        import json as _json
+        from nervous.event import NervousEvent, Kind, Modality, Delivery, SCHEMA_VERSION
+        bus = NervousBus()
+        self.addCleanup(bus.close)
+        mon = NervousMonitor(bus)
+        reading = {"soc": 66.2, "battery_voltage": 26.3, "net_current": -4.62,
+                   "pv_power": 265, "load_power": 375, "controller_soc": 97}
+        ev = NervousEvent(SCHEMA_VERSION, "power", Kind.power, Modality.device, Delivery.retained)
+        bus.publish(ev, _json.dumps(reading).encode("utf-8"))
+        organ = next(o for o in mon.tick()["organs"] if o["name"] == "power")
+        self.assertIn("discharging", organ["detail"])
+        self.assertNotIn("charging", organ["detail"].replace("discharging", ""))  # not the wrong word
 
     def test_power_absent_is_graceful(self):
         bus = NervousBus()

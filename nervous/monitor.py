@@ -222,8 +222,16 @@ class NervousMonitor:
                 pw = self._retained_json(Kind.power, Modality.device)
                 if not pw or pw.get("soc") is None:
                     return "no battery link (using internal sim)"
-                pv = pw.get("pv_power")
-                flow = f" · +{pv}W solar" if pv else " · no sun"
+                net = pw.get("net_current")
+                # Direction is the NET current, not the presence of sun (load can exceed solar).
+                if net is None:
+                    flow = ""
+                elif net > 0.1:
+                    flow = f" · charging {net:.1f}A"
+                elif net < -0.1:
+                    flow = f" · discharging {abs(net):.1f}A"
+                else:
+                    flow = " · idle"
                 return f"SOC {float(pw['soc']):.0f}% · {float(pw.get('battery_voltage', 0)):.1f}V{flow}"
             if name == "metabolism":
                 meta = self._retained_json(Kind.metabolism, Modality.intero)

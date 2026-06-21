@@ -2247,11 +2247,14 @@ body.nv-open #nv-panel{display:block}
     var pwStale=(data&&data.power_fresh===false);
     if(pw&&pw.soc!=null){
       var soc=Math.max(0,Math.min(100,+pw.soc||0));
-      var pv=+pw.pv_power||0, net=+pw.net_current||0;
+      var pv=+pw.pv_power||0, load=+pw.load_power||0, net=+pw.net_current||0;
       var socCol=soc<25?'#ff5a5a':(soc<50?'#ffb000':'#00ff41');
+      // Charge vs discharge is the NET battery current, NOT "is there sun" — solar can be coming in while
+      // a bigger load still drains the pack. Say that explicitly so it can't read as charging.
       var flow = pwStale ? '<span style="color:#ffb000">&#9888; stale '+(pwAge!=null?Math.round(pwAge)+'s old':'')+' — last seen (Renogy app in use?)</span>'
-        : (pv>0 ? '<span style="color:#00ff41">&#9650; charging '+pv+'W from the sun</span>'
-        : (net<0?'<span style="color:#ffb000">&#9660; discharging '+Math.abs(net).toFixed(1)+'A</span>':'<span style="color:#5f8a6e">idle — holding charge</span>'));
+        : (net>0.1 ? '<span style="color:#00ff41">&#9650; charging '+net.toFixed(1)+'A'+(pv>0?' ('+pv+'W solar in)':'')+'</span>'
+        : (net<-0.1 ? '<span style="color:#ffb000">&#9660; discharging '+Math.abs(net).toFixed(1)+'A'+(pv>0?' — '+pv+'W solar can\'t cover the '+load+'W load':'')+'</span>'
+        : '<span style="color:#5f8a6e">idle — holding charge</span>'));
       var cells=[[pw.battery_voltage,'volts'],[pw.pv_power,'solar W'],[pw.pv_voltage,'PV volts'],
         [pw.load_power,'load W'],[pw.net_current,'net A'],[pw.controller_soc,'ctrl SOC']];
       pwEl.innerHTML =
