@@ -32,6 +32,12 @@ class TestDashboardPostPayloads(unittest.TestCase):
             validate_dashboard_post_payload("/api/control/reset", b'{"mode":"everything"}')
         self.assertIn("mode", str(cm.exception))
 
+    def test_git_restore_payload_allows_last_good_default(self):
+        for raw in (b"", b"{}", b'{"tag":""}'):
+            with self.subTest(raw=raw):
+                payload = validate_dashboard_post_payload("/api/git/restore", raw)
+                self.assertEqual(payload.tag, "")
+
     def test_config_payload_requires_settings_object(self):
         payload = validate_dashboard_post_payload(
             "/api/config",
@@ -43,7 +49,7 @@ class TestDashboardPostPayloads(unittest.TestCase):
             validate_dashboard_post_payload("/api/config", b'{"apply":false}')
 
     def test_privileged_payloads_require_ids(self):
-        for path in ("/api/git/restore", "/api/selfedit/apply", "/api/selfedit/reject"):
+        for path in ("/api/selfedit/apply", "/api/selfedit/reject"):
             with self.subTest(path=path):
                 with self.assertRaises(DashboardPayloadError):
                     validate_dashboard_post_payload(path, b"{}")

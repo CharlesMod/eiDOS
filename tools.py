@@ -1,4 +1,5 @@
 """Tool registry and implementations."""
+from __future__ import annotations
 
 import dataclasses
 import json
@@ -8,7 +9,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Literal, Optional, Union
 
 import platform_shell
 from config import Config
@@ -39,13 +40,17 @@ class ToolResult:
 class _ToolArgs(BaseModel):
     """Strict validation for untrusted LLM/tool boundary dictionaries."""
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True, str_strip_whitespace=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
-def _nonempty(value: str, field_name: str) -> str:
+def _present(value: str, field_name: str) -> str:
     if not value.strip():
         raise ValueError(f"{field_name} must not be empty")
     return value
+
+
+def _trimmed_nonempty(value: str, field_name: str) -> str:
+    return _present(value, field_name).strip()
 
 
 class BashArgs(_ToolArgs):
@@ -57,7 +62,7 @@ class BashArgs(_ToolArgs):
     @field_validator("cmd")
     @classmethod
     def _cmd_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "cmd")
+        return _present(value, "cmd")
 
 
 class WriteFileArgs(_ToolArgs):
@@ -67,7 +72,7 @@ class WriteFileArgs(_ToolArgs):
     @field_validator("path")
     @classmethod
     def _path_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "path")
+        return _trimmed_nonempty(value, "path")
 
 
 class ReadFileArgs(_ToolArgs):
@@ -76,7 +81,7 @@ class ReadFileArgs(_ToolArgs):
     @field_validator("path")
     @classmethod
     def _path_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "path")
+        return _trimmed_nonempty(value, "path")
 
 
 class BgRunArgs(_ToolArgs):
@@ -86,12 +91,12 @@ class BgRunArgs(_ToolArgs):
     @field_validator("cmd")
     @classmethod
     def _cmd_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "cmd")
+        return _present(value, "cmd")
 
     @field_validator("name")
     @classmethod
     def _name_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "name")
+        return _trimmed_nonempty(value, "name")
 
 
 class BgCheckArgs(_ToolArgs):
@@ -100,14 +105,14 @@ class BgCheckArgs(_ToolArgs):
     @field_validator("name")
     @classmethod
     def _name_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "name")
+        return _trimmed_nonempty(value, "name")
 
 
 class HttpRequestArgs(_ToolArgs):
     url: str
     method: Optional[str] = None
     json_body: Optional[Any] = Field(default=None, validation_alias=AliasChoices("json", "json_body"))
-    data: Optional[str | bytes] = None
+    data: Optional[Union[str, bytes]] = None
     headers: dict[str, str] = Field(default_factory=dict)
     timeout: float = 30.0
     save: Optional[str] = None
@@ -116,7 +121,7 @@ class HttpRequestArgs(_ToolArgs):
     @field_validator("url")
     @classmethod
     def _url_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "url")
+        return _trimmed_nonempty(value, "url")
 
     @field_validator("method")
     @classmethod
@@ -148,12 +153,12 @@ class UpdatePlanArgs(_ToolArgs):
     @field_validator("note")
     @classmethod
     def _note_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "note")
+        return _present(value, "note")
 
 
 class MemorizeArgs(_ToolArgs):
     fact: str = Field(validation_alias=AliasChoices("fact", "value", "content", "knowledge"))
-    tags: Optional[list[str] | str] = None
+    tags: Optional[Union[list[str], str]] = None
     key: Optional[str] = None
     category: str = "facts"
     confidence: str = "tentative"
@@ -163,7 +168,7 @@ class MemorizeArgs(_ToolArgs):
     @field_validator("fact")
     @classmethod
     def _fact_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "fact")
+        return _present(value, "fact")
 
 
 class RecallArgs(_ToolArgs):
@@ -172,7 +177,7 @@ class RecallArgs(_ToolArgs):
     @field_validator("query")
     @classmethod
     def _query_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "query")
+        return _present(value, "query")
 
 
 class UpdateSelfGuideArgs(_ToolArgs):
@@ -183,7 +188,7 @@ class UpdateSelfGuideArgs(_ToolArgs):
 
     @model_validator(mode="after")
     def _has_content_or_note(self) -> "UpdateSelfGuideArgs":
-        if not (self.content or self.note):
+        if not ((self.content and self.content.strip()) or (self.note and self.note.strip())):
             raise ValueError("provide content or note")
         return self
 
@@ -197,7 +202,12 @@ class ProposeSelfEditArgs(_ToolArgs):
     @field_validator("target_file")
     @classmethod
     def _target_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "target_file")
+        return _trimmed_nonempty(value, "target_file")
+
+    @field_validator("new_content")
+    @classmethod
+    def _content_not_empty(cls, value: str) -> str:
+        return _present(value, "new_content")
 
 
 class EmptyArgs(_ToolArgs):
@@ -210,10 +220,15 @@ class CreateSkillArgs(_ToolArgs):
     description: str = ""
     args_schema: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("skill_name", "skill_code")
+    @field_validator("skill_name")
     @classmethod
-    def _required_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "skill field")
+    def _skill_name_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "skill_name")
+
+    @field_validator("skill_code")
+    @classmethod
+    def _skill_code_not_empty(cls, value: str) -> str:
+        return _present(value, "skill_code")
 
 
 class EditSkillArgs(_ToolArgs):
@@ -222,10 +237,15 @@ class EditSkillArgs(_ToolArgs):
     description: Optional[str] = None
     args_schema: Optional[dict[str, Any]] = None
 
-    @field_validator("skill_name", "skill_code")
+    @field_validator("skill_name")
     @classmethod
-    def _required_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "skill field")
+    def _skill_name_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "skill_name")
+
+    @field_validator("skill_code")
+    @classmethod
+    def _skill_code_not_empty(cls, value: str) -> str:
+        return _present(value, "skill_code")
 
 
 class RollbackSkillArgs(_ToolArgs):
@@ -235,17 +255,22 @@ class RollbackSkillArgs(_ToolArgs):
     @field_validator("skill_name", "version")
     @classmethod
     def _required_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "rollback field")
+        return _trimmed_nonempty(value, "rollback field")
 
 
 class NoteAppendArgs(_ToolArgs):
     name: str = Field(default="scratch", validation_alias=AliasChoices("name", "notebook"))
     text: str = Field(validation_alias=AliasChoices("text", "note", "content"))
 
-    @field_validator("name", "text")
+    @field_validator("name")
     @classmethod
-    def _note_field_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "note field")
+    def _note_name_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "name")
+
+    @field_validator("text")
+    @classmethod
+    def _note_text_not_empty(cls, value: str) -> str:
+        return _present(value, "text")
 
 
 class NoteReadArgs(_ToolArgs):
@@ -260,12 +285,12 @@ class TcpProbeArgs(_ToolArgs):
     @field_validator("ip")
     @classmethod
     def _ip_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "ip")
+        return _trimmed_nonempty(value, "ip")
 
 
 class NetScanArgs(_ToolArgs):
     subnet: str = Field(validation_alias=AliasChoices("subnet", "base"))
-    ports: Optional[list[int] | str] = None
+    ports: Optional[Union[list[int], str]] = None
     timeout: float = Field(default=0.4, gt=0, le=30)
     start: int = Field(default=1, ge=1, le=254)
     end: int = Field(default=254, ge=1, le=254)
@@ -273,14 +298,14 @@ class NetScanArgs(_ToolArgs):
     @field_validator("subnet")
     @classmethod
     def _subnet_shape(cls, value: str) -> str:
-        value = _nonempty(value, "subnet").rstrip(".")
+        value = _trimmed_nonempty(value, "subnet").rstrip(".")
         if not re.fullmatch(r"\d{1,3}\.\d{1,3}\.\d{1,3}", value):
             raise ValueError("subnet must look like 192.168.1")
         return value
 
     @field_validator("ports")
     @classmethod
-    def _ports_in_range(cls, value: Optional[list[int] | str]) -> Optional[list[int] | str]:
+    def _ports_in_range(cls, value: Optional[Union[list[int], str]]) -> Optional[Union[list[int], str]]:
         if isinstance(value, list):
             for port in value:
                 if port < 1 or port > 65535:
@@ -327,7 +352,7 @@ class AskAiArgs(_ToolArgs):
     @field_validator("prompt")
     @classmethod
     def _prompt_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "prompt")
+        return _present(value, "prompt")
 
 
 class VisionArgs(_ToolArgs):
@@ -340,7 +365,7 @@ class VisionArgs(_ToolArgs):
     @field_validator("image")
     @classmethod
     def _image_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "image")
+        return _trimmed_nonempty(value, "image")
 
 
 class SpeakArgs(_ToolArgs):
@@ -349,7 +374,7 @@ class SpeakArgs(_ToolArgs):
     @field_validator("text")
     @classmethod
     def _text_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "text")
+        return _present(value, "text")
 
 
 class ManualArgs(_ToolArgs):
@@ -367,7 +392,7 @@ class ObjectiveAddArgs(_ToolArgs):
     @field_validator("title", "why")
     @classmethod
     def _objective_field_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "objective field")
+        return _present(value, "objective field")
 
 
 class ObjectiveKeyArgs(_ToolArgs):
@@ -376,7 +401,7 @@ class ObjectiveKeyArgs(_ToolArgs):
     @field_validator("id")
     @classmethod
     def _id_not_empty(cls, value: str) -> str:
-        return _nonempty(value, "id")
+        return _trimmed_nonempty(value, "id")
 
 
 class ObjectiveBlockArgs(ObjectiveKeyArgs):

@@ -69,6 +69,15 @@ class TestPydanticToolArgs(unittest.TestCase):
         self.assertIn("invalid write_file arguments", result.output)
         self.assertFalse(target.exists())
 
+    def test_write_file_preserves_exact_content(self):
+        target = Path(self.config.workspace_dir) / "exact.txt"
+        content = "  leading\nbody\ntrailing  \n"
+
+        result = tool_write_file({"path": str(target), "content": content}, self.config)
+
+        self.assertTrue(result.success, result.output)
+        self.assertEqual(target.read_text(encoding="utf-8"), content)
+
     def test_bg_run_rejects_extra_field_without_dispatching(self):
         marker = Path(self.config.workspace_dir) / "bg_should_not_exist.txt"
         cmd = (
@@ -111,6 +120,25 @@ class TestPydanticToolArgs(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.fail_kind, "args")
         self.assertIn("provide either json or data", result.output)
+
+    def test_tool_models_preserve_content_fields(self):
+        from tools import CreateSkillArgs, HttpRequestArgs, ProposeSelfEditArgs
+
+        code = "\n\ndef tool_x(args, config):\n    return None\n"
+        raw = "  raw payload\n"
+
+        self.assertEqual(
+            CreateSkillArgs.model_validate({"skill_name": " x ", "skill_code": code}).skill_code,
+            code,
+        )
+        self.assertEqual(
+            ProposeSelfEditArgs.model_validate({"target_file": " x.py ", "new_content": code}).new_content,
+            code,
+        )
+        self.assertEqual(
+            HttpRequestArgs.model_validate({"url": " http://127.0.0.1 ", "data": raw}).data,
+            raw,
+        )
 
     def test_every_builtin_tool_has_dispatch_boundary_model(self):
         self.assertEqual(_BUILTIN_TOOL_NAMES - set(_TOOL_ARG_MODELS), set())

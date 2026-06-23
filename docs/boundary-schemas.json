@@ -863,15 +863,12 @@
       "additionalProperties": false,
       "properties": {
         "tag": {
+          "default": "",
           "maxLength": 120,
-          "minLength": 1,
           "title": "Tag",
           "type": "string"
         }
       },
-      "required": [
-        "tag"
-      ],
       "title": "DashboardGitRestorePost",
       "type": "object"
     },

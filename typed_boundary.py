@@ -270,7 +270,7 @@ class DashboardGitCheckpointPost(_StrictBoundaryModel):
 
 
 class DashboardGitRestorePost(_StrictBoundaryModel):
-    tag: str = Field(min_length=1, max_length=120)
+    tag: str = Field(default="", max_length=120)
 
 
 class DashboardSelfEditApplyPost(_StrictBoundaryModel):
@@ -290,7 +290,7 @@ _DASHBOARD_POST_MODELS: dict[str, tuple[type[_StrictBoundaryModel], bool]] = {
     "/api/chat_hold": (DashboardChatHoldPost, True),
     "/api/self_guide": (DashboardSelfGuidePost, True),
     "/api/git/checkpoint": (DashboardGitCheckpointPost, True),
-    "/api/git/restore": (DashboardGitRestorePost, False),
+    "/api/git/restore": (DashboardGitRestorePost, True),
     "/api/selfedit/apply": (DashboardSelfEditApplyPost, False),
     "/api/selfedit/reject": (DashboardSelfEditRejectPost, False),
 }
