@@ -8,11 +8,12 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import platform_shell
 from config import Config
 from parser import ToolCall
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from safety import is_command_blocked, check_disk_space
 
 
@@ -32,6 +33,133 @@ class ToolResult:
     success: bool
     duration_s: float
     fail_kind: str = ""
+
+
+class _ToolArgs(BaseModel):
+    """Strict validation for untrusted LLM/tool boundary dictionaries."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+def _nonempty(value: str, field_name: str) -> str:
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be empty")
+    return value
+
+
+class BashArgs(_ToolArgs):
+    cmd: str = Field(validation_alias=AliasChoices("cmd", "command"))
+    wait: bool = False
+    name: Optional[str] = None
+    intent: Optional[str] = None
+
+    @field_validator("cmd")
+    @classmethod
+    def _cmd_not_empty(cls, value: str) -> str:
+        return _nonempty(value, "cmd")
+
+
+class WriteFileArgs(_ToolArgs):
+    path: str
+    content: str = ""
+
+    @field_validator("path")
+    @classmethod
+    def _path_not_empty(cls, value: str) -> str:
+        return _nonempty(value, "path")
+
+
+class ReadFileArgs(_ToolArgs):
+    path: str
+
+    @field_validator("path")
+    @classmethod
+    def _path_not_empty(cls, value: str) -> str:
+        return _nonempty(value, "path")
+
+
+class BgRunArgs(_ToolArgs):
+    cmd: str
+    name: str
+
+    @field_validator("cmd")
+    @classmethod
+    def _cmd_not_empty(cls, value: str) -> str:
+        return _nonempty(value, "cmd")
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_empty(cls, value: str) -> str:
+        return _nonempty(value, "name")
+
+
+class BgCheckArgs(_ToolArgs):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_empty(cls, value: str) -> str:
+        return _nonempty(value, "name")
+
+
+class HttpRequestArgs(_ToolArgs):
+    url: str
+    method: Optional[str] = None
+    json_body: Optional[Any] = Field(default=None, validation_alias="json")
+    data: Optional[str | bytes] = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    timeout: float = 30.0
+    save: Optional[str] = None
+    out: Optional[str] = None
+
+    @field_validator("url")
+    @classmethod
+    def _url_not_empty(cls, value: str) -> str:
+        return _nonempty(value, "url")
+
+    @field_validator("method")
+    @classmethod
+    def _method_allowed(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        method = value.upper()
+        if method not in {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}:
+            raise ValueError("method must be one of GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS")
+        return method
+
+    @field_validator("timeout")
+    @classmethod
+    def _timeout_is_sane(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("timeout must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def _single_body_source(self) -> "HttpRequestArgs":
+        if self.json_body is not None and self.data is not None:
+            raise ValueError("provide either json or data, not both")
+        return self
+
+
+def _format_validation_error(error: ValidationError) -> str:
+    parts = []
+    for entry in error.errors():
+        loc = ".".join(str(item) for item in entry.get("loc", ())) or "args"
+        parts.append(f"{loc}: {entry.get('msg', 'invalid value')}")
+    return "; ".join(parts)
+
+
+def _validate_tool_args(model: type[_ToolArgs], args: dict, tool_name: str) -> _ToolArgs | ToolResult:
+    try:
+        return model.model_validate(args or {})
+    except ValidationError as error:
+        return ToolResult(
+            output=f"Error: invalid {tool_name} arguments: {_format_validation_error(error)}",
+            full_output_path=None,
+            success=False,
+            duration_s=0,
+            fail_kind="args",
+        )
 
 
 def _save_full_output(config: Config, tick_id: str, stream: str, content: str) -> str:
@@ -409,9 +537,10 @@ def _creature_world_firewall(cmd: str, config: Config) -> Optional[str]:
 
 def tool_bash(args: dict, config: Config) -> ToolResult:
     """Run a shell command; fast commands return inline, slow ones auto-background."""
-    cmd = args.get("cmd", "") or args.get("command", "")
-    if not cmd:
-        return ToolResult(output="Error: no 'cmd' argument provided", full_output_path=None, success=False, duration_s=0, fail_kind="args")
+    parsed = _validate_tool_args(BashArgs, args, "bash")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    cmd = parsed.cmd
 
     # Creature world-boundary: a creature can't reach outside its home burrow into its skeleton (its
     # source/biology AND the workspace bookkeeping one level up).
@@ -506,9 +635,9 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
             # its result is delivered to the LLM later, tagged [↩ job N], via the jobs
             # ledger. The loop is NEVER blocked. The model can pass "wait": true to force
             # the synchronous path below when it truly needs the result this same tick.
-            if not bool(args.get("wait", False)):
-                jobname = (str(args.get("name") or "").strip() or f"j{proc.pid}")
-                intent = str(args.get("intent") or "").strip()
+            if not parsed.wait:
+                jobname = (str(parsed.name or "").strip() or f"j{proc.pid}")
+                intent = str(parsed.intent or "").strip()
                 try:
                     jobs = _read_jobs(config)
                     jobs.append({
@@ -623,10 +752,11 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
 
 def tool_write_file(args: dict, config: Config) -> ToolResult:
     """Write content to a file."""
-    path = args.get("path", "")
-    content = args.get("content", "")
-    if not path:
-        return ToolResult(output="Error: no 'path' argument", full_output_path=None, success=False, duration_s=0)
+    parsed = _validate_tool_args(WriteFileArgs, args, "write_file")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    path = parsed.path
+    content = parsed.content
 
     disk_ok, free_gb = check_disk_space(min_gb=config.disk_min_gb)
     if not disk_ok:
@@ -669,9 +799,10 @@ def tool_write_file(args: dict, config: Config) -> ToolResult:
 
 def tool_read_file(args: dict, config: Config) -> ToolResult:
     """Read a file's contents."""
-    path = args.get("path", "")
-    if not path:
-        return ToolResult(output="Error: no 'path' argument", full_output_path=None, success=False, duration_s=0)
+    parsed = _validate_tool_args(ReadFileArgs, args, "read_file")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    path = parsed.path
 
     start = time.monotonic()
     try:
@@ -697,10 +828,11 @@ def tool_read_file(args: dict, config: Config) -> ToolResult:
 
 def tool_bg_run(args: dict, config: Config) -> ToolResult:
     """Spawn a background job and register it in the jobs ledger."""
-    cmd = args.get("cmd", "")
-    name = args.get("name", "")
-    if not cmd or not name:
-        return ToolResult(output="Error: 'cmd' and 'name' required", full_output_path=None, success=False, duration_s=0)
+    parsed = _validate_tool_args(BgRunArgs, args, "bg_run")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    cmd = parsed.cmd
+    name = parsed.name
 
     # Creature world-boundary (same as tool_bash — bg_run was an unfirewalled escape vector).
     _outside = _creature_world_firewall(cmd, config)
@@ -777,9 +909,10 @@ def tool_bg_run(args: dict, config: Config) -> ToolResult:
 
 def tool_bg_check(args: dict, config: Config) -> ToolResult:
     """Check status of a registered background job."""
-    name = args.get("name", "")
-    if not name:
-        return ToolResult(output="Error: 'name' required", full_output_path=None, success=False, duration_s=0)
+    parsed = _validate_tool_args(BgCheckArgs, args, "bg_check")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    name = parsed.name
 
     jobs = _read_jobs(config)
     job = None
@@ -1070,6 +1203,12 @@ def _pid_alive(pid: int) -> bool:
             return False
     try:
         os.kill(pid, 0)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii", errors="ignore")
+            if stat.rsplit(")", 1)[-1].strip().startswith("Z"):
+                return False
+        except OSError:
+            pass
         return True
     except ProcessLookupError:
         return False
@@ -1658,27 +1797,25 @@ def tool_http_request(args: dict, config: Config) -> ToolResult:
     binary). Example — speak: http_request {"method":"POST","url":"http://127.0.0.1:8005/v1/audio/speech",
     "json":{"model":"chatterbox","input":"Hello.","voice":"glados.wav","response_format":"wav"},"save":"say.wav"}."""
     import urllib.request, urllib.error, json as _json
-    url = (args.get("url") or "").strip()
-    if not url:
-        return ToolResult(output="Error: 'url' required.", full_output_path=None, success=False, duration_s=0)
-    headers = dict(args.get("headers") or {})
+    parsed = _validate_tool_args(HttpRequestArgs, args, "http_request")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    url = parsed.url.strip()
+    headers = dict(parsed.headers)
     headers.setdefault("User-Agent", "eiDOS/1.0")
     body = None
-    if args.get("json") is not None:
+    if parsed.json_body is not None:
         try:
-            body = _json.dumps(args["json"]).encode("utf-8")
+            body = _json.dumps(parsed.json_body).encode("utf-8")
         except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error: 'json' is not serializable: {e}",
                               full_output_path=None, success=False, duration_s=0)
         headers.setdefault("Content-Type", "application/json")
-    elif args.get("data") is not None:
-        d = args["data"]
+    elif parsed.data is not None:
+        d = parsed.data
         body = d.encode("utf-8") if isinstance(d, str) else bytes(d)
-    method = (args.get("method") or ("POST" if body is not None else "GET")).upper()
-    try:
-        timeout = max(1.0, min(float(args.get("timeout", 30)), 120.0))
-    except Exception:  # noqa: BLE001
-        timeout = 30.0
+    method = parsed.method or ("POST" if body is not None else "GET")
+    timeout = max(1.0, min(parsed.timeout, 120.0))
 
     start = time.monotonic()
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
@@ -1714,7 +1851,7 @@ def tool_http_request(args: dict, config: Config) -> ToolResult:
     ext = {"audio/wav": ".wav", "audio/x-wav": ".wav", "audio/mpeg": ".mp3", "audio/mp3": ".mp3",
            "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "application/pdf": ".pdf"}.get(
                ct.split(";")[0].strip(), ".bin")
-    save = (args.get("save") or args.get("out") or "").strip()
+    save = (parsed.save or parsed.out or "").strip()
     if save:
         p = save if os.path.isabs(save) else str(_root / save)
     else:

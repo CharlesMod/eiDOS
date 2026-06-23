@@ -46,6 +46,24 @@ point it at your model.
 Useful flags: `--with-embeddings` (semantic memory), `--llm-url <url>`, `--model <name>`, `--no-launch`
 (on Windows: `-WithEmbeddings -LlmUrl <url> -Model <name> -NoLaunch`).
 
+### Nix quick start
+
+For a reproducible Linux development/runtime shell without a mutable `.venv`:
+
+```bash
+nix develop
+nix run .#dashboard
+nix flake check
+```
+
+The flake keeps eiDOS as a flat Python app and supplies Python 3.12 plus the
+current core dependencies from Nixpkgs. It also provides Claude Code as
+`claude`, pinned by the flake, plus Pydantic/Pydantic Settings for typed
+boundary models. Use `nix develop .#embeddings` for the optional
+ONNX/tokenizers embedding stack. See [`NIX.md`](NIX.md) for the exact
+verification boundary and host capabilities that still need live hardware or
+services.
+
 ### Prerequisites: bring your own LLM
 
 eiDOS is the *mind's runtime* — you supply the brain: any **OpenAI-compatible** local server. Pick one:
