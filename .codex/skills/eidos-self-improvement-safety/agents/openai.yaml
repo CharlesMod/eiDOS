@@ -1,0 +1,4 @@
+interface:
+  display_name: "eiDOS Self-Improvement Safety"
+  short_description: "Preserve proposal, apply, rollback, and skill safety."
+  default_prompt: "Use $eidos-self-improvement-safety to change eiDOS self-editing or proposal safety."
