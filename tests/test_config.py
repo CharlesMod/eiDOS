@@ -101,6 +101,20 @@ class TestConfig(unittest.TestCase):
             load_config(str(p))
         self.assertIn("protected_patterns", str(cm.exception))
 
+    def test_rejects_coercible_but_wrong_toml_types(self):
+        cases = [
+            ("[dashboard]\nport = \"8099\"\n", "dashboard.port"),
+            ("[safety]\ncmd_timeout_s = \"5\"\n", "safety.cmd_timeout_s"),
+        ]
+        for body, field in cases:
+            with self.subTest(field=field):
+                d = tempfile.mkdtemp()
+                p = Path(d) / "config.toml"
+                p.write_text(body, encoding="utf-8")
+                with self.assertRaises(ValueError) as cm:
+                    load_config(str(p))
+                self.assertIn(field, str(cm.exception))
+
     def test_env_overrides_are_validated_by_settings_model(self):
         with patch.dict(os.environ, {"EIDOS_MOCK": "true"}, clear=False):
             config = load_config("/nonexistent/path.toml")

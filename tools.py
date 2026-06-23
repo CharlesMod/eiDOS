@@ -2433,7 +2433,7 @@ def _validate_builtin_tool_call(call: ToolCall) -> ToolCall | ToolResult:
     parsed = _validate_tool_args(model, call.args, call.tool)
     if isinstance(parsed, ToolResult):
         return parsed
-    return dataclasses.replace(call, args=parsed.model_dump(exclude_none=True))
+    return dataclasses.replace(call, args=parsed.model_dump(exclude_none=True, exclude_unset=True))
 
 # Wall-clock cap for a single self-authored skill call. A skill runs SYNCHRONOUSLY in the tick and has
 # no internal timeout, so a blocking network/socket/subprocess call with no timeout wedges the whole

@@ -38,6 +38,7 @@ class _StrictBoundaryModel(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
         populate_by_name=True,
+        strict=True,
         str_strip_whitespace=True,
     )
 
@@ -155,6 +156,7 @@ class ConfigDocument(_StrictBoundaryModel):
     model_config = ConfigDict(
         extra="allow",
         populate_by_name=True,
+        strict=True,
         str_strip_whitespace=True,
     )
 

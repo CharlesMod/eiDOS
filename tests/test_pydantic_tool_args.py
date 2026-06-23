@@ -14,6 +14,7 @@ from tools import (
     _BUILTIN_TOOL_NAMES,
     _TOOL_ARG_MODELS,
     _read_jobs,
+    _validate_builtin_tool_call,
     _write_jobs,
     execute_tool,
     tool_bash,
@@ -166,6 +167,14 @@ class TestPydanticToolArgs(unittest.TestCase):
 
         self.assertTrue(result.success, result.output)
         self.assertIn("tts", result.output.lower())
+
+    def test_dispatch_validation_does_not_materialize_tool_defaults(self):
+        validated = _validate_builtin_tool_call(
+            ToolCall(tool="http_probe", args={"ip": "127.0.0.1", "port": 443}, raw="")
+        )
+
+        self.assertIsInstance(validated, ToolCall)
+        self.assertEqual(validated.args, {"ip": "127.0.0.1", "port": 443})
 
     def test_dispatch_rejects_malformed_network_args_before_io(self):
         result = execute_tool(
