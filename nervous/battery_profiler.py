@@ -173,7 +173,17 @@ class BatteryProfiler:
         then, the generic voltage curve, flagged as still calibrating."""
         st = self.state
         ocv = _ocv(reading.get("battery_voltage"), reading.get("net_current"), self.r_internal)
-        v_soc = lifepo4_soc(ocv, 0.0, cells=self.cells, r_internal=0.0) if ocv is not None else None
+        # Effective empty anchor for the voltage curve: an explicitly learned cutoff if we have one, else
+        # the lowest OCV we've actually observed — but only if it's genuinely low enough to be a floor
+        # (a pack that's never been drawn down has a high "min seen" that must NOT read as empty). This is
+        # what reflects "the minimum we saw last night" as the ~1% mark instead of a pessimistic 0%.
+        eff_empty = st["v_empty"]
+        if eff_empty is None:
+            vmin = st["v_min_seen"]
+            if vmin is not None and (2.5 * self.cells) <= vmin <= (2.95 * self.cells):
+                eff_empty = vmin
+        v_soc = (lifepo4_soc(ocv, 0.0, cells=self.cells, r_internal=0.0, v_empty=eff_empty)
+                 if ocv is not None else None)
         calibrated = (st["v_full"] is not None and st["v_empty"] is not None
                       and st["capacity_ah"] and st["coulomb_soc"] is not None)
 
@@ -200,6 +210,7 @@ class BatteryProfiler:
             "soc_coulomb": round(st["coulomb_soc"] * 100.0, 1) if st["coulomb_soc"] is not None else None,
             "v_full": st["v_full"],
             "v_empty": st["v_empty"],
+            "soc_empty_anchor": round(eff_empty, 3) if eff_empty else None,  # OCV mapped to ~1% (the floor)
             "capacity_ah": st["capacity_ah"],
             "profile_samples": st["samples"],
         }

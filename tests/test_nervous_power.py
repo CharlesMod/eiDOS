@@ -75,6 +75,19 @@ class TestSocAndParse(unittest.TestCase):
         charging = lifepo4_soc(26.4, net_current_a=20.0)
         self.assertLessEqual(charging, rested)
 
+    def test_v_empty_reanchors_curve_bottom(self):
+        # generic curve is pessimistic at the bottom — it reads 0% by 24.0V even though the pack still
+        # drives the load lower. Anchoring the observed floor stretches that band to real resolution.
+        self.assertEqual(lifepo4_soc(24.0), 0.0)                          # generic: flat 0% too early
+        self.assertEqual(lifepo4_soc(22.92, v_empty=22.92), 1.0)         # observed floor -> ~1% mark
+        re24 = lifepo4_soc(24.0, v_empty=22.92)
+        self.assertGreater(re24, 0.0)                                    # 24.0V now has resolution...
+        self.assertLess(re24, 8.0)                                       # ...a sane low single digit
+        self.assertEqual(lifepo4_soc(20.0, v_empty=22.92), 0.0)         # BMS hard floor still 0%
+        self.assertEqual(lifepo4_soc(25.5), lifepo4_soc(25.5, v_empty=22.92))  # mid/upper curve untouched
+        # a "floor" above the 5% knee (never drawn down) is ignored — can't masquerade as empty
+        self.assertEqual(lifepo4_soc(25.5, v_empty=26.0), lifepo4_soc(25.5))
+
     def test_parse_rejects_garbage(self):
         with self.assertRaises(ValueError):
             parse_mppt(b"\x01\x83\x02\xc0\xf1")             # an exception frame is not a reading

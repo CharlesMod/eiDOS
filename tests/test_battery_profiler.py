@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from nervous.battery_profiler import BatteryProfiler  # noqa: E402
+from nervous.power import lifepo4_soc  # noqa: E402
 
 
 class Clock:
@@ -100,6 +101,27 @@ class TestProfiler(unittest.TestCase):
         self.assertEqual(est["soc_confidence"], "good")
         self.assertLess(est["soc"], 35.0)              # pulled toward coulomb (~25), not voltage (~50)
         self.assertGreater(est["soc"], 18.0)
+
+    def test_observed_minimum_reanchors_soc_floor(self):
+        # the real ask: reflect the lowest voltage we actually saw as the effective ~1% mark, so eidos
+        # stops reading a pessimistic 0% while there's still usable charge above the inverter's complaint.
+        clk = Clock()
+        p = BatteryProfiler(path=None, clock=clk)
+        p.state["v_min_seen"] = 22.92                       # the floor observed overnight
+        est_min = p.estimate({"battery_voltage": 22.92, "net_current": 0.0})
+        self.assertAlmostEqual(est_min["soc"], 1.0, delta=0.6)          # the floor reads ~1%
+        self.assertAlmostEqual(est_min["soc_empty_anchor"], 22.92, places=2)
+        est_24 = p.estimate({"battery_voltage": 24.0, "net_current": 0.0})
+        self.assertGreater(est_24["soc"], 1.0)                          # 24.0V is no longer a flat 0%...
+        self.assertLess(est_24["soc"], 8.0)
+
+    def test_high_min_seen_does_not_fake_empty(self):
+        # a pack never drawn down has a HIGH min-seen — it must not anchor 1% up in the mid-band
+        p = BatteryProfiler(path=None, clock=Clock())
+        p.state["v_min_seen"] = 26.4
+        est = p.estimate({"battery_voltage": 24.0, "net_current": 0.0})
+        self.assertIsNone(est["soc_empty_anchor"])
+        self.assertEqual(est["soc"], lifepo4_soc(24.0, 0.0))           # unchanged generic curve (0%)
 
     def test_persistence_survives_restart(self):
         d = tempfile.mkdtemp()

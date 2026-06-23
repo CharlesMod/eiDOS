@@ -82,15 +82,29 @@ _LFP_CELL_SOC = [
 ]
 
 
-def lifepo4_soc(pack_voltage, net_current_a=0.0, *, cells=8, r_internal=0.015):
+def lifepo4_soc(pack_voltage, net_current_a=0.0, *, cells=8, r_internal=0.015, v_empty=None):
     """SOC% for an N-cell LiFePO4 pack from measured terminal voltage. net_current_a>0 charging (raises
-    terminal V above resting), <0 under load; subtract I·R to estimate resting before the table lookup."""
+    terminal V above resting), <0 under load; subtract I·R to estimate resting before the table lookup.
+
+    v_empty (optional, a pack OCV): re-anchor the bottom of the curve to the REAL observed floor — the
+    minimum we actually saw, i.e. the point under load where the inverter complains. The generic curve
+    bottoms out at 0% by ~3.0 V/cell (24.0 V on 8S), which is pessimistic: the pack still drives the load
+    below that, down to v_empty. So map v_empty -> ~1% (critically low, not dead) and the BMS hard floor
+    (2.5 V/cell) -> 0%, giving the bottom ~1 V of usable range real resolution. Only spliced in when
+    v_empty sits below the 5% knee, so a high "min seen" (never drawn down) can't masquerade as empty."""
     try:
         v_rest = float(pack_voltage) - float(net_current_a) * float(r_internal)
         cell = v_rest / float(cells)
     except (TypeError, ValueError, ZeroDivisionError):
         return None
     tbl = _LFP_CELL_SOC
+    if v_empty is not None:
+        try:
+            ec = float(v_empty) / float(cells)
+        except (TypeError, ValueError, ZeroDivisionError):
+            ec = None
+        if ec is not None and 2.5 <= ec < 3.130:
+            tbl = [kv for kv in _LFP_CELL_SOC if kv[1] >= 5] + [(ec, 1.0), (min(ec - 0.05, 2.50), 0.0)]
     if cell >= tbl[0][0]:
         return 100.0
     if cell <= tbl[-1][0]:
