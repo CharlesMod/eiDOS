@@ -10,7 +10,7 @@
   Manual launch (no service needed):
       $env:PYTHONUTF8=1; python voice.py --config config.toml
 
-  CUTOVER NOTE — do NOT start this while the live v1 dashboard still owns voice. Two voice services
+  CUTOVER NOTE -- do NOT start this while the live v1 dashboard still owns voice. Two voice services
   would both shell out to Chatterbox (8004) and fight the GPU. Register now (-NoStart, the default),
   then start it as part of the v2 -> live cutover, AFTER stopping v1's voice path. This script does
   NOT auto-start the service; flip it on with `Start-Service EidosVoice` when ready.
@@ -25,7 +25,7 @@
   nssm service name (default: EidosVoice).
 
 .PARAMETER NoStart
-  Register but do not start (DEFAULT true — see cutover note). Pass -NoStart:$false to start now.
+  Register but do not start (DEFAULT true -- see cutover note). Pass -NoStart:$false to start now.
 #>
 param(
     [string]$RepoDir     = (Split-Path -Parent (Split-Path -Parent $PSCommandPath)),
@@ -36,9 +36,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-if (-not (Get-Command nssm -ErrorAction SilentlyContinue)) {
-    throw "nssm not found on PATH. Install it (e.g. 'winget install nssm') and re-run."
-}
+. (Join-Path $PSScriptRoot 'find-nssm.ps1')
+$nssm = Get-NssmPath
 
 if (-not $Python) {
     $candidates = @(
@@ -58,20 +57,20 @@ Write-Host "  script : $voice"
 Write-Host "  workdir: $RepoDir"
 
 # Remove a stale registration so this is idempotent.
-$existing = & nssm status $ServiceName 2>$null
+$existing = & $nssm status $ServiceName 2>$null
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "  (service exists — removing and re-creating)"
-    & nssm stop $ServiceName 2>$null | Out-Null
-    & nssm remove $ServiceName confirm | Out-Null
+    Write-Host "  (service exists -- removing and re-creating)"
+    & $nssm stop $ServiceName 2>$null | Out-Null
+    & $nssm remove $ServiceName confirm | Out-Null
 }
 
-& nssm install $ServiceName $Python $voice "--config" "config.toml"
-& nssm set $ServiceName AppDirectory $RepoDir
-& nssm set $ServiceName AppEnvironmentExtra "PYTHONUTF8=1" "PYTHONIOENCODING=utf-8"
-& nssm set $ServiceName Start SERVICE_AUTO_START
-& nssm set $ServiceName AppStdout (Join-Path $RepoDir "workspace\logs\voice.out.log")
-& nssm set $ServiceName AppStderr (Join-Path $RepoDir "workspace\logs\voice.err.log")
-& nssm set $ServiceName AppRotateFiles 1
+& $nssm install $ServiceName $Python $voice "--config" "config.toml"
+& $nssm set $ServiceName AppDirectory $RepoDir
+& $nssm set $ServiceName AppEnvironmentExtra "PYTHONUTF8=1" "PYTHONIOENCODING=utf-8"
+& $nssm set $ServiceName Start SERVICE_AUTO_START
+& $nssm set $ServiceName AppStdout (Join-Path $RepoDir "workspace\logs\voice.out.log")
+& $nssm set $ServiceName AppStderr (Join-Path $RepoDir "workspace\logs\voice.err.log")
+& $nssm set $ServiceName AppRotateFiles 1
 
 if ($NoStart) {
     Write-Host "Registered (NOT started). Start with: Start-Service $ServiceName   (after the cutover note above)"

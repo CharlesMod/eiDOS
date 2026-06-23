@@ -141,7 +141,16 @@ def complete(
     if max_tokens is None:
         max_tokens = config.llm_max_tokens
 
-    url = config.llm_url.rstrip("/") + "/v1/chat/completions"
+    # Normalize the base so the endpoint is correct whether the user pasted a bare host, a `/v1` base
+    # (Ollama/LM Studio show it that way), or the full chat path. Without this, a `…:11434/v1` URL would
+    # become `…/v1/v1/chat/completions` and 404 — and the dashboard's reachability probe (which strips
+    # /v1) would still say "reachable", a nasty mismatch for a newcomer.
+    _base = config.llm_url.rstrip("/")
+    for _suf in ("/v1/chat/completions", "/chat/completions", "/v1"):
+        if _base.endswith(_suf):
+            _base = _base[: -len(_suf)].rstrip("/")
+            break
+    url = _base + "/v1/chat/completions"
 
     use_stream = on_token is not None
 

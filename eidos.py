@@ -582,21 +582,35 @@ def run_loop(config: Config, persona=None, wal=None):
     # real LLM endpoint only adds multi-second urlopen timeouts (a port may be up but lack /health).
     if not config.mock_mode and not os.environ.get("EIDOS_NO_DASHBOARD"):
         import urllib.request as _ur
-        health_url = config.llm_url.rstrip("/") + "/health"
-        print(f"{pfx} Waiting for LLM server health at {health_url}")
+        # Probe the UNIVERSAL OpenAI endpoint /v1/models (every OpenAI-compatible server exposes it:
+        # llama.cpp, Ollama, LM Studio), not just llama.cpp's /health {"status":"ok"} — which Ollama and
+        # LM Studio lack, and which would otherwise wedge a friend's boot at "waiting for LLM" forever.
+        # Healthy on any 2xx from either probe. Base is normalized so a `…/v1` URL doesn't double up.
+        _base = config.llm_url.rstrip("/")
+        for _suf in ("/v1/chat/completions", "/chat/completions", "/v1"):
+            if _base.endswith(_suf):
+                _base = _base[: -len(_suf)].rstrip("/")
+                break
+        _probes = (_base + "/v1/models", _base + "/health")
+        print(f"{pfx} Waiting for an OpenAI-compatible LLM server at {_base} ...")
         _health_wait = 0
         while not _shutdown_requested:
-            try:
-                with _ur.urlopen(health_url, timeout=5) as _resp:
-                    _data = json.loads(_resp.read().decode())
-                    if _data.get("status") == "ok":
-                        print(f"{pfx} LLM server healthy (waited {_health_wait}s)")
-                        break
-            except Exception:
-                pass
+            _ok = False
+            for _u in _probes:
+                try:
+                    with _ur.urlopen(_u, timeout=5) as _resp:
+                        _code = getattr(_resp, "status", None) or _resp.getcode()
+                        if 200 <= int(_code) < 300:
+                            print(f"{pfx} LLM server reachable at {_u} (waited {_health_wait}s)")
+                            _ok = True
+                            break
+                except Exception:
+                    pass
+            if _ok:
+                break
             _health_wait += 5
             if _health_wait % 60 == 0:
-                print(f"{pfx} Still waiting for LLM server... ({_health_wait}s)")
+                print(f"{pfx} Still waiting for LLM server... ({_health_wait}s) - is it running at {config.llm_url}?")
             time.sleep(5)
 
     # --- V3 nervous system (P3): the deliberative core's afferent intake. Inert until an organ

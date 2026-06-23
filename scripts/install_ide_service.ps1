@@ -15,7 +15,7 @@
   be running (the IDE's pi talks to house-ai via the :8088 monitor tap).
 
 .PARAMETER NoStart
-  Register but do not start. DEFAULT false — the IDE is safe to start immediately (unlike the
+  Register but do not start. DEFAULT false -- the IDE is safe to start immediately (unlike the
   voice cutover), so this installs AND starts unless you pass -NoStart.
 #>
 param(
@@ -27,12 +27,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$nssm = (Get-Command nssm -ErrorAction SilentlyContinue).Source
-if (-not $nssm) {
-    $fallback = "C:\Users\cmod\llm\bin\nssm\nssm.exe"   # where the other eiDOS services' nssm lives
-    if (Test-Path $fallback) { $nssm = $fallback }
-    else { throw "nssm not found on PATH or at $fallback. Install it and re-run." }
-}
+. (Join-Path $PSScriptRoot 'find-nssm.ps1')
+$nssm = Get-NssmPath
 
 if (-not $Python) {
     $candidates = @(

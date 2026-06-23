@@ -39,6 +39,25 @@ echo "→ Python $PYV ($PY)"
   || { echo "✗ need Python ≥ 3.9 (found $PYV)"; exit 1; }
 
 # --- venv + deps ---
+# Naive-machine gotcha: Debian/Ubuntu ship `python3` WITHOUT the venv/pip modules (they're separate
+# apt packages). Detect that up front and fix it (auto via apt when we can, else a precise instruction)
+# so a fresh box doesn't dump a confusing traceback at venv-creation time.
+if ! "$PY" -c 'import ensurepip, venv' >/dev/null 2>&1; then
+  echo "→ Python venv/pip support is missing (common on a fresh Debian/Ubuntu)."
+  PYVER=$("$PY" -c 'import sys;print("%d.%d"%sys.version_info[:2])')
+  if command -v apt-get >/dev/null 2>&1; then
+    SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+    echo "  installing python3-venv + python3-pip via apt ($SUDO)…"
+    $SUDO apt-get update -qq && \
+      $SUDO apt-get install -y -qq python3-venv python3-pip "python${PYVER}-venv" >/dev/null 2>&1 || true
+  fi
+  if ! "$PY" -c 'import ensurepip, venv' >/dev/null 2>&1; then
+    echo "✗ Couldn't enable venv automatically. Install your distro's Python venv+pip packages, e.g.:"
+    echo "    sudo apt-get install -y python3-venv python3-pip   # Debian/Ubuntu/Pi"
+    echo "    (macOS: Python from python.org or Homebrew already includes venv)"
+    exit 1
+  fi
+fi
 if [ ! -d .venv ]; then echo "→ creating .venv"; "$PY" -m venv .venv; fi
 VPY=".venv/bin/python"
 echo "→ installing dependencies"
