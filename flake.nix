@@ -184,6 +184,15 @@ PY
             touch "$out"
           '';
 
+          boundary-schema-docs = pkgs.runCommand "eidos-boundary-schema-docs" { nativeBuildInputs = [ python ]; } ''
+            cp -R ${src} source
+            chmod -R u+w source
+            cd source
+            ${testEnv}
+            python scripts/check_boundary_schemas.py
+            touch "$out"
+          '';
+
           offline-tests = pkgs.runCommand "eidos-offline-tests" {
             nativeBuildInputs = [
               python

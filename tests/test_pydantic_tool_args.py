@@ -9,8 +9,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import Config
+from parser import ToolCall
 from tools import (
+    _BUILTIN_TOOL_NAMES,
+    _TOOL_ARG_MODELS,
     _read_jobs,
+    _write_jobs,
+    execute_tool,
     tool_bash,
     tool_bg_run,
     tool_http_request,
@@ -106,6 +111,74 @@ class TestPydanticToolArgs(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.fail_kind, "args")
         self.assertIn("provide either json or data", result.output)
+
+    def test_every_builtin_tool_has_dispatch_boundary_model(self):
+        self.assertEqual(_BUILTIN_TOOL_NAMES - set(_TOOL_ARG_MODELS), set())
+
+    def test_dispatch_rejects_extra_field_for_non_pilot_tool_without_side_effect(self):
+        result = execute_tool(
+            ToolCall(
+                tool="update_plan",
+                args={"note": "this should not be written", "surprise": "pwn"},
+                raw="",
+            ),
+            self.config,
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.fail_kind, "args")
+        self.assertIn("invalid update_plan arguments", result.output)
+        self.assertFalse((Path(self.config.workspace_dir) / "plan.md").exists())
+
+    def test_dispatch_normalizes_aliases_for_remaining_tools(self):
+        result = execute_tool(
+            ToolCall(tool="manual", args={"section": "tts"}, raw=""),
+            self.config,
+        )
+
+        self.assertTrue(result.success, result.output)
+        self.assertIn("tts", result.output.lower())
+
+    def test_dispatch_rejects_malformed_network_args_before_io(self):
+        result = execute_tool(
+            ToolCall(
+                tool="tcp_probe",
+                args={"ip": "127.0.0.1", "port": 70000},
+                raw="",
+            ),
+            self.config,
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.fail_kind, "args")
+        self.assertIn("port", result.output)
+
+    def test_dispatch_rejects_speak_extra_before_chat_log(self):
+        result = execute_tool(
+            ToolCall(
+                tool="speak",
+                args={"text": "hello", "surprise": True},
+                raw="",
+            ),
+            self.config,
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.fail_kind, "args")
+        self.assertFalse((Path(self.config.workspace_dir) / "chat_replies.jsonl").exists())
+
+    def test_jobs_ledger_rejects_bad_status_on_write(self):
+        with self.assertRaises(ValueError):
+            _write_jobs(self.config, [{"name": "bad", "status": "runningish"}])
+        self.assertFalse(self.config.jobs_path.exists())
+
+    def test_jobs_ledger_fails_closed_on_bad_persisted_record(self):
+        self.config.jobs_path.write_text(
+            '[{"name":"bad","status":"runningish"}]',
+            encoding="utf-8",
+        )
+
+        self.assertEqual(_read_jobs(self.config), [])
 
 
 if __name__ == "__main__":

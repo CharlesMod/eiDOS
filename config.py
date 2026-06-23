@@ -6,6 +6,12 @@ import sys
 from pathlib import Path
 from typing import List
 
+from typed_boundary import (
+    load_env_overrides,
+    validate_config_document,
+    validate_resolved_config,
+)
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:
@@ -440,6 +446,7 @@ def load_config(path: str = "config.toml") -> Config:
                 _deep_merge(data, tomllib.load(f))
         except Exception:  # noqa: BLE001 - a corrupt overlay must never block boot
             pass
+    validate_config_document(data, str(config_path))
     if data:
         config.creature_mode = data.get("creature_mode", config.creature_mode)
         config.creature_shell = data.get("creature_shell", config.creature_shell)
@@ -636,11 +643,12 @@ def load_config(path: str = "config.toml") -> Config:
         config.workspace_dir = paths.get("workspace", config.workspace_dir)
 
     # Env var overrides (highest precedence)
-    if url := os.environ.get("EIDOS_LLM_URL"):
-        config.llm_url = url
-    if ws := os.environ.get("EIDOS_WORKSPACE"):
-        config.workspace_dir = ws
-    if os.environ.get("EIDOS_MOCK") == "1":
+    env = load_env_overrides()
+    if env.llm_url:
+        config.llm_url = env.llm_url
+    if env.workspace:
+        config.workspace_dir = env.workspace
+    if env.mock:
         config.mock_mode = True
         config.tick_interval_s = 5
 
@@ -652,5 +660,7 @@ def load_config(path: str = "config.toml") -> Config:
     if not _ws.is_absolute():
         _ws = REPO_ROOT / _ws
     config.workspace_dir = str(_ws)
+
+    validate_resolved_config(config)
 
     return config

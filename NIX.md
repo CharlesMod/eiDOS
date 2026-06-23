@@ -49,10 +49,18 @@ EIDOS_CONFIG=config.local.toml nix run .#dashboard
 - `claude --version` to prove the pinned Claude Code CLI is available
 - an import smoke for the core Python packages and eiDOS modules
 - imports for `pydantic` and `pydantic_settings`
+- `docs/boundary-schemas.json` matches the Pydantic boundary models generated
+  by `scripts/check_boundary_schemas.py`
 - the existing offline test selector:
 
 ```bash
 python -m pytest -q -m "not slow and not live"
+```
+
+Regenerate the checked schema artifact after changing typed boundary models:
+
+```bash
+nix develop --command python scripts/check_boundary_schemas.py --write
 ```
 
 ## What The Flake Does Not Prove
