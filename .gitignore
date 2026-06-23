@@ -28,6 +28,10 @@ boss_habits.log
 # machine-local seed nuggets (device credentials/keys) — NEVER commit
 preserved_nuggets.local.toml
 
+# machine-local settings overlay written by the dashboard Settings menu (endpoint, model, toggles) —
+# per-machine, never committed; delete to reset to config.toml defaults
+config.local.toml
+
 # embedding model (90MB ONNX + tokenizer) — fetch with `python setup_embedding.py`, never commit
 models/
 

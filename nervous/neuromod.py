@@ -32,9 +32,13 @@ class NeuromodulatoryState:
         # this is the deeper exhaustion collapse on top of that.
         self.exhaustion_energy = float(exhaustion_energy)
         self.tiredness = 0.0
-        # A slow drive (e.g. curiosity restlessness) can raise a BOUNDED arousal floor — a tonic "itch"
-        # the body settles at, never above drive_floor_cap. This replaced an unbounded per-tick bump that
-        # pinned an idle creature's arousal at 1.0 (2026-06-20: newborn creature stuck "vigilant", looping).
+        # Slow drives (e.g. curiosity restlessness, goal-tension incompletion) can each raise a BOUNDED
+        # arousal floor — a tonic "itch" the body settles at, never above drive_floor_cap. This replaced an
+        # unbounded per-tick bump that pinned an idle creature's arousal at 1.0 (2026-06-20: newborn creature
+        # stuck "vigilant", looping). Multiple drives are kept per-source; the floor is their MAX, so the
+        # strongest unmet drive sets the itch and one drive relaxing can't erase another's (curiosity calming
+        # must not silence the pull of an unfinished goal).
+        self._drive_floors = {}
         self.drive_floor = 0.0
         self.drive_floor_cap = float(drive_floor_cap)
         self.sub = bus.subscribe(topics={(Kind.interoceptive, Modality.intero)})
@@ -68,13 +72,20 @@ class NeuromodulatoryState:
         with self._lock:
             self.arousal = min(1.0, self.arousal + float(amount))
 
-    def set_drive_floor(self, amount):
+    def set_drive_floor(self, amount, source="curiosity"):
         """A slow drive sets a BOUNDED tonic arousal floor (e.g. curiosity restlessness = the itch to
-        explore). arousal relaxes toward this floor via observe_interoception; phasic threat/reward
-        spikes ride above it and decay back. Bounded by drive_floor_cap so a drive can never pin
-        arousal at 1.0 the way the old per-tick bump did."""
+        explore; goal-tension = the pull of an unfinished objective). Each drive registers under its own
+        `source`; the live floor is the MAX across drives, so the strongest unmet drive sets the itch and
+        a drive relaxing to 0 only removes its own contribution. arousal relaxes toward this floor via
+        observe_interoception; phasic threat/reward spikes ride above it and decay back. Bounded by
+        drive_floor_cap so no drive can pin arousal at 1.0 the way the old per-tick bump did."""
         with self._lock:
-            self.drive_floor = max(0.0, min(self.drive_floor_cap, float(amount)))
+            a = max(0.0, min(self.drive_floor_cap, float(amount)))
+            if a <= 0.0:
+                self._drive_floors.pop(source, None)
+            else:
+                self._drive_floors[source] = a
+            self.drive_floor = max(self._drive_floors.values(), default=0.0)
 
     def observe_reward(self, rpe, reward):
         """Dopamine: a reward-prediction-error spike raises arousal (the surprise is salient) and nudges

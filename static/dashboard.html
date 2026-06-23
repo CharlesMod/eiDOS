@@ -676,8 +676,8 @@ body::after {
 /* --- tab switcher: station (field monitor) | workbench (code with the crew) --- */
 #nx-tabs{display:flex;gap:2px;flex:1.4 1 0}
 /* settings dropdown — wipe levels */
-#nx-settings-panel{position:fixed;top:44px;right:10px;z-index:99998;width:360px;
-  background:#0a0d0a;border:1px solid #1a3a1a;border-radius:6px;padding:9px;
+#nx-settings-panel{position:fixed;top:44px;right:10px;z-index:99998;width:380px;max-height:88vh;
+  overflow-y:auto;background:#0a0d0a;border:1px solid #1a3a1a;border-radius:6px;padding:9px;
   font-family:'Courier New',monospace;font-size:12px;color:#9ab89a;box-shadow:0 8px 28px rgba(0,0,0,.6)}
 #nx-settings-panel .nxs-title{color:#7CFC9B;font-size:11px;letter-spacing:.5px;margin-bottom:7px}
 #nx-settings-panel button{display:block;width:100%;text-align:left;margin:5px 0;padding:8px 10px;
@@ -686,6 +686,19 @@ body::after {
 #nx-settings-panel button:hover{background:#13361f;border-color:#1c7a3a;color:#9cf0b6}
 #nx-settings-panel .nxs-msg{margin-top:7px;font-size:11px;color:#7CFC9B;min-height:14px;
   white-space:pre-wrap}
+#nx-settings-panel .nxs-meta{font-size:10px;color:#5f7a5f;margin-bottom:6px}
+#nx-settings-panel .nxs-banner{background:#13361f;border:1px solid #1c7a3a;border-radius:4px;
+  padding:6px 8px;margin-bottom:7px;color:#9cf0b6;font-size:11px}
+#nx-settings-panel .nxs-group{margin:8px 0 4px;color:#7CFC9B;font-size:10px;letter-spacing:.5px;
+  border-top:1px solid #16261a;padding-top:6px}
+#nx-settings-panel .nxs-row{display:flex;align-items:center;gap:6px;margin:3px 0}
+#nx-settings-panel .nxs-row label{flex:1;color:#9ab89a;font-size:11px}
+#nx-settings-panel .nxs-row .nxs-help{display:block;color:#5f7a5f;font-size:9px}
+#nx-settings-panel input[type=text],#nx-settings-panel input[type=number]{width:150px;background:#0d120d;
+  border:1px solid #1a3a1a;border-radius:3px;color:#cfe9cf;font:inherit;font-size:11px;padding:3px 5px}
+#nx-settings-panel .nxs-act{display:flex;gap:6px}
+#nx-settings-panel .nxs-act button{margin:6px 0}
+#nx-settings-panel .nxs-mini{width:auto;display:inline-block;padding:3px 8px;font-size:10px;margin:0}
 #nx-tabs button{border-radius:4px;padding:4px 14px;color:#5a6a5a;border-color:#1a3a1a;
   background:#0d110d;opacity:.7}   /* inactive tab = greyed */
 #nx-tabs button:hover{color:#9cf0b6;opacity:1}
@@ -820,11 +833,20 @@ body.wb-nocode #wb-code{display:none}
   <span id="nx-msg"></span>
 </div>
 <div id="nx-settings-panel" style="display:none">
-  <div class="nxs-title">WIPE LEVELS — eiDOS stops; press Start &#9654; GO after</div>
-  <button onclick="nxReset('rebirth')">&#8634; Rebirth — back to egg, KEEP knowledge &amp; skills (same creature)</button>
-  <button onclick="nxReset('full')">&#8856; Full wipe — Level 0, fresh nuggets, NEW creature</button>
+  <div class="nxs-title">SETTINGS</div>
+  <div id="nxs-firstrun" class="nxs-banner" style="display:none">First run — set your model <b>Endpoint URL</b> &amp; <b>Model</b> below, then <b>Apply</b>.</div>
+  <div id="nxs-meta" class="nxs-meta"></div>
+  <div id="nxs-form">loading…</div>
+  <div class="nxs-act">
+    <button onclick="nxApplySettings(true)">&#10003; Apply &amp; restart</button>
+    <button onclick="nxApplySettings(false)">Save only</button>
+  </div>
   <div id="nx-settings-msg" class="nxs-msg"></div>
+  <div class="nxs-group">MAINTENANCE — eiDOS stops; press Start &#9654; GO after</div>
+  <button onclick="nxReset('rebirth')">&#8634; Rebirth — back to egg, KEEP knowledge &amp; skills</button>
+  <button onclick="nxReset('full')">&#8856; Full wipe — Level 0, fresh nuggets, NEW creature</button>
 </div>
+<datalist id="nxs-models"></datalist>
 <div style="height:38px"></div>
 <script>
 async function nxCtl(action){
@@ -839,7 +861,78 @@ async function nxStop(){
   await nxCtl('stop');
 }
 function toggleSettings(){ const p=document.getElementById('nx-settings-panel');
-  p.style.display = (p.style.display==='none'||!p.style.display) ? 'block' : 'none'; }
+  const show = (p.style.display==='none'||!p.style.display);
+  p.style.display = show ? 'block' : 'none';
+  if(show) nxLoadSettings(); }
+
+function nxEsc(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function nxLoadSettings(){
+  const form=document.getElementById('nxs-form');
+  try{
+    const d=await (await fetch('/api/config')).json();
+    document.getElementById('nxs-firstrun').style.display = d.has_overlay ? 'none':'block';
+    document.getElementById('nxs-meta').textContent = 'platform: '+d.platform+' · tools run via '+d.shell;
+    let h='';
+    d.groups.forEach(g=>{
+      h+='<div class="nxs-group">'+nxEsc(g.group)+'</div>';
+      g.fields.forEach(f=>{
+        const v=f.value;
+        h+='<div class="nxs-row"><label title="'+nxEsc(f.help||'')+'">'+nxEsc(f.label);
+        if(f.help) h+='<span class="nxs-help">'+nxEsc(f.help)+'</span>';
+        h+='</label>';
+        if(f.type==='bool'){
+          h+='<input type="checkbox" data-id="'+f.id+'" data-type="bool"'+(v?' checked':'')+'>';
+        } else if(f.type==='int'||f.type==='float'){
+          h+='<input type="number" step="'+(f.type==='float'?'0.01':'1')+'" data-id="'+f.id+'" data-type="'+f.type+'" value="'+nxEsc(v==null?'':v)+'">';
+        } else if(f.picker){
+          h+='<input type="text" list="nxs-models" data-id="'+f.id+'" data-type="str" value="'+nxEsc(v==null?'':v)+'">';
+        } else {
+          h+='<input type="text" data-id="'+f.id+'" data-type="str" value="'+nxEsc(v==null?'':v)+'">';
+        }
+        h+='</div>';
+        if(f.id==='llm.model'){ h+='<div class="nxs-row"><button class="nxs-mini" onclick="nxTestLLM()">Test connection</button>'
+          +'<button class="nxs-mini" onclick="nxListModels()">List models</button></div>'; }
+      });
+    });
+    form.innerHTML=h;
+  }catch(e){ form.textContent='failed to load settings: '+e; }
+}
+
+function nxFieldVal(id){ const el=document.querySelector('#nxs-form [data-id="'+id+'"]'); if(!el)return null;
+  return el.getAttribute('data-type')==='bool' ? el.checked : el.value; }
+
+async function nxTestLLM(){
+  const msg=document.getElementById('nx-settings-msg'); msg.textContent='testing…';
+  try{ const r=await (await fetch('/api/llm/test',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({url:nxFieldVal('llm.url')||''})})).json();
+    msg.textContent = r.ok ? ('✓ reachable ('+r.latency_ms+'ms) — '+r.endpoint) : ('✗ '+(r.error||'no response')+(r.hint?' — '+r.hint:'')); }
+  catch(e){ msg.textContent='✗ '+e; }
+}
+
+async function nxListModels(){
+  const msg=document.getElementById('nx-settings-msg'); msg.textContent='listing models…';
+  try{ const r=await (await fetch('/api/llm/models?url='+encodeURIComponent(nxFieldVal('llm.url')||''))).json();
+    const dl=document.getElementById('nxs-models'); dl.innerHTML='';
+    (r.models||[]).forEach(m=>{ const o=document.createElement('option'); o.value=m; dl.appendChild(o); });
+    msg.textContent = r.ok ? ('✓ '+r.models.length+' model(s) — pick from the Model box') : ('✗ '+(r.error||'none')); }
+  catch(e){ msg.textContent='✗ '+e; }
+}
+
+async function nxApplySettings(apply){
+  const msg=document.getElementById('nx-settings-msg');
+  const settings={};
+  document.querySelectorAll('#nxs-form [data-id]').forEach(el=>{
+    settings[el.getAttribute('data-id')] = el.getAttribute('data-type')==='bool' ? el.checked : el.value; });
+  if(apply && !confirm('Apply settings and restart eidos? (it boots PAUSED — click Start ▸ GO after)'))return;
+  msg.textContent='saving…';
+  try{ const r=await (await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({settings:settings, apply:apply})})).json();
+    if(r.ok){ msg.textContent='✓ '+(r.message||'saved'); document.getElementById('nxs-firstrun').style.display='none'; }
+    else { msg.textContent='✗ '+(r.errors?r.errors.join('; '):(r.error||'failed')); } }
+  catch(e){ msg.textContent='✗ '+e; }
+  nxStatus();
+}
 async function nxReset(mode){
   const label = mode==='rebirth'
     ? 'REBIRTH — back to an egg, KEEP knowledge & skills (same creature)'

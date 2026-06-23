@@ -974,6 +974,27 @@ def _make_handler(config: Config):
                 data = build_dream_list(config)
                 self._respond(200, "application/json", json.dumps(data))
 
+            elif self.path == "/api/config":
+                # Curated settings + their CURRENT values (re-read from disk so the overlay shows
+                # immediately), plus platform/shell info for the menu header.
+                import settings_schema
+                from config import load_config as _load, LOCAL_CONFIG_NAME
+                import platform_shell as _ps
+                _, _, _kdir = _ctrl_paths(config)
+                _fresh = _load(str(_kdir / "config.toml"))
+                _shell = "PowerShell" if os.name == "nt" else " ".join(_ps.posix_shell(_fresh))
+                self._respond(200, "application/json", json.dumps({
+                    "groups": settings_schema.current_settings(_fresh),
+                    "has_overlay": (_kdir / LOCAL_CONFIG_NAME).exists(),
+                    "platform": sys.platform, "shell": _shell, "llm_url": _fresh.llm_url,
+                }))
+
+            elif self.path.startswith("/api/llm/models"):
+                from urllib.parse import urlparse, parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                url = (q.get("url", [""])[0] or "").strip() or config.llm_url
+                self._respond(200, "application/json", json.dumps(_fetch_models(url)))
+
             elif self.path.startswith("/api/control/wait"):
                 # eidos's event-driven control channel: blocks until pause/hold/chat state
                 # changes past ?since= (or ?max_s= elapses), then returns seq + snapshot.
@@ -1083,6 +1104,49 @@ def _make_handler(config: Config):
                     except (json.JSONDecodeError, ValueError):
                         mode = "rebirth"
                 self._respond(200, "application/json", json.dumps(_ctrl_reset(config, mode)))
+            elif self.path == "/api/config":
+                # Save settings to the machine-local overlay (config.local.toml), then optionally
+                # restart eidos so it picks them up. Never rewrites the committed config.toml.
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                if length <= 0 or length > 20000:
+                    self._respond(400, "application/json", '{"ok":false,"error":"bad body"}'); return
+                try:
+                    body = json.loads(self.rfile.read(length))
+                except (json.JSONDecodeError, ValueError):
+                    self._respond(400, "application/json", '{"ok":false,"error":"invalid json"}'); return
+                import settings_schema
+                from config import save_overrides
+                overrides, errors = settings_schema.build_overrides(body.get("settings") or {})
+                if errors:
+                    self._respond(400, "application/json",
+                                  json.dumps({"ok": False, "errors": errors})); return
+                if not overrides:
+                    self._respond(400, "application/json", '{"ok":false,"error":"no settings"}'); return
+                _, _, _kdir = _ctrl_paths(config)
+                try:
+                    save_overrides(overrides, path=str(_kdir / "config.toml"))
+                except Exception as exc:  # noqa: BLE001
+                    self._respond(500, "application/json",
+                                  json.dumps({"ok": False, "error": str(exc)})); return
+                # Apply by restarting eidos on the new config (boots PAUSED → click GO), unless the
+                # caller just wants to save. The dashboard re-reads config per request, so the menu
+                # reflects the change immediately regardless.
+                applied = bool(body.get("apply", True))
+                result = _ctrl_start(config) if applied else {"ok": True}
+                self._respond(200, "application/json", json.dumps({
+                    "ok": True, "saved": overrides, "applied": applied,
+                    "message": ("saved — restarting to apply (click GO)" if applied
+                                else "saved — restart eidos to apply"),
+                    "control": result}))
+            elif self.path == "/api/llm/test":
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                url = config.llm_url
+                if 0 < length <= 2000:
+                    try:
+                        url = (json.loads(self.rfile.read(length)).get("url") or url).strip() or url
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                self._respond(200, "application/json", json.dumps(_probe_llm(url)))
             elif self.path == "/api/chat_hold":
                 # Listening hold — focusing the chat box quiets the loop. Best-effort,
                 # never 500s; token-gated if a token is configured.
@@ -1258,6 +1322,54 @@ def _ctrl_paths(config):
     return ws / "eidos.pid", ws / "paused", Path(__file__).resolve().parent
 
 
+def _llm_base(url: str) -> str:
+    """Normalize an LLM base URL to its root (strip a trailing /v1 or /v1/chat/completions) so we can
+    try both `/models` and `/v1/models` regardless of what the user pasted."""
+    u = (url or "").rstrip("/")
+    for suf in ("/v1/chat/completions", "/chat/completions", "/v1"):
+        if u.endswith(suf):
+            u = u[: -len(suf)]
+            break
+    return u.rstrip("/")
+
+
+def _fetch_models(url: str) -> dict:
+    """List models from an OpenAI-compatible server (best-effort) to power the Settings model picker.
+    Tries {base}/v1/models then {base}/models. Returns {ok, models:[ids], error}."""
+    import json as _json
+    import urllib.request
+    base = _llm_base(url)
+    last = ""
+    for ep in (base + "/v1/models", base + "/models"):
+        try:
+            with urllib.request.urlopen(ep, timeout=4) as r:
+                doc = _json.loads(r.read().decode("utf-8", "replace"))
+            rows = doc.get("data", doc) if isinstance(doc, dict) else doc
+            ids = [m.get("id") or m.get("name") for m in rows if isinstance(m, dict)]
+            ids = [i for i in ids if i]
+            if ids:
+                return {"ok": True, "models": sorted(set(ids)), "endpoint": ep}
+        except Exception as e:  # noqa: BLE001
+            last = f"{type(e).__name__}: {e}"
+    return {"ok": False, "models": [], "error": last or "no models endpoint responded"}
+
+
+def _probe_llm(url: str) -> dict:
+    """Quick reachability + latency probe of an LLM endpoint for the Settings 'Test connection' button."""
+    import time as _t
+    import urllib.request
+    base = _llm_base(url)
+    t0 = _t.monotonic()
+    for ep in (base + "/v1/models", base + "/models"):
+        try:
+            with urllib.request.urlopen(ep, timeout=4) as r:
+                r.read(1)
+            return {"ok": True, "latency_ms": int((_t.monotonic() - t0) * 1000), "endpoint": ep}
+        except Exception as e:  # noqa: BLE001
+            last = f"{type(e).__name__}: {e}"
+    return {"ok": False, "error": last, "hint": "is the LLM server running at that URL?"}
+
+
 _pid_cache = {}  # pid -> (checked_at, alive); tasklist is slow, cache briefly
 
 
@@ -1307,6 +1419,38 @@ def _eidos_restart_breadcrumb(config):
 _HTTP_SERVER = None
 
 
+def _under_supervisor():
+    """True when an external supervisor (nssm on Windows, systemd on Linux) will relaunch this process
+    on exit — the only case where START should restart-by-exiting. The service definitions export
+    EIDOS_SUPERVISED=1. Default FALSE so a bare `python dashboard.py` (a friend's desktop) restarts the
+    eidos child IN PLACE instead of exiting the dashboard with nothing to bring it back."""
+    return os.environ.get("EIDOS_SUPERVISED") == "1"
+
+
+def _kill_tree_posix(pid):
+    """POSIX counterpart of taskkill /T: SIGTERM the whole process group, give it a moment, then SIGKILL.
+    eidos and its tool subprocesses are spawned with start_new_session=True, so they share a group."""
+    import os as _os
+    import signal as _signal
+    import time as _time
+    if not pid:
+        return
+    try:
+        pgid = _os.getpgid(int(pid))
+    except (ProcessLookupError, PermissionError, ValueError):
+        pgid = None
+    for sig in (_signal.SIGTERM, _signal.SIGKILL):
+        try:
+            if pgid is not None:
+                _os.killpg(pgid, sig)
+            else:
+                _os.kill(int(pid), sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        if sig is _signal.SIGTERM:
+            _time.sleep(0.5)
+
+
 def _schedule_dashboard_exit(delay_s=0.8):
     """Exit this process shortly so nssm re-launches the dashboard from disk (fresh supervisor code).
     Runs in a daemon timer so the triggering HTTP response flushes first. nssm restarts the app on exit
@@ -1348,10 +1492,16 @@ def _spawn_eidos(config):
     logf = open(config.workspace / "eidos_console.log", "ab")
     try:
         env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        spawn_kwargs = {}
+        if os.name == "nt":
+            spawn_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            # POSIX: own session/process group so _kill_tree_posix can reap eidos AND its tool
+            # subprocesses (bash jobs, probes) as a group, mirroring Windows taskkill /T.
+            spawn_kwargs["start_new_session"] = True
         proc = subprocess.Popen(
             [sys.executable, str(kdir / "eidos.py"), "--config", str(kdir / "config.toml")],
-            cwd=str(kdir), stdout=logf, stderr=subprocess.STDOUT, env=env, creationflags=flags,
+            cwd=str(kdir), stdout=logf, stderr=subprocess.STDOUT, env=env, **spawn_kwargs,
         )
     finally:
         # The child inherits its own handle at CreateProcess; closing the parent's copy
@@ -1431,19 +1581,23 @@ def _ctrl_start(config):
         (config.state_dir / "rollback_attempted").unlink()  # fresh operator start re-arms auto-recovery
     except OSError:
         pass
-    if os.name == "nt":
-        # Restart the whole service: drop a breadcrumb (boot force-respawns fresh eidos + quiets the
-        # outgoing watchdog), then exit so nssm relaunches the dashboard on current code.
+    if _under_supervisor():
+        # Under a supervisor (nssm/systemd): restart the whole service — drop a breadcrumb (boot
+        # force-respawns fresh eidos + quiets the outgoing watchdog), then exit so the supervisor
+        # relaunches the dashboard on current code. (Works on Windows AND Linux under systemd.)
         _eidos_restart_breadcrumb(config).write_text(str(time.time()))
         _schedule_dashboard_exit()
         return {"ok": True, "restarting": True,
                 "message": f"restarting service to load current code — reconnecting, then click GO{llama_note}",
                 **_ctrl_status(config)}
-    # Fallback (no service supervisor): (re)start the eidos child in place on fresh code.
+    # Standalone (`python dashboard.py`, any OS): (re)start the eidos child in place on fresh code.
     st = _ctrl_status(config)
     if st["running"]:
         try:
-            subprocess.run(["kill", "-9", str(st["pid"])], capture_output=True, timeout=15)
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(st["pid"]), "/T", "/F"], capture_output=True, timeout=15)
+            else:
+                _kill_tree_posix(st["pid"])
         except Exception:  # noqa: BLE001
             pass
     pid = _spawn_eidos(config)
@@ -1507,7 +1661,7 @@ def _ctrl_stop(config):
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
                        capture_output=True, text=True, timeout=15)
     else:
-        subprocess.run(["kill", "-9", str(pid)], capture_output=True, timeout=15)
+        _kill_tree_posix(pid)
     try:
         pidfile.unlink()
     except OSError:
@@ -1556,7 +1710,7 @@ def _restart_eidos_keep_armed(config, reason="restart"):
         if os.name == "nt":
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15)
         else:
-            subprocess.run(["kill", "-9", str(pid)], capture_output=True, timeout=15)
+            _kill_tree_posix(pid)
     try:
         pidfile.unlink()
     except OSError:
@@ -1776,7 +1930,7 @@ def _watchdog_loop(config):
                             if os.name == "nt":
                                 subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15)
                             else:
-                                subprocess.run(["kill", "-9", str(pid)], capture_output=True, timeout=15)
+                                _kill_tree_posix(pid)
                             new_pid = _spawn_eidos(config)
                             _child_died.clear(); _pid_cache.clear()
                             _watchdog_event(config, f"stale-restart respawned pid {new_pid}")
@@ -2050,7 +2204,7 @@ def main():
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/PID", str(_live), "/T", "/F"], capture_output=True, timeout=15)
                 else:
-                    subprocess.run(["kill", "-9", str(_live)], capture_output=True, timeout=15)
+                    _kill_tree_posix(_live)
                 _alive = False
             if not _alive:
                 _bp = _spawn_eidos(config)

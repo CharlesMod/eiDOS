@@ -65,10 +65,18 @@ def speech_unsubscribe(q) -> None:
 #     /api/speech/stream which generates via Chatterbox's streaming TTS and applies the GLaDOS FX
 #     through a live ffmpeg pipe, streaming audio as it's synthesized (low time-to-first-audio,
 #     GLaDOS character preserved). No 50s blocking generate, so `speak` can never time out. ---
-_GLADOS_FFMPEG = os.environ.get(
-    "GLADOS_FFMPEG",
-    r"C:\Users\cmod\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0.1-full_build\bin\ffmpeg.exe")
-if not os.path.isfile(_GLADOS_FFMPEG):
+# ffmpeg resolution, portable: explicit env override → ffmpeg on PATH (the normal case on
+# mac/Linux/Pi after `brew install ffmpeg` / `apt install ffmpeg`) → the known WinGet location on
+# Windows → bare "ffmpeg" (resolved on PATH at runtime). Voice is an optional feature; if ffmpeg is
+# absent the stream just can't start (surfaced in the UI) — it never breaks the core mind.
+import shutil as _shutil
+_GLADOS_FFMPEG = os.environ.get("GLADOS_FFMPEG") or _shutil.which("ffmpeg")
+if not _GLADOS_FFMPEG and os.name == "nt":
+    _winget = (r"C:\Users\%s\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget."
+               r"Source_8wekyb3d8bbwe\ffmpeg-8.0.1-full_build\bin\ffmpeg.exe" % os.environ.get("USERNAME", ""))
+    if os.path.isfile(_winget):
+        _GLADOS_FFMPEG = _winget
+if not _GLADOS_FFMPEG:
     _GLADOS_FFMPEG = "ffmpeg"
 # Chain B "buzzy robot" — same FX as glados_proxy.py (keep in sync). The trailing afade kills the
 # onset "bzzrrt": the aecho/chorus delay lines fill from silence and burst at sample 0, so a 70ms

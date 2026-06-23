@@ -82,17 +82,20 @@ def _under(child: str, parent: str) -> bool:
 
 
 # Known install location — under the nssm services (LocalSystem) shutil.which("pi")
-# fails (no user PATH), so fall back to the absolute launcher.
-_PI_FALLBACK = r"C:\Users\cmod\AppData\Local\pi-node\current\pi.cmd"
+# fails (no user PATH), so fall back to the absolute launcher (Windows-only; empty elsewhere so a
+# non-Windows machine without `pi` on PATH simply has delegate disabled).
+_PI_FALLBACK = (str(Path.home() / "AppData" / "Local" / "pi-node" / "current" / "pi.cmd")
+                if os.name == "nt" else "")
 
-# eidos runs as LocalSystem (child of the EidosDashboard service, which — unlike the IDE
-# service — does NOT export PI_CODING_AGENT_DIR). Without this, a delegated pi can't find
-# cmod's `house` provider extension OR the @tintinweb/pi-subagents Agent tool, so it fails
-# to reach the model / can't fan out subagents. Point pi at cmod's config + home explicitly.
-_PI_ENV = {
-    "PI_CODING_AGENT_DIR": r"C:\Users\cmod\.pi\agent",
-    "USERPROFILE": r"C:\Users\cmod", "HOMEDRIVE": "C:", "HOMEPATH": r"\Users\cmod",
-}
+# eidos may run as a service (LocalSystem on Windows) whose env doesn't export PI_CODING_AGENT_DIR.
+# Without it, a delegated pi can't find the user's `house` provider extension / pi-subagents tool.
+# Point pi at the user's config + home explicitly — derived from Path.home() so it's correct on any
+# machine; the Windows-only USERPROFILE/HOMEDRIVE/HOMEPATH keys are added just on Windows.
+_PI_ENV = {"PI_CODING_AGENT_DIR": str(Path.home() / ".pi" / "agent")}
+if os.name == "nt":
+    _home = Path.home()
+    _PI_ENV.update({"USERPROFILE": str(_home), "HOMEDRIVE": _home.drive,
+                    "HOMEPATH": str(_home)[len(_home.drive):]})
 
 
 def _resolve_pi(config: Config) -> str:

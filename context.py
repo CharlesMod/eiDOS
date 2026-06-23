@@ -228,9 +228,16 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
         loop_detected = False
     # Park pressure at the decision point: `tension` is now the ACTIVE objective's frustration (0..FRUST_PARK).
     # Near the cap, warn that the gate is about to rotate — pivot or park it yourself NOW.
-    elif tension >= 6:
-        boss_prefix = (f"⚠ This focus is almost out of patience ({tension}/8): make REAL progress THIS tick "
-                       f"or park it (objective_block) and move on — the gate will rotate you otherwise.\n\n")
+    else:
+        try:
+            import objectives as _o
+            _cap = _o.FRUST_PARK
+        except Exception:  # noqa: BLE001
+            _cap = 8
+        if tension >= _cap - 2:
+            boss_prefix = (f"⚠ This focus is almost out of patience ({tension}/~{_cap}): make REAL progress "
+                           f"THIS tick or park it (objective_block) and move on — the gate will rotate you "
+                           f"otherwise.\n\n")
 
     urgency_note = ""
     if max_ticks > 0:
@@ -507,6 +514,19 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
                 lines.append(_hint)
     except Exception:  # noqa: BLE001
         pass
+    # Temperament (DMN): a single disposition WORD — the slow personality this creature has grown into
+    # from its own success/failure/override history. A label like Condition (never the raw axes), so the
+    # voice can reflect who it's become without the model reading personality "knobs" (BIBLE §2.12). The
+    # behavioural teeth live in the gate's park threshold + the goal-tension itch, not in this line.
+    if getattr(config, "nervous_temperament_enabled", True):
+        try:
+            from nervous.temperament import Temperament
+            _disp = Temperament(config=config).disposition()
+            if _disp:
+                lines.append(f"Temperament: {_disp} — who you've grown into; let it color how you act, "
+                             "not what you decide.")
+        except Exception:  # noqa: BLE001
+            pass
     # (The single objective is rendered as its own high-salience "## Current focus" block, not here —
     # avoids the old drifted "working on: build a chat listener" line competing with the real goal.)
     # In-flight async dispatches — so the model remembers what it's waiting on and
@@ -697,6 +717,121 @@ def _read_learned_lessons(config, k=6):
     return _read_learned_file(config, "learned_lessons.json", k=k)
 
 
+# --- KV-stable head (BIBLE §2.11 delta prompting) ---------------------------------------------------
+# The stable prefix is re-rendered only when a source file changes; otherwise the last render is reused
+# verbatim (byte-identical → llama.cpp prefix-KV reuse intact). A TTL forces an occasional rebuild so any
+# input the signature happens not to stat self-heals within a bounded number of ticks. Process-local.
+_STABLE_HEAD_CACHE = {"sig": None, "blocks": None, "tick": -(10 ** 9)}
+_STABLE_HEAD_TTL = 50
+
+
+def _stable_head_blocks(config: Config, creature: bool) -> list:
+    """Render the byte-stable KV head: identity (creature) / self-guide / skills / learned / mission.
+    Pure render from the current files — the cached path reuses its output when nothing changed."""
+    head = []
+    # Who you are right now (creature mode): life stage + age + grown-in tendencies, so the voice can
+    # mature with the body instead of staying fixed-cute. Changes only on level-up/metamorphosis/new trait.
+    if creature:
+        _ident = _creature_identity_block(config)
+        if _ident:
+            head.append(_ident)
+
+    if getattr(config, "self_guide_enabled", True) and not creature:
+        guide = read_self_guide(config)
+        if guide:
+            head.append(
+                "## Your self-guide — standing directives from Boss (follow these). "
+                "Boss owns this file; you may PROPOSE changes with update_self_guide.\n"
+                + _truncate(guide, config.context_self_guide_max_chars, "self_guide"))
+
+    # Your skills — so you CALL them instead of re-authoring near-duplicates (was the #1 waste:
+    # 56 skills authored, 0 ever reused, because they were invisible each tick).
+    try:
+        from skills import skills_brief
+        sb = skills_brief(config)
+        if sb:
+            head.append("## Your skills — CALL these by name as tools (e.g. <tool>check_mqtt_port</tool>). "
+                        "Do NOT author a new skill that duplicates one of these; reuse it, or edit_skill "
+                        "to improve it.\n" + sb)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ## Learned — the reward learner's distilled lessons (self-improvement over time). Changes only on
+    # sleep consolidation (~minutes). Shown in BOTH modes: a creature learns from its own experience too.
+    # This is the weight-free policy update — lessons re-enter context and bias the next action.
+    try:
+        _habits = _read_learned_file(config, "learned_habits.json", k=5)
+        if _habits:
+            head.append("## Habits — your reliable routines, learned by doing (reach for these without "
+                        "overthinking):\n" + "\n".join("- " + _h for _h in _habits))
+        _lessons = _read_learned_lessons(config)
+        if _lessons:
+            head.append("## Learned — what your own experience has taught you (let it guide you):\n"
+                        + "\n".join("- " + _l for _l in _lessons))
+    except Exception:  # noqa: BLE001
+        pass
+
+    if not creature:                       # a creature has no mission; the prompt covers its being
+        goal = read_goal(config)
+        if goal:
+            head.append(f"## Mission\n{_truncate(goal, config.context_goal_max_chars, 'goal')}")
+        else:
+            head.append("## Mission\n(No goal set.)")
+    return head
+
+
+def _stable_head_signature(config: Config, creature: bool) -> str:
+    """A cheap signature of every input the stable head renders from. Any change → re-render. An input
+    we can't stat fails closed to (0, 0), and the TTL forces a periodic rebuild, so a missed input can't
+    pin a stale head indefinitely."""
+    import os as _os
+    parts = [("creature", bool(creature)),
+             ("self_guide_on", bool(getattr(config, "self_guide_enabled", True))),
+             ("limits", int(getattr(config, "context_self_guide_max_chars", 0) or 0),
+              int(getattr(config, "context_goal_max_chars", 0) or 0))]
+    paths = []
+    for attr in ("self_guide_path", "goal_path"):
+        try:
+            paths.append(getattr(config, attr))
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        paths.append(config.state_dir / "learned_habits.json")
+        paths.append(config.state_dir / "learned_lessons.json")
+        paths.append(config.workspace / "persona.json")
+        paths.append(config.workspace / "creature.json")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import skills as _sk
+        paths.append(_sk._skills_dir(config))      # dir mtime: changes when a skill is added/removed
+        paths.append(_sk._manifest_path(config))   # manifest: rewritten on add/edit
+    except Exception:  # noqa: BLE001
+        pass
+    for p in paths:
+        try:
+            st = _os.stat(p)
+            parts.append((str(p), int(st.st_mtime_ns), int(st.st_size)))
+        except OSError:
+            parts.append((str(p), 0, 0))
+    return repr(parts)
+
+
+def _cached_stable_head(config: Config, creature: bool, tick_number: int) -> list:
+    """Return the stable head, re-rendering only when its signature changed or the TTL expired."""
+    if not getattr(config, "context_stable_head_cache", True):
+        return _stable_head_blocks(config, creature)
+    sig = _stable_head_signature(config, creature)
+    c = _STABLE_HEAD_CACHE
+    fresh = (c["blocks"] is not None and c["sig"] == sig
+             and 0 <= (tick_number - c["tick"]) < _STABLE_HEAD_TTL)
+    if fresh:
+        return list(c["blocks"])
+    blocks = _stable_head_blocks(config, creature)
+    c["sig"], c["blocks"], c["tick"] = sig, list(blocks), tick_number
+    return list(blocks)
+
+
 def _assemble_briefing(
     config: Config,
     tick_number: int,
@@ -730,56 +865,12 @@ def _assemble_briefing(
     durable = []
 
     # ===== STABLE HEAD (byte-identical across most ticks → the cached prefix extends through here) =====
-    # Who you are right now (creature mode): life stage + age + grown-in tendencies, so the voice can
-    # mature with the body instead of staying fixed-cute. Changes only on level-up/metamorphosis/new
-    # trait, so it's KV-stable at the very front of the head.
-    if creature:
-        _ident = _creature_identity_block(config)
-        if _ident:
-            durable.append(_ident)
-
-    if getattr(config, "self_guide_enabled", True) and not creature:
-        guide = read_self_guide(config)
-        if guide:
-            durable.append(
-                "## Your self-guide — standing directives from Boss (follow these). "
-                "Boss owns this file; you may PROPOSE changes with update_self_guide.\n"
-                + _truncate(guide, config.context_self_guide_max_chars, "self_guide"))
-
-    # Your skills — so you CALL them instead of re-authoring near-duplicates (was the #1 waste:
-    # 56 skills authored, 0 ever reused, because they were invisible each tick).
-    try:
-        from skills import skills_brief
-        sb = skills_brief(config)
-        if sb:
-            durable.append("## Your skills — CALL these by name as tools (e.g. <tool>check_mqtt_port</tool>). "
-                           "Do NOT author a new skill that duplicates one of these; reuse it, or edit_skill "
-                           "to improve it.\n" + sb)
-    except Exception:  # noqa: BLE001
-        pass
-
-    # ## Learned — the reward learner's distilled lessons (self-improvement over time). Changes only on
-    # sleep consolidation (~minutes), so it sits in this semi-stable tier. Shown in BOTH modes: a creature
-    # learns from its own experience too. This is the weight-free policy update — lessons re-enter context
-    # and bias the next action.
-    try:
-        _habits = _read_learned_file(config, "learned_habits.json", k=5)
-        if _habits:
-            durable.append("## Habits — your reliable routines, learned by doing (reach for these without "
-                           "overthinking):\n" + "\n".join("- " + _h for _h in _habits))
-        _lessons = _read_learned_lessons(config)
-        if _lessons:
-            durable.append("## Learned — what your own experience has taught you (let it guide you):\n"
-                           + "\n".join("- " + _l for _l in _lessons))
-    except Exception:  # noqa: BLE001
-        pass
-
-    if not creature:                       # a creature has no mission; the prompt covers its being
-        goal = read_goal(config)
-        if goal:
-            durable.append(f"## Mission\n{_truncate(goal, config.context_goal_max_chars, 'goal')}")
-        else:
-            durable.append("## Mission\n(No goal set.)")
+    # Identity / self-guide / skills / learned lessons / mission. These change only on a Dean edit, a new
+    # skill, a sleep consolidation, or a level-up — so the rendered head is MEMOIZED (delta prompting,
+    # BIBLE §2.11): it is re-read + re-truncated only when one of those source files actually changes.
+    # The bytes are identical to the inline render, so llama.cpp's prefix-KV reuse is unaffected; what we
+    # save is the per-tick disk-read + truncate + skills_brief work on the unchanging prefix.
+    durable.extend(_cached_stable_head(config, creature, tick_number))
 
     # ===== SEMI tier (changes every few ticks) =====
     plan = "" if creature else read_plan(config)

@@ -71,6 +71,7 @@ class TestTools(unittest.TestCase):
         result = tool_bash({}, self.config)
         self.assertFalse(result.success)
 
+    @unittest.skipUnless(os.name == "nt", "uses a PowerShell command (Start-Sleep)")
     def test_bash_wait_overrun_auto_backgrounds(self):
         """A wait:true command that overruns cmd_timeout_s is handed to the jobs
         ledger (still running, output preserved) instead of being killed — the
@@ -89,6 +90,7 @@ class TestTools(unittest.TestCase):
         self.assertIsNotNone(result.full_output_path)
         self.assertTrue(Path(result.full_output_path).exists())
 
+    @unittest.skipUnless(os.name == "nt", "uses a cmd.exe command (cmd /c)")
     def test_bash_stderr_captured(self):
         """stderr is merged into the command's output stream (no separate tag)."""
         result = tool_bash({"cmd": 'cmd /c "echo err 1>&2"', "wait": True}, self.config)
@@ -155,7 +157,12 @@ class TestTools(unittest.TestCase):
     def test_read_file_symlink_traversal_blocked(self):
         """Symlink pointing outside workspace should be blocked."""
         link = Path(self.config.workspace_dir) / "sneaky_link"
-        link.symlink_to("/etc/hosts")
+        try:
+            link.symlink_to("/etc/hosts")
+        except (OSError, NotImplementedError) as e:
+            # Creating a symlink needs privilege on non-admin Windows (WinError 1314) — skip there;
+            # the guard itself is exercised on Linux/macOS and admin Windows.
+            self.skipTest(f"cannot create symlink in this environment: {e}")
         result = tool_read_file({"path": str(link)}, self.config)
         self.assertFalse(result.success)
         self.assertIn("escapes workspace", result.output)
@@ -480,6 +487,7 @@ class TestCreatureWorldFirewall(unittest.TestCase):
         self.assertIn("outside your world", r.output)
 
 
+@unittest.skipUnless(os.name == "nt", "PowerShell flag-translation is gated to Windows (no-op on POSIX)")
 class TestListingFlagNormalizer(unittest.TestCase):
     """Live run (fresh creature, 2026-06-20): it bonked on Unix/cmd listing flags PowerShell rejects
     (`ls -F`, `dir /s`). The lint now translates them so it stops relearning shell trivia."""
@@ -550,6 +558,7 @@ class TestWslShellAndEncoding(unittest.TestCase):
         self.assertIn("--cd", arg)
         self.assertEqual(arg[-3:], ["bash", "-lc", "ls -F"])
 
+    @unittest.skipUnless(os.name == "nt", "WSL /mnt/c semantics are Windows-only")
     def test_firewall_blocks_wsl_source_escape(self):
         from tools import _creature_world_firewall as fw
         ws_wsl = "/mnt/c" + self.tmp.replace("\\", "/").split(":", 1)[1] + "/workspace"

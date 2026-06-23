@@ -61,6 +61,42 @@ class TestGateStrainTeeth(unittest.TestCase):
         self.assertEqual(self._frust() - before, objectives.FRUST_FAIL)
 
 
+class TestTemperamentParkThreshold(unittest.TestCase):
+    """DMN temperament feeds the gate a persistence-scaled park threshold: a dogged creature grinds
+    longer before the gate rotates it; a deferential one lets go sooner. None => the default FRUST_PARK."""
+
+    def _ticks_to_park(self, park_threshold):
+        cfg = Config()
+        cfg.workspace_dir = tempfile.mkdtemp()
+        objectives.ensure_seeded(cfg, 1)
+        start_id = objectives.get_active(cfg)["id"]
+        for t in range(2, 200):
+            objectives.record_tick(cfg, made_progress=False, tool_failed=True,
+                                   tick_number=t, park_threshold=park_threshold)
+            act = objectives.get_active(cfg)
+            if act is None or act["id"] != start_id:
+                return t
+        return 200
+
+    def test_higher_threshold_grinds_longer(self):
+        self.assertLess(self._ticks_to_park(6), self._ticks_to_park(11))
+
+    def test_none_uses_default(self):
+        self.assertEqual(self._ticks_to_park(None), self._ticks_to_park(objectives.FRUST_PARK))
+
+    def test_parked_flag_set_on_forced_park(self):
+        cfg = Config()
+        cfg.workspace_dir = tempfile.mkdtemp()
+        objectives.ensure_seeded(cfg, 1)
+        ev = {}
+        for t in range(2, 200):
+            ev = objectives.record_tick(cfg, made_progress=False, tool_failed=True,
+                                        tick_number=t, park_threshold=6)
+            if ev.get("parked"):
+                break
+        self.assertTrue(ev.get("parked"))      # the override signal the temperament learns from
+
+
 class TestCreatureModeNoHouseAgenda(unittest.TestCase):
     """A creature is born with NO preset agenda. The hardcoded _SEED is the house-AI's six-point
     mission; planting it makes a fresh creature fixate on cameras/GLaDOS/LAN no matter how clean its

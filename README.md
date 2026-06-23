@@ -25,6 +25,58 @@ self-improvement model is [`SELF_IMPROVEMENT_PLAN.md`](SELF_IMPROVEMENT_PLAN.md)
 > (a Jetson, this PC, a datacenter) as its body — a Digimon, a Jarvis, a David Kim. An intelligence,
 > in silica. The mind was given a body and told to figure it out; v3 gives it the nerves to feel it.
 
+## Quick start
+
+Runs on **macOS, Linux, Windows, and Raspberry Pi**. One step, from a clone:
+
+**macOS / Linux / Raspberry Pi**
+```bash
+git clone https://github.com/CharlesMod/eiDOS.git && cd eiDOS && bash install.sh
+```
+
+**Windows (PowerShell)**
+```powershell
+git clone https://github.com/CharlesMod/eiDOS.git; cd eiDOS; ./install.ps1
+```
+
+The installer creates a virtualenv, installs dependencies, writes a machine-local `config.local.toml`
+with safe defaults, and opens the dashboard at **http://localhost:8099**. Then open **Settings ⚙** and
+point it at your model.
+
+Useful flags: `--with-embeddings` (semantic memory), `--llm-url <url>`, `--model <name>`, `--no-launch`
+(on Windows: `-WithEmbeddings -LlmUrl <url> -Model <name> -NoLaunch`).
+
+### Prerequisites: bring your own LLM
+
+eiDOS is the *mind's runtime* — you supply the brain: any **OpenAI-compatible** local server. Pick one:
+
+| Server | Start it | Set in eiDOS (Settings ⚙) |
+|---|---|---|
+| **Ollama** (easiest, all OSes) | `ollama serve` then `ollama pull llama3.1:8b` | url `http://127.0.0.1:11434/v1`, model `llama3.1:8b` |
+| **LM Studio** | load a model → Local Server → Start | url `http://127.0.0.1:1234/v1`, model = the loaded id |
+| **llama.cpp** | `llama-server -m model.gguf` | url `http://127.0.0.1:8080`, model `local` |
+
+Also handy: **ffmpeg** (only for the GLaDOS voice) and Python **3.9+** (3.11+ preferred). The embedding
+model for semantic memory is fetched on demand (`--with-embeddings` / `python setup_embedding.py`).
+
+### Set your model
+
+Click **Settings ⚙** in the dashboard → **Model & inference** → enter your **Endpoint URL** and
+**Model** (use **List models** to pull the server's model list, **Test connection** to verify), then
+**Apply & restart**. Everything saves to `config.local.toml` (gitignored, machine-local); the committed
+`config.toml` is never rewritten. The same menu exposes behavior, tempo, memory, optional features, and
+access settings — no hand-editing required.
+
+### Platform notes
+
+- **Tool execution is native per OS** — PowerShell on Windows, `bash` on macOS/Linux/Pi (shown in the
+  Settings header). A bare `python dashboard.py` self-supervises the tick loop; no service manager needed.
+- **Optional, off by default:** the GLaDOS voice (needs a Chatterbox TTS server + ffmpeg), Renogy
+  BLE solar/battery sensing (specific hardware), and the `delegate`/IDE features (need the `pi` CLI).
+  Enable any of them in Settings once their prerequisites are in place.
+- **Run at boot** (optional): the `deploy/*.service` (systemd) and `scripts/install_*.ps1` (nssm) files
+  turn it into a managed service.
+
 ## The stack
 
 | Piece | Where | Role |
@@ -105,21 +157,24 @@ committed, and watchdog-guarded (an accident-safety model, not adversary-proof).
 
 ## Run / restart discipline
 
-- The dashboard is the `EidosDashboard` nssm service; the voice is `EidosVoice`. Ship code with
-  `Restart-Service EidosDashboard` (it re-execs the supervisor from disk) — **never `taskkill /T` it.**
-  The dashboard's **Start** button now restarts the whole service for you and brings eidos back
-  **paused**, so a one-click go-live needs no shell.
-- Restart eidos alone: `taskkill /PID <eidos-pid> /F`; the watchdog respawns it on fresh code. Operator
-  start and apply/restore restarts boot **PAUSED** (kill-switch design); a plain crash-respawn resumes
-  running (continuity). Resume: dashboard **GO** or `POST :8099/api/control/resume`.
-- Always run Python with `PYTHONUTF8=1`.
-- One GPU, 16 GB: house-ai (~15.7 GB) must be resident; pause eiDOS and stop the service before evals.
+- **Standalone (the default for a fresh install, any OS):** `python dashboard.py` IS the supervisor — it
+  spawns, watchdogs, and (on **Start**) restarts the eidos tick loop in place. Nothing else needed.
+- **Under a service manager (optional boot setup):** the supervisor is told to restart-by-exiting via the
+  env var **`EIDOS_SUPERVISED=1`** (set in `deploy/*.service` and the nssm setup). With it, **Start**
+  reloads the whole supervisor from disk; without it, Start restarts eidos in place. *Existing nssm
+  installs: add `EIDOS_SUPERVISED=1` to the dashboard service env to keep the restart-on-Start behavior.*
+- Operator **Start** and apply/restore restarts boot **PAUSED** (kill-switch design); a plain
+  crash-respawn resumes running (continuity). Resume: dashboard **GO** or `POST :8099/api/control/resume`.
+- On Windows, run Python with `PYTHONUTF8=1` (the installer/services set it).
+- Single small GPU: the model must stay resident; pause eiDOS before GPU-heavy evals.
 
 ## Tests
 
 ```
-PYTHONUTF8=1 .venv\Scripts\python.exe -m pytest -q          # fast gate
-PYTHONUTF8=1 .venv\Scripts\python.exe -m pytest -m "not slow" -q
+# macOS / Linux / Pi
+.venv/bin/python -m pytest -q -m "not slow and not live"
+# Windows
+.venv\Scripts\python.exe -m pytest -q -m "not slow and not live"
 ```
 
 `tests/` covers parser, tools, skills, context, compaction, memory, objectives, telemetry, rotation,

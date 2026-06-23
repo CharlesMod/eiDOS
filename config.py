@@ -14,6 +14,76 @@ else:
     except ImportError:
         import tomli as tomllib  # type: ignore[no-redef]
 
+# The repo root (this file's directory). All default paths anchor here so eiDOS runs from wherever it
+# was cloned, on any OS — never a hardcoded C:\Users\... that only exists on the original author's box.
+REPO_ROOT = Path(__file__).resolve().parent
+
+# The machine-local overlay the Settings UI / installer writes (gitignored). Loaded ON TOP of the
+# committed config.toml so the hand-commented base file is never rewritten by the dashboard.
+LOCAL_CONFIG_NAME = "config.local.toml"
+
+
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursively merge overlay into base (mutating base). Nested tables merge key-by-key; scalars and
+    lists in the overlay replace those in base. Used to layer config.local.toml over config.toml."""
+    for k, v in (overlay or {}).items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _deep_merge(base[k], v)
+        else:
+            base[k] = v
+    return base
+
+
+def _toml_scalar(v) -> str:
+    """Serialize one TOML scalar/list value (the subset the settings overlay needs: bool, int, float,
+    str, and lists of those)."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_toml_scalar(x) for x in v) + "]"
+    s = str(v).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{s}"'
+
+
+def _dump_toml(data: dict) -> str:
+    """Minimal TOML writer for the overlay: top-level scalars first, then [section] tables. Sufficient
+    for the settings the dashboard persists (no nested-table arrays, no datetimes)."""
+    top = {k: v for k, v in data.items() if not isinstance(v, dict)}
+    tables = {k: v for k, v in data.items() if isinstance(v, dict)}
+    lines = ["# eiDOS machine-local settings — written by the dashboard Settings menu.",
+             "# Overrides config.toml; safe to edit by hand or delete to reset to defaults.", ""]
+    for k, v in top.items():
+        lines.append(f"{k} = {_toml_scalar(v)}")
+    if top:
+        lines.append("")
+    for sect, kv in tables.items():
+        lines.append(f"[{sect}]")
+        for k, v in kv.items():
+            lines.append(f"{k} = {_toml_scalar(v)}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def save_overrides(changes: dict, path: str = "config.toml") -> Path:
+    """Merge `changes` (a {section: {key: value}} / top-level-key dict in config.toml's SHAPE) into the
+    machine-local overlay and write it atomically. Returns the overlay path. The dashboard calls this
+    from the Settings menu; nothing else writes config.local.toml."""
+    local_path = Path(path).with_name(LOCAL_CONFIG_NAME)
+    existing = {}
+    if local_path.exists():
+        try:
+            with open(local_path, "rb") as f:
+                existing = tomllib.load(f)
+        except Exception:  # noqa: BLE001
+            existing = {}
+    _deep_merge(existing, changes or {})
+    tmp = local_path.with_suffix(".toml.tmp")
+    tmp.write_text(_dump_toml(existing), encoding="utf-8")
+    os.replace(tmp, local_path)
+    return local_path
+
 
 @dataclasses.dataclass
 class Config:
@@ -99,6 +169,10 @@ class Config:
     context_env_max_chars: int = 800
     context_interventions_max_chars: int = 2000
     context_max_total_chars: int = 20000  # test/dev default; production uses config.toml (6500)
+    # BIBLE §2.11 delta prompting: memoize the byte-stable KV head (identity/self-guide/skills/learned/
+    # mission) so it is re-RENDERED only when one of its source files actually changes — the per-tick
+    # work becomes the deltas, not re-reading + re-truncating the whole prefix. Kill-switch (default on).
+    context_stable_head_cache: bool = True
     dream_combined: bool = True    # combined plan+extract in one LLM call (Phase 4)
 
     # Compaction context budgets (chars) — generous for distillation
@@ -208,6 +282,12 @@ class Config:
     nervous_learning_sleep_interval_s: float = 10.0  # how often the sleep cycle checks whether to dream
     nervous_learning_sleep_arousal: float = 0.32     # consolidate (dream) when arousal is at/below this (calm)
     nervous_learning_consolidate_interval_s: float = 120.0  # but dream at most this often (throttle)
+    # Ventral Striatum: incompletion/regret pressure → a bounded arousal floor (initiative when idle —
+    # an unfinished objective keeps the creature awake/acting instead of drowsing). Relieved by progress.
+    nervous_goaltension_enabled: bool = True
+    # DMN: the slow personality drift (initiative/persistence/caution), learned from this creature's own
+    # success/failure/override history; feeds the gate's park threshold + the goal-tension itch.
+    nervous_temperament_enabled: bool = True
     # M0: metabolism — the energy economy. Thinking drains the reserve; hunger is felt; when arousal
     # collapses to torpor the creature rests + recovers (hibernation, not death). The stakes that make
     # inaction costly so the creature acts like an organism instead of ruminating.
@@ -346,10 +426,21 @@ def load_config(path: str = "config.toml") -> Config:
 
     # Load TOML if it exists
     config_path = Path(path)
+    data = {}
     if config_path.exists():
         with open(config_path, "rb") as f:
             data = tomllib.load(f)
-
+    # Settings-UI / installer overlay: config.local.toml (gitignored) overrides the committed,
+    # hand-commented config.toml — so the dashboard's Settings menu never rewrites the base file, and
+    # a fresh install can ship ONLY this overlay (no base config.toml needed).
+    local_path = config_path.with_name(LOCAL_CONFIG_NAME)
+    if local_path.exists():
+        try:
+            with open(local_path, "rb") as f:
+                _deep_merge(data, tomllib.load(f))
+        except Exception:  # noqa: BLE001 - a corrupt overlay must never block boot
+            pass
+    if data:
         config.creature_mode = data.get("creature_mode", config.creature_mode)
         config.creature_shell = data.get("creature_shell", config.creature_shell)
         config.creature_wsl_distro = data.get("creature_wsl_distro", config.creature_wsl_distro)
@@ -415,6 +506,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.snapshot_max_count = rot.get("snapshot_max_count", config.snapshot_max_count)
 
         ctx = data.get("context", {})
+        config.context_stable_head_cache = ctx.get("stable_head_cache", config.context_stable_head_cache)
         config.context_obs_max_chars = ctx.get("obs_max_chars", config.context_obs_max_chars)
         config.context_obs_max_count = ctx.get("obs_max_count", config.context_obs_max_count)
         config.context_goal_max_chars = ctx.get("goal_max_chars", config.context_goal_max_chars)
@@ -521,6 +613,8 @@ def load_config(path: str = "config.toml") -> Config:
         config.nervous_learning_sleep_interval_s = float(nervous.get("learning_sleep_interval_s", config.nervous_learning_sleep_interval_s))
         config.nervous_learning_sleep_arousal = float(nervous.get("learning_sleep_arousal", config.nervous_learning_sleep_arousal))
         config.nervous_learning_consolidate_interval_s = float(nervous.get("learning_consolidate_interval_s", config.nervous_learning_consolidate_interval_s))
+        config.nervous_goaltension_enabled = nervous.get("goaltension_enabled", config.nervous_goaltension_enabled)
+        config.nervous_temperament_enabled = nervous.get("temperament_enabled", config.nervous_temperament_enabled)
         config.nervous_metabolism_enabled = nervous.get("metabolism_enabled", config.nervous_metabolism_enabled)
         config.nervous_metabolism_rest_arousal = float(nervous.get("metabolism_rest_arousal", config.nervous_metabolism_rest_arousal))
         config.nervous_metabolism_archetype = str(nervous.get("metabolism_archetype", config.nervous_metabolism_archetype))
@@ -544,8 +638,19 @@ def load_config(path: str = "config.toml") -> Config:
     # Env var overrides (highest precedence)
     if url := os.environ.get("EIDOS_LLM_URL"):
         config.llm_url = url
+    if ws := os.environ.get("EIDOS_WORKSPACE"):
+        config.workspace_dir = ws
     if os.environ.get("EIDOS_MOCK") == "1":
         config.mock_mode = True
         config.tick_interval_s = 5
+
+    # Resolve the workspace to an ABSOLUTE path: expand `~`, and anchor a relative path at the repo root
+    # (not the process CWD) so `python dashboard.py` works from anywhere. Everything else (state_dir,
+    # knowledge_dir, battery_profile_path, …) derives from this, so this one resolution makes the whole
+    # tree portable.
+    _ws = Path(os.path.expanduser(str(config.workspace_dir)))
+    if not _ws.is_absolute():
+        _ws = REPO_ROOT / _ws
+    config.workspace_dir = str(_ws)
 
     return config

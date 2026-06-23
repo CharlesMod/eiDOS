@@ -1,0 +1,27 @@
+# eiDOS — starter settings. The installer copies this to config.local.toml (your machine-local overlay,
+# gitignored) on first run. It OVERRIDES the committed config.toml with safe, hardware-free defaults so
+# eiDOS runs anywhere. Point it at your own LLM below, then tune everything else in the dashboard's
+# Settings menu (⚙). Delete config.local.toml to fall back to the repo defaults.
+
+creature_mode = true            # an open-ended creature with no preset "house" mission
+creature_shell = "powershell"   # Windows only: "powershell" or "wsl". Ignored on macOS/Linux (native bash).
+
+[llm]
+# CHANGE THESE to your OpenAI-compatible server + a model it has. Examples:
+#   Ollama     url = "http://127.0.0.1:11434/v1"   model = "llama3.1:8b"
+#   LM Studio  url = "http://127.0.0.1:1234/v1"    model = "<the loaded model id>"
+#   llama.cpp  url = "http://127.0.0.1:8080"       model = "local"
+url = "http://127.0.0.1:11434/v1"
+model = "llama3.1:8b"
+
+[knowledge]
+embedding_enabled = false       # semantic memory; set true after `setup_embedding.py` (install --with-embeddings)
+
+[nervous]
+power_enabled = false           # Renogy BLE solar/battery sensing — specific hardware, off by default
+
+[delegate]
+enabled = false                 # hand long tasks to the `pi` coding-agent CLI (must be installed)
+
+[ide]
+enabled = false                 # browser IDE over pi

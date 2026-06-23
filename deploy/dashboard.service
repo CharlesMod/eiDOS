@@ -10,6 +10,10 @@ ExecStart=/usr/bin/python3 dashboard.py --config config.toml
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
+# Tell the dashboard a supervisor will relaunch it on exit, so the Start button restarts the whole
+# service (reloading supervisor code) instead of respawning eidos in place. systemd Restart=always above
+# provides that relaunch. (A bare `python dashboard.py` without this restarts eidos in place.)
+Environment=EIDOS_SUPERVISED=1
 
 [Install]
 WantedBy=multi-user.target

@@ -194,17 +194,46 @@ the context is broken, no matter how many rules it contains.
 
 ## 7. How eiDOS Embodies This Today (and what's deferred)
 
-**Live now:** LLM-as-planner over tools/skills · channel separation (`<tool>` / `<reply>`) ·
-world-model panel (state-as-artifact) · one Current focus · salience block for new messages/results ·
-auto-correcting (non-lying) validator · normalized loop/stall detection · self-authored skills ·
-episodic-ish observations + dream compaction · Windows/PowerShell as the native execution shell.
+> *Reconciled 2026-06-23 against the v3-nervous-system code. The four items this section once listed as
+> "deferred" are now built — three were already live when this was written, and the last two (the
+> Goal-Tension drive and Temperament) landed in this pass. What remains deferred is the **body** (§8).*
 
-**Deferred, on the roadmap (all from this doctrine):**
-- **Structural agency:** replace the last prompt-instruction pleas ("have an inner life when idle") with
-  a real **Goal-Tension** system and **strain (Insula)** that mechanically modulates retry budgets.
-- **KV-stable prefix + delta prompting** (efficiency + latency).
-- **State-triggered episodic recall** ("this is like last time"), beyond the recent-facts panel.
-- **Discrete condition/temperament labels** computed from recent success/failure, replacing XP-only mood.
+**Live now:**
+- **Planner + channels:** LLM-as-planner over tools/skills · hard channel separation (`<tool>` /
+  `<reply>`) · world-model panel (state-as-artifact) · auto-correcting (non-lying) validator ·
+  self-authored skills · Windows/PowerShell as the native execution shell.
+- **Action Gate (Basal Ganglia):** one Current focus drawn from an objective backlog; the gate
+  mechanically rotates focus when an objective stalls/parks/finishes — the model cannot veto it.
+- **Salience (Amygdala):** a "what's new since last tick" block elevated to the decision point.
+- **Conflict + strain (ACC / Insula):** normalized loop/stall detection · chronic-failure **strain**
+  that feeds the gate extra frustration (a repeated dead end parks *faster*) · rumination teeth
+  (a thought-dominated window burns patience too) · escalation hints that steer the forced pivot.
+- **Condition label (DMN):** one discrete label — STABLE / FOCUSED / STRAINED / RECOVERY / RUMINATING —
+  computed from the recent outcome window and surfaced each tick, replacing the decorative XP-only mood.
+- **State-triggered episodic recall (Hippocampus):** typed `(situation → action → outcome → fix)`
+  episodes, recalled *involuntarily* each tick by situation similarity (active objective + next step,
+  with optional MiniLM semantic match) and injected **before** acting — failures to avoid, successes to
+  reuse. Plus dream compaction.
+- **Goal-Tension drive (Ventral Striatum):** incompletion/regret pressure that, past a threshold, raises
+  a *bounded arousal floor* — keeping the creature awake-and-acting while an objective is unfinished
+  (the structural form of "initiative when idle"), discharged by real progress. The plea is gone; the
+  mechanism has teeth (arousal → sleep/cadence).
+- **Temperament (DMN):** a slow drift of initiative / persistence / caution, learned from the creature's
+  own success / failure / override (forced-park) history, persisted across restarts. It feeds
+  *mechanism* — the gate's park threshold and the goal-tension itch — and surfaces a single disposition
+  word, never raw knobs.
+- **KV-stable prefix + delta prompting:** `cache_prompt` reuse · a stable→volatile context order with
+  the volatile situation in its own message after the history thread · an *anchored* (non-sliding)
+  history window · a memoized stable-head render so the cached prefix is re-rendered only when a source
+  file actually changes.
+- **The V3 nervous system underneath all of it:** the afferent bus · interoception · neuromodulatory
+  arousal/affect · metabolism/energy (battery as food) · reward learning with dream consolidation ·
+  curiosity · real power (Renogy) sensing.
+
+**Deferred, on the roadmap:** the **path to a body** (§8) — the VLA mid-stack, reflex kernel, motor-
+program library, runtime-compiled ephemeral protocols, docking/charging as survival, and nightly
+"nightmare" training. Within the software mind, the prospection/simulation trigger (2–3 short rollouts
+on doubt) is still light and the most natural next deepening.
 
 ---
 

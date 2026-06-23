@@ -1,0 +1,5 @@
+# Keep POSIX scripts LF-only so they run on macOS/Linux/Pi even when committed from Windows
+# (a CRLF in a #!/usr/bin/env bash script breaks with `\r: command not found`).
+*.sh        text eol=lf
+*.service   text eol=lf
+install.sh  text eol=lf

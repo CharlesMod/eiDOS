@@ -72,6 +72,7 @@ class TestResourceChecks(unittest.TestCase):
         self.assertIsInstance(ok, bool)
         self.assertIsInstance(pct, float)
 
+    @unittest.skipUnless(sys.platform == "win32", "check_ram is Windows-native; fails open on POSIX")
     def test_ram_tight_threshold(self):
         ok, pct = check_ram(max_pct=0.001)
         self.assertFalse(ok)

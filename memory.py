@@ -41,7 +41,7 @@ def write_plan(config: Config, content: str) -> None:
         suffix=".tmp",
     )
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
         replace_with_retry(tmp_path, str(config.plan_path))
     except Exception:
@@ -276,7 +276,7 @@ def append_observation(config: Config, entry: dict) -> None:
     if "ts" not in entry:
         entry["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     line = json.dumps(entry, ensure_ascii=False) + "\n"
-    with open(config.observations_path, "a") as f:
+    with open(config.observations_path, "a", encoding="utf-8") as f:
         f.write(line)
 
 
@@ -295,7 +295,7 @@ def read_recent_observations(
         max_count = config.context_obs_max_count
 
     try:
-        with open(config.observations_path) as f:
+        with open(config.observations_path, encoding="utf-8") as f:
             lines = f.readlines()
     except FileNotFoundError:
         return []
@@ -349,7 +349,7 @@ def truncate_observations(config: Config) -> int:
     Returns the number of lines removed.
     """
     try:
-        with open(config.observations_path) as f:
+        with open(config.observations_path, encoding="utf-8") as f:
             lines = f.readlines()
     except FileNotFoundError:
         return 0
@@ -366,7 +366,7 @@ def truncate_observations(config: Config) -> int:
     except Exception:  # noqa: BLE001 - archive is best-effort
         pass
     # Atomic rewrite: empty the file
-    with open(config.observations_path, "w") as f:
+    with open(config.observations_path, "w", encoding="utf-8") as f:
         pass
     return removed
 
@@ -374,7 +374,7 @@ def truncate_observations(config: Config) -> int:
 def count_observation_lines(config: Config) -> int:
     """Count lines in observations.jsonl."""
     try:
-        with open(config.observations_path) as f:
+        with open(config.observations_path, encoding="utf-8") as f:
             return sum(1 for _ in f)
     except FileNotFoundError:
         return 0
@@ -388,7 +388,7 @@ def validate_observations(config: Config) -> int:
     if not config.observations_path.exists():
         return 0
 
-    with open(config.observations_path) as f:
+    with open(config.observations_path, encoding="utf-8") as f:
         lines = f.readlines()
 
     if not lines:
@@ -404,7 +404,7 @@ def validate_observations(config: Config) -> int:
         return 0
     except json.JSONDecodeError:
         # Last line is malformed — truncate it
-        with open(config.observations_path, "w") as f:
+        with open(config.observations_path, "w", encoding="utf-8") as f:
             f.writelines(lines[:-1])
         return 1
 

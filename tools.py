@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+import platform_shell
 from config import Config
 from parser import ToolCall
 from safety import is_command_blocked, check_disk_space
@@ -135,7 +136,13 @@ def _kill_pid_tree(pid: int) -> None:
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
                            capture_output=True, timeout=15)
         else:
-            os.kill(pid, 9)
+            # POSIX: kill the whole process GROUP, not just the bash leader — the Popens set
+            # start_new_session=True so bash is a session/group leader, and its children (a slow
+            # pipeline, a backgrounded probe) must die with it or they orphan and hold the pipe.
+            try:
+                os.killpg(os.getpgid(pid), 9)
+            except (ProcessLookupError, PermissionError):
+                os.kill(pid, 9)
     except Exception:  # noqa: BLE001
         pass
 
@@ -272,6 +279,8 @@ def _normalize_select_string(c: str):
 
 def _lint_windows_command(cmd: str):
     """Quote-aware pre-flight. See contract above."""
+    if os.name != "nt":   # defense-in-depth: never rewrite a POSIX command into PowerShell
+        return None
     c = cmd.strip()
     low = c.lower()
     if low.startswith(("cmd ", "cmd.exe", "cmd/")):
@@ -318,6 +327,8 @@ def _lint_windows_command(cmd: str):
 def _route_windows_command(cmd: str):
     """(popen_arg, use_shell) for a Windows command. Always prefer list-form PowerShell so
     cmd.exe never re-parses (and corrupts) the model's PowerShell."""
+    if os.name != "nt":   # defense-in-depth: PowerShell routing must never reach a POSIX command
+        return cmd, True
     cl = cmd.lstrip()
     low = cl.lower()
     if low.startswith(("cmd ", "cmd.exe", "cmd/")):
@@ -463,40 +474,23 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["start_new_session"] = True
-        # Windows: PowerShell IS the shell. The model writes PowerShell; we run it via the list
-        # form so cmd.exe never re-parses it. Even when the model wraps it in `powershell -Command
-        # "..."`, we unwrap the inner script and run THAT via list form — no cmd.exe quote-hell.
-        if _wsl:
-            popen_arg, use_shell = _wsl_popen(cmd, config), False
-        elif os.name == "nt":
-            popen_arg, use_shell = _route_windows_command(cmd)
-        else:
-            popen_arg, use_shell = cmd, True
+        # Native shell per platform (platform_shell): PowerShell list-form on Windows (so cmd.exe never
+        # re-parses the model's PowerShell), the WSL bash invocation for a creature-in-WSL, or `bash -lc`
+        # on macOS/Linux/Pi where the model's commands are already native. Returns the epilogue that
+        # records the real exit code to a sidecar (truthful exit codes for async jobs).
+        popen_arg, use_shell, _epilogue = platform_shell.build_shell_command(cmd, config)
         # Stream output to a file (not an in-memory PIPE) so a slow command can be
         # handed to the background ledger mid-run WITHOUT losing its output or killing it.
         config.outputs_dir.mkdir(parents=True, exist_ok=True)
         out_path = config.outputs_dir / f"fg_{time.strftime('%Y%m%d_%H%M%S')}_{proc_seq()}.out"
         exit_path = str(out_path) + ".exit"
-        # List-form PowerShell scripts get an exit-code epilogue: it records the real
-        # exit code to a sidecar file (readable after the Popen handle is gone — async
-        # jobs) and re-raises it via `exit` so proc.returncode stays truthful (sync).
-        # Commands that exit the script explicitly skip the epilogue: sidecar absent =
-        # exit code unknown (old behavior), never wrong.
-        if _wsl and isinstance(popen_arg, list):
-            # bash epilogue: record the real exit code to the sidecar (via its WSL path) so async WSL
-            # jobs report a truthful exit code after the Popen handle is gone, just like the PS path.
-            _wsl_ep = _win_to_wsl_path(exit_path)
-            popen_arg = popen_arg[:-1] + [
-                popen_arg[-1] + "\n__ec=$?; printf '%s' \"$__ec\" > '" + _wsl_ep + "'; exit $__ec"
-            ]
-        elif not use_shell and isinstance(popen_arg, list):
-            _ep = exit_path.replace("'", "''")
-            popen_arg = popen_arg[:-1] + [
-                popen_arg[-1]
-                + "\n$__eidos_ec = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }"
-                + "\n[System.IO.File]::WriteAllText('" + "{}".format(_ep) + "', [string]$__eidos_ec)"
-                + "\nexit $__eidos_ec"
-            ]
+        # List-form shells get the exit-code epilogue: it records the real exit code to a sidecar file
+        # (readable after the Popen handle is gone — async jobs) and re-raises it via `exit` so
+        # proc.returncode stays truthful (sync). Commands that exit the script explicitly, or the
+        # operator's own `cmd.exe`/`-File` (epilogue is None), skip it: sidecar absent = exit unknown
+        # (old behavior), never wrong.
+        if _epilogue is not None and isinstance(popen_arg, list):
+            popen_arg = _epilogue(popen_arg, exit_path)
         out_file = open(out_path, "w", encoding="utf-8", errors="replace")
         try:
             proc = subprocess.Popen(
@@ -741,10 +735,11 @@ def tool_bg_run(args: dict, config: Config) -> ToolResult:
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["start_new_session"] = True
-        if _creature_uses_wsl(config):
-            _bg_arg, _bg_shell, _bg_cwd = _wsl_popen(cmd, config), False, None
-        else:
-            _bg_arg, _bg_shell, _bg_cwd = cmd, True, str(_creature_root(config))
+        # Native shell per platform (same seam as the foreground path). bg jobs read their output file +
+        # the jobs ledger for status, so we don't attach the exit-code epilogue here (parity with the
+        # prior behavior). WSL runs cwd'd via --cd inside the invocation, so its cwd is None.
+        _bg_arg, _bg_shell, _ = platform_shell.build_shell_command(cmd, config)
+        _bg_cwd = None if _creature_uses_wsl(config) else str(_creature_root(config))
         with open(out_path, "w") as out_file:
             proc = subprocess.Popen(
                 _bg_arg,

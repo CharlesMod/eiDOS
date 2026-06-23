@@ -74,9 +74,13 @@ def main():
 
     # eidos runs as LocalSystem (child of the EidosDashboard service, which doesn't export
     # PI_CODING_AGENT_DIR). delegate.py already sets it per-spawn, but make it process-wide so
-    # ANY pi eidos ever spawns resolves cmod's config (the `house` provider + subagents
-    # extension). setdefault: a real service-env value, if ever added, still wins.
-    os.environ.setdefault("PI_CODING_AGENT_DIR", r"C:\Users\cmod\.pi\agent")
+    # ANY pi eidos ever spawns resolves the user's config (the `house` provider + subagents
+    # extension). setdefault: a real service-env value, if ever added, still wins. Derived from the
+    # user's home so it's correct on any machine; only set when that dir actually exists (pi is an
+    # optional feature — a friend without it just doesn't get delegate, no broken env).
+    _pi_agent_dir = Path.home() / ".pi" / "agent"
+    if _pi_agent_dir.is_dir():
+        os.environ.setdefault("PI_CODING_AGENT_DIR", str(_pi_agent_dir))
 
     # Configure logging
     logging.basicConfig(
@@ -712,6 +716,35 @@ def run_loop(config: Config, persona=None, wal=None):
     _wm_prev_sit = None   # previous tick's situation/action — for the world-model transition + curiosity
     _wm_prev_act = None
 
+    # Temperament (DMN): the slow personality drift — initiative / persistence / caution, learned from
+    # this creature's own success / failure / override history. Persisted, so it survives a restart; it
+    # needs no bus (it's pure state + setpoints), so it loads even when the nervous system is off. Feeds
+    # the objectives gate's park threshold and the goal-tension itch — MECHANISM, not prompt knobs.
+    nervous_temperament = None
+    if getattr(config, "nervous_temperament_enabled", True):
+        try:
+            from nervous.temperament import Temperament
+            nervous_temperament = Temperament(config=config)
+            print(f"{pfx} temperament loaded — disposition: {nervous_temperament.disposition()} "
+                  f"(init {nervous_temperament.initiative:.2f} / persist {nervous_temperament.persistence:.2f} "
+                  f"/ caution {nervous_temperament.caution:.2f})")
+        except Exception as _e:  # noqa: BLE001
+            print(f"{pfx} temperament load failed (continuing neutral): {_e}")
+            nervous_temperament = None
+
+    # Goal-tension drive (Ventral Striatum): incompletion / regret pressure → a bounded arousal floor
+    # that keeps the creature awake-and-acting while an objective is unfinished (the structural form of
+    # "initiative when idle"). Needs the bus + neuromod for its teeth (arousal → sleep/cadence); inert
+    # without them. Relieved by real progress.
+    nervous_goaltension = None
+    if nervous_bus is not None and getattr(config, "nervous_goaltension_enabled", True):
+        try:
+            from nervous.goaltension import GoalTensionDrive
+            nervous_goaltension = GoalTensionDrive(bus=nervous_bus, neuromod=nervous_neuromod)
+            print(f"{pfx} goal-tension drive started — an unfinished objective now keeps it awake")
+        except Exception as _e:  # noqa: BLE001
+            print(f"{pfx} goal-tension start failed (continuing): {_e}")
+
     while not _shutdown_requested:
         # --- Operator pause check ---
         pause_path = config.workspace / "paused"
@@ -1313,17 +1346,51 @@ def run_loop(config: Config, persona=None, wal=None):
         # --- Action Gate: update the active objective's frustration from this tick's outcome (+ strain
         #     bump), and ROTATE focus deterministically if it has stalled/parked/finished. This is the
         #     structural anti-rabbit-hole: the harness moves focus, the model doesn't keep grinding. ---
+        _gate = {}
+        _park_at = None
         try:
             import objectives as _obj
+            # DMN temperament feeds the gate's park threshold: a persistent creature grinds a little
+            # longer before the gate rotates it, a deferential one lets go sooner. None => default.
+            _park_at = (nervous_temperament.park_threshold(_obj.FRUST_PARK)
+                        if nervous_temperament is not None else None)
             _gate = _obj.record_tick(config, made_progress=_made_progress,
                                      tool_failed=(not tick_tool_success), tick_number=tick_number,
-                                     extra_frustration=_strain_bump)
+                                     extra_frustration=_strain_bump, park_threshold=_park_at)
             if _gate.get("rotated") and _gate.get("active"):
                 print(f"{pfx} Gate: rotated focus → {_gate['active']['title']}")
             if _gate.get("escalate"):
                 print(f"{pfx} Gate: whole backlog blocked — surfacing to Boss once")
         except Exception as _e:  # noqa: BLE001
             logger.warning("objective gate failed: %s", _e)
+
+        # --- Temperament (DMN): drift the slow personality setpoints from this tick. A forced park is
+        #     an "override" of the model's choice to keep going (the strongest teacher); progress is
+        #     autonomy paying off; a failure teaches caution. Slow — one tick barely moves it. ---
+        if nervous_temperament is not None:
+            try:
+                nervous_temperament.observe(success=_made_progress,
+                                            failed=(not tick_tool_success),
+                                            overridden=bool(_gate.get("parked")))
+            except Exception as _te:  # noqa: BLE001
+                logger.warning("temperament update failed: %s", _te)
+
+        # --- Goal-tension drive (Ventral Striatum): an OPEN active objective with no progress this tick
+        #     charges the incompletion/regret pressure (a frustrated one harder); progress discharges it.
+        #     Past threshold it raises a bounded arousal floor — the itch that keeps the creature awake
+        #     and acting while work remains, instead of drowsing. Creature mode has no backlog → no
+        #     tension (idle novelty is curiosity's job). Initiative temperament scales how hard it bites. ---
+        if nervous_goaltension is not None:
+            try:
+                _active = _gate.get("active")
+                _open = bool(_active)
+                _frac = (float(_active.get("frustration", 0)) / max(1, (_park_at or _obj.FRUST_PARK))
+                         if _active else 0.0)
+                _init = nervous_temperament.initiative if nervous_temperament is not None else 0.5
+                nervous_goaltension.observe(made_progress=_made_progress, open_objective=_open,
+                                            frustration_frac=_frac, initiative=_init)
+            except Exception as _gte:  # noqa: BLE001
+                logger.warning("goal-tension update failed: %s", _gte)
 
         # --- Reward learning (the dopaminergic keystone): learn from THIS tick's outcome — compute the
         #     reward (success + real progress + how the felt body changed − strain), update the value

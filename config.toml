@@ -111,6 +111,7 @@ env_max_chars = 1000
 interventions_max_chars = 6000     # chat history room
 max_total_chars = 120000           # ~30k tokens — open it up; we have a 128k window, not a Pi
 chars_per_token = 4.0              # Gemma tokenizer
+stable_head_cache = true           # BIBLE §2.11 delta prompting: re-render the KV-stable head only on a source change (kill-switch)
 dream_combined = true
 
 world_state_max_items = 12
@@ -196,6 +197,10 @@ reliable_backpressure_max_s = 30.0
 admits_per_source_per_window = 1000
 heartbeat_interval_s = 0.5
 
+# Structural agency (BIBLE §7). Both default ON in config.py; kill-switches here.
+goaltension_enabled = true    # Ventral Striatum: unfinished objective → arousal floor (initiative when idle)
+temperament_enabled = true    # DMN: slow initiative/persistence/caution drift → gate threshold + goal-tension itch
+
 # Metabolism — food = literal battery power (2026-06-20 pivot). This node is a stationary,
 # solar-powered desktop → archetype "plant": recharges from environmental power (solar) only, never by
 # napping. ("animal" = a mobile bot that recharges by resting/docking.) The solar curve is the INTERIM
@@ -219,4 +224,6 @@ power_battery_cells = 8            # LiFePO4 8S = 24V nominal
 power_battery_capacity_ah = 100.0  # 24V 100Ah ≈ 2.56 kWh
 
 [paths]
-workspace = "C:/Users/cmod/llm/Kairos/workspace"
+# Relative paths anchor at the repo root (resolved in config.py), so this is portable across machines
+# and OSes. Use an absolute path or "~/..." only to put the mind's memory somewhere else.
+workspace = "workspace"

@@ -20,6 +20,8 @@ from .monitor import NervousMonitor
 from .reward import RewardLearner
 from .worldmodel import WorldModel
 from .curiosity import CuriosityDrive
+from .goaltension import GoalTensionDrive
+from .temperament import Temperament
 from .metabolism import Metabolism, hunger_to_bar, solar_charge_in
 from .power import (PowerMonitor, lifepo4_soc, parse_mppt,
                     read_power_cache, write_power_cache, cache_reader)
@@ -49,6 +51,7 @@ __all__ = [
     "NeuromodulatoryState",
     "PreFilter", "FrameDiffFilter", "VadFilter", "Exteroceptor",
     "SleepCycle", "NervousMonitor", "RewardLearner", "WorldModel", "CuriosityDrive",
+    "GoalTensionDrive", "Temperament",
     "Metabolism", "hunger_to_bar", "solar_charge_in",
     "PowerMonitor", "lifepo4_soc", "parse_mppt",
     "read_power_cache", "write_power_cache", "cache_reader",

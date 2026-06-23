@@ -180,7 +180,7 @@ def _log_compaction_overrun(config: Config, total_chars: int) -> None:
     }
     try:
         path = config.workspace / "ctx_overruns.jsonl"
-        with open(path, "a") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
     except OSError:
         pass

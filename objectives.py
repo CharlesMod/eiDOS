@@ -250,21 +250,28 @@ def _maybe_escalate(data: dict, tick_number: int) -> bool:
 
 
 def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int,
-                extra_frustration: int = 0) -> dict:
+                extra_frustration: int = 0, park_threshold: Optional[int] = None) -> dict:
     """THE GATE. Called every tick after progress is known. Updates the active objective's
     frustration, then rotates focus if it has stalled / been parked / finished. Returns a small
-    event dict: {rotated: bool, escalate: bool, active: <obj or None>}.
+    event dict: {rotated: bool, parked: bool, escalate: bool, active: <obj or None>}.
 
     extra_frustration (phase-6 strain teeth): added on a no-progress tick when the strain glue
     detects chronic / repeated failure, so a dead end parks and rotates FASTER — the mechanism
     that replaces the old advisory 'you seem stuck' prose.
+
+    park_threshold (DMN temperament): the frustration at which the active objective auto-parks.
+    None => the module default FRUST_PARK; the temperament feeds a persistence-scaled value so a
+    creature that has learned persistence pays grinds a little longer before the gate rotates it.
+    `parked` in the return is True the tick the active objective is forcibly parked (an "override"
+    of the model's choice to keep going — the signal the temperament learns from).
     """
+    park_at = FRUST_PARK if park_threshold is None else max(3, int(park_threshold))
     data = _load(config)
     active = _by_id(data, data.get("active_id"))
 
     # No backlog yet → nothing to govern.
     if not data["objectives"]:
-        return {"rotated": False, "escalate": False, "active": None}
+        return {"rotated": False, "parked": False, "escalate": False, "active": None}
 
     # If the active id is stale/missing, adopt the best workable one (or escalate if none).
     if active is None or active["state"] != "active":
@@ -277,10 +284,10 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
             nxt["last_active_tick"] = tick_number
             data["active_id"] = nxt["id"]
             _save(config, data)
-            return {"rotated": True, "escalate": False, "active": nxt}
+            return {"rotated": True, "parked": False, "escalate": False, "active": nxt}
         esc = _maybe_escalate(data, tick_number)
         _save(config, data)
-        return {"rotated": False, "escalate": esc, "active": None}
+        return {"rotated": False, "parked": False, "escalate": esc, "active": None}
 
     active["last_active_tick"] = tick_number
     active["attempts"] += 1
@@ -296,8 +303,10 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
 
     # Has it earned a park? (Frustration over threshold → auto-block + rotate.)
     rotated = False
+    parked = False
     escalate = False
-    if active["frustration"] >= FRUST_PARK:
+    if active["frustration"] >= park_at:
+        parked = True
         active["state"] = "blocked"
         active["blocked_reason"] = active.get("blocked_reason") or (
             f"stalled — {active['ticks_since_progress']} ticks without progress")
@@ -323,9 +332,13 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
             }
         else:
             # Nothing workable anywhere → surface to Boss ONCE (batched), then keep grinding gently.
+            # This is NOT an override of the model's choice (there is nothing else to do), so parked
+            # stays False — the temperament must not "learn to let go" when letting go isn't possible.
+            parked = False
             active["state"] = "active"   # un-park: there's literally nothing else to do
-            active["frustration"] = FRUST_PARK - FRUST_RELIEF  # bleed off so we don't re-trip instantly
+            active["frustration"] = park_at - FRUST_RELIEF  # bleed off so we don't re-trip instantly
             escalate = _maybe_escalate(data, tick_number)
 
     _save(config, data)
-    return {"rotated": rotated, "escalate": escalate, "active": _by_id(data, data["active_id"])}
+    return {"rotated": rotated, "parked": parked, "escalate": escalate,
+            "active": _by_id(data, data["active_id"])}
