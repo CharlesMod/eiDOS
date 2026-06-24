@@ -259,6 +259,29 @@ class TestMemory(unittest.TestCase):
         self.assertIn("ts", entry)
         self.assertRegex(entry["ts"], r"\d{4}-\d{2}-\d{2}T")
 
+    def test_append_observation_rejects_bad_typed_record(self):
+        with self.assertRaises(ValueError):
+            append_observation(self.config, {"tick": "one", "output": "bad"})
+        self.assertFalse(self.config.observations_path.exists())
+
+    def test_read_recent_observations_skips_bad_typed_record(self):
+        good = {"tick": 2, "ts": "2026-06-23T00:00:00Z", "output": "ok"}
+        bad = {"tick": "two", "ts": "2026-06-23T00:00:01Z", "output": "bad"}
+        self.config.observations_path.write_text(
+            json.dumps(good) + "\n" + json.dumps(bad) + "\n",
+            encoding="utf-8",
+        )
+        obs = read_recent_observations(self.config, max_chars=10000, max_count=10)
+        self.assertEqual(obs, [good])
+
+    def test_chat_reply_record_round_trips(self):
+        from memory import append_chat_line
+        append_chat_line(self.config, "Typed record.", spoken=True, tick=3)
+        entries = self._chat()
+        self.assertEqual(entries[0]["text"], "Typed record.")
+        self.assertTrue(entries[0]["spoken"])
+        self.assertEqual(entries[0]["tick"], 3)
+
     def test_append_observation_preserves_existing_timestamp(self):
         append_observation(self.config, {"tick": 1, "ts": "2026-01-01T00:00:00Z", "output": "data"})
         with open(self.config.observations_path) as f:

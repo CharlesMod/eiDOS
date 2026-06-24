@@ -1,4 +1,5 @@
 """Tool registry and implementations."""
+from __future__ import annotations
 
 import dataclasses
 import json
@@ -8,12 +9,14 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Literal, Optional, Union
 
 import platform_shell
 from config import Config
 from parser import ToolCall
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from safety import is_command_blocked, check_disk_space
+from typed_boundary import validate_job_records
 
 
 @dataclasses.dataclass
@@ -32,6 +35,412 @@ class ToolResult:
     success: bool
     duration_s: float
     fail_kind: str = ""
+
+
+class _ToolArgs(BaseModel):
+    """Strict validation for untrusted LLM/tool boundary dictionaries."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+def _present(value: str, field_name: str) -> str:
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be empty")
+    return value
+
+
+def _trimmed_nonempty(value: str, field_name: str) -> str:
+    return _present(value, field_name).strip()
+
+
+class BashArgs(_ToolArgs):
+    cmd: str = Field(validation_alias=AliasChoices("cmd", "command"))
+    wait: bool = False
+    name: Optional[str] = None
+    intent: Optional[str] = None
+
+    @field_validator("cmd")
+    @classmethod
+    def _cmd_not_empty(cls, value: str) -> str:
+        return _present(value, "cmd")
+
+
+class WriteFileArgs(_ToolArgs):
+    path: str
+    content: str = ""
+
+    @field_validator("path")
+    @classmethod
+    def _path_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "path")
+
+
+class ReadFileArgs(_ToolArgs):
+    path: str
+
+    @field_validator("path")
+    @classmethod
+    def _path_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "path")
+
+
+class BgRunArgs(_ToolArgs):
+    cmd: str
+    name: str
+
+    @field_validator("cmd")
+    @classmethod
+    def _cmd_not_empty(cls, value: str) -> str:
+        return _present(value, "cmd")
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "name")
+
+
+class BgCheckArgs(_ToolArgs):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "name")
+
+
+class HttpRequestArgs(_ToolArgs):
+    url: str
+    method: Optional[str] = None
+    json_body: Optional[Any] = Field(default=None, validation_alias=AliasChoices("json", "json_body"))
+    data: Optional[Union[str, bytes]] = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    timeout: float = 30.0
+    save: Optional[str] = None
+    out: Optional[str] = None
+
+    @field_validator("url")
+    @classmethod
+    def _url_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "url")
+
+    @field_validator("method")
+    @classmethod
+    def _method_allowed(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        method = value.upper()
+        if method not in {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}:
+            raise ValueError("method must be one of GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS")
+        return method
+
+    @field_validator("timeout")
+    @classmethod
+    def _timeout_is_sane(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("timeout must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def _single_body_source(self) -> "HttpRequestArgs":
+        if self.json_body is not None and self.data is not None:
+            raise ValueError("provide either json or data, not both")
+        return self
+
+
+class UpdatePlanArgs(_ToolArgs):
+    note: str
+
+    @field_validator("note")
+    @classmethod
+    def _note_not_empty(cls, value: str) -> str:
+        return _present(value, "note")
+
+
+class MemorizeArgs(_ToolArgs):
+    fact: str = Field(validation_alias=AliasChoices("fact", "value", "content", "knowledge"))
+    tags: Optional[Union[list[str], str]] = None
+    key: Optional[str] = None
+    category: str = "facts"
+    confidence: str = "tentative"
+    source_goal: str = ""
+    source_tick: int = 0
+
+    @field_validator("fact")
+    @classmethod
+    def _fact_not_empty(cls, value: str) -> str:
+        return _present(value, "fact")
+
+
+class RecallArgs(_ToolArgs):
+    query: str
+
+    @field_validator("query")
+    @classmethod
+    def _query_not_empty(cls, value: str) -> str:
+        return _present(value, "query")
+
+
+class UpdateSelfGuideArgs(_ToolArgs):
+    content: Optional[str] = None
+    note: Optional[str] = Field(default=None, validation_alias=AliasChoices("note", "text"))
+    rationale: str = Field(default="", validation_alias=AliasChoices("rationale", "reason"))
+    source_tick: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _has_content_or_note(self) -> "UpdateSelfGuideArgs":
+        if not ((self.content and self.content.strip()) or (self.note and self.note.strip())):
+            raise ValueError("provide content or note")
+        return self
+
+
+class ProposeSelfEditArgs(_ToolArgs):
+    target_file: str = Field(validation_alias=AliasChoices("target_file", "path", "file"))
+    new_content: str = Field(validation_alias=AliasChoices("new_content", "content"))
+    rationale: str = Field(default="", validation_alias=AliasChoices("rationale", "reason"))
+    source_tick: Optional[int] = None
+
+    @field_validator("target_file")
+    @classmethod
+    def _target_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "target_file")
+
+    @field_validator("new_content")
+    @classmethod
+    def _content_not_empty(cls, value: str) -> str:
+        return _present(value, "new_content")
+
+
+class EmptyArgs(_ToolArgs):
+    pass
+
+
+class CreateSkillArgs(_ToolArgs):
+    skill_name: str = Field(validation_alias=AliasChoices("skill_name", "name"))
+    skill_code: str = Field(validation_alias=AliasChoices("skill_code", "code"))
+    description: str = ""
+    args_schema: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("skill_name")
+    @classmethod
+    def _skill_name_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "skill_name")
+
+    @field_validator("skill_code")
+    @classmethod
+    def _skill_code_not_empty(cls, value: str) -> str:
+        return _present(value, "skill_code")
+
+
+class EditSkillArgs(_ToolArgs):
+    skill_name: str = Field(validation_alias=AliasChoices("skill_name", "name"))
+    skill_code: str = Field(validation_alias=AliasChoices("skill_code", "code"))
+    description: Optional[str] = None
+    args_schema: Optional[dict[str, Any]] = None
+
+    @field_validator("skill_name")
+    @classmethod
+    def _skill_name_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "skill_name")
+
+    @field_validator("skill_code")
+    @classmethod
+    def _skill_code_not_empty(cls, value: str) -> str:
+        return _present(value, "skill_code")
+
+
+class RollbackSkillArgs(_ToolArgs):
+    skill_name: str = Field(validation_alias=AliasChoices("skill_name", "name"))
+    version: str
+
+    @field_validator("skill_name", "version")
+    @classmethod
+    def _required_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "rollback field")
+
+
+class NoteAppendArgs(_ToolArgs):
+    name: str = Field(default="scratch", validation_alias=AliasChoices("name", "notebook"))
+    text: str = Field(validation_alias=AliasChoices("text", "note", "content"))
+
+    @field_validator("name")
+    @classmethod
+    def _note_name_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "name")
+
+    @field_validator("text")
+    @classmethod
+    def _note_text_not_empty(cls, value: str) -> str:
+        return _present(value, "text")
+
+
+class NoteReadArgs(_ToolArgs):
+    name: Optional[str] = Field(default=None, validation_alias=AliasChoices("name", "notebook"))
+
+
+class TcpProbeArgs(_ToolArgs):
+    ip: str = Field(validation_alias=AliasChoices("ip", "host"))
+    port: int = Field(default=80, ge=1, le=65535)
+    timeout: float = Field(default=2.0, gt=0, le=60)
+
+    @field_validator("ip")
+    @classmethod
+    def _ip_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "ip")
+
+
+class NetScanArgs(_ToolArgs):
+    subnet: str = Field(validation_alias=AliasChoices("subnet", "base"))
+    ports: Optional[Union[list[int], str]] = None
+    timeout: float = Field(default=0.4, gt=0, le=30)
+    start: int = Field(default=1, ge=1, le=254)
+    end: int = Field(default=254, ge=1, le=254)
+
+    @field_validator("subnet")
+    @classmethod
+    def _subnet_shape(cls, value: str) -> str:
+        value = _trimmed_nonempty(value, "subnet").rstrip(".")
+        if not re.fullmatch(r"\d{1,3}\.\d{1,3}\.\d{1,3}", value):
+            raise ValueError("subnet must look like 192.168.1")
+        return value
+
+    @field_validator("ports")
+    @classmethod
+    def _ports_in_range(cls, value: Optional[Union[list[int], str]]) -> Optional[Union[list[int], str]]:
+        if isinstance(value, list):
+            for port in value:
+                if port < 1 or port > 65535:
+                    raise ValueError("ports must be between 1 and 65535")
+        if isinstance(value, str):
+            for match in re.findall(r"\d+", value):
+                port = int(match)
+                if port < 1 or port > 65535:
+                    raise ValueError("ports must be between 1 and 65535")
+        return value
+
+    @model_validator(mode="after")
+    def _range_ordered(self) -> "NetScanArgs":
+        if self.start > self.end:
+            raise ValueError("start must be <= end")
+        return self
+
+
+class HttpProbeArgs(_ToolArgs):
+    url: Optional[str] = None
+    ip: Optional[str] = Field(default=None, validation_alias=AliasChoices("ip", "host"))
+    port: int = Field(default=80, ge=1, le=65535)
+    path: str = "/"
+    scheme: Literal["http", "https"] = "http"
+    timeout: float = Field(default=4.0, gt=0, le=60)
+
+    @model_validator(mode="after")
+    def _has_url_or_ip(self) -> "HttpProbeArgs":
+        if not (self.url or self.ip):
+            raise ValueError("provide url or ip")
+        return self
+
+
+class UdpListenArgs(_ToolArgs):
+    port: int = Field(default=6667, ge=1, le=65535)
+    timeout: float = Field(default=6.0, gt=0, le=60)
+
+
+class AskAiArgs(_ToolArgs):
+    prompt: str = Field(validation_alias=AliasChoices("prompt", "question", "task", "text"))
+    system: Optional[str] = None
+    max_tokens: int = Field(default=800, ge=64, le=2048)
+
+    @field_validator("prompt")
+    @classmethod
+    def _prompt_not_empty(cls, value: str) -> str:
+        return _present(value, "prompt")
+
+
+class VisionArgs(_ToolArgs):
+    image: str = Field(validation_alias=AliasChoices("image", "url", "path", "file"))
+    question: str = Field(
+        default="Describe what you see in detail. Note anything notable, any text, and the overall scene.",
+        validation_alias=AliasChoices("question", "prompt"),
+    )
+
+    @field_validator("image")
+    @classmethod
+    def _image_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "image")
+
+
+class SpeakArgs(_ToolArgs):
+    text: str = Field(validation_alias=AliasChoices("text", "input", "say", "message"))
+
+    @field_validator("text")
+    @classmethod
+    def _text_not_empty(cls, value: str) -> str:
+        return _present(value, "text")
+
+
+class ManualArgs(_ToolArgs):
+    topic: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("topic", "section", "query", "feature"),
+    )
+
+
+class ObjectiveAddArgs(_ToolArgs):
+    title: str = Field(validation_alias=AliasChoices("title", "objective"))
+    why: str = Field(validation_alias=AliasChoices("why", "because", "purpose"))
+    priority: int = 5
+
+    @field_validator("title", "why")
+    @classmethod
+    def _objective_field_not_empty(cls, value: str) -> str:
+        return _present(value, "objective field")
+
+
+class ObjectiveKeyArgs(_ToolArgs):
+    id: str = Field(validation_alias=AliasChoices("id", "title", "objective"))
+
+    @field_validator("id")
+    @classmethod
+    def _id_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "id")
+
+
+class ObjectiveBlockArgs(ObjectiveKeyArgs):
+    reason: str = "blocked"
+    wake: str = Field(default="", validation_alias=AliasChoices("wake", "wake_condition"))
+    dead: bool = False
+
+
+class DelegateArgs(_ToolArgs):
+    task: Optional[str] = None
+    mode: Literal["research", "code"] = "research"
+    cwd: Optional[str] = None
+    name: Optional[str] = None
+    continue_job: Optional[str] = None
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _mode_lower(cls, value: Any) -> Any:
+        return value.strip().lower() if isinstance(value, str) else value
+
+def _format_validation_error(error: ValidationError) -> str:
+    parts = []
+    for entry in error.errors():
+        loc = ".".join(str(item) for item in entry.get("loc", ())) or "args"
+        parts.append(f"{loc}: {entry.get('msg', 'invalid value')}")
+    return "; ".join(parts)
+
+
+def _validate_tool_args(model: type[_ToolArgs], args: dict, tool_name: str) -> _ToolArgs | ToolResult:
+    try:
+        return model.model_validate(args or {})
+    except ValidationError as error:
+        return ToolResult(
+            output=f"Error: invalid {tool_name} arguments: {_format_validation_error(error)}",
+            full_output_path=None,
+            success=False,
+            duration_s=0,
+            fail_kind="args",
+        )
 
 
 def _save_full_output(config: Config, tick_id: str, stream: str, content: str) -> str:
@@ -409,9 +818,10 @@ def _creature_world_firewall(cmd: str, config: Config) -> Optional[str]:
 
 def tool_bash(args: dict, config: Config) -> ToolResult:
     """Run a shell command; fast commands return inline, slow ones auto-background."""
-    cmd = args.get("cmd", "") or args.get("command", "")
-    if not cmd:
-        return ToolResult(output="Error: no 'cmd' argument provided", full_output_path=None, success=False, duration_s=0, fail_kind="args")
+    parsed = _validate_tool_args(BashArgs, args, "bash")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    cmd = parsed.cmd
 
     # Creature world-boundary: a creature can't reach outside its home burrow into its skeleton (its
     # source/biology AND the workspace bookkeeping one level up).
@@ -506,9 +916,9 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
             # its result is delivered to the LLM later, tagged [↩ job N], via the jobs
             # ledger. The loop is NEVER blocked. The model can pass "wait": true to force
             # the synchronous path below when it truly needs the result this same tick.
-            if not bool(args.get("wait", False)):
-                jobname = (str(args.get("name") or "").strip() or f"j{proc.pid}")
-                intent = str(args.get("intent") or "").strip()
+            if not parsed.wait:
+                jobname = (str(parsed.name or "").strip() or f"j{proc.pid}")
+                intent = str(parsed.intent or "").strip()
                 try:
                     jobs = _read_jobs(config)
                     jobs.append({
@@ -623,10 +1033,11 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
 
 def tool_write_file(args: dict, config: Config) -> ToolResult:
     """Write content to a file."""
-    path = args.get("path", "")
-    content = args.get("content", "")
-    if not path:
-        return ToolResult(output="Error: no 'path' argument", full_output_path=None, success=False, duration_s=0)
+    parsed = _validate_tool_args(WriteFileArgs, args, "write_file")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    path = parsed.path
+    content = parsed.content
 
     disk_ok, free_gb = check_disk_space(min_gb=config.disk_min_gb)
     if not disk_ok:
@@ -669,9 +1080,10 @@ def tool_write_file(args: dict, config: Config) -> ToolResult:
 
 def tool_read_file(args: dict, config: Config) -> ToolResult:
     """Read a file's contents."""
-    path = args.get("path", "")
-    if not path:
-        return ToolResult(output="Error: no 'path' argument", full_output_path=None, success=False, duration_s=0)
+    parsed = _validate_tool_args(ReadFileArgs, args, "read_file")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    path = parsed.path
 
     start = time.monotonic()
     try:
@@ -697,10 +1109,11 @@ def tool_read_file(args: dict, config: Config) -> ToolResult:
 
 def tool_bg_run(args: dict, config: Config) -> ToolResult:
     """Spawn a background job and register it in the jobs ledger."""
-    cmd = args.get("cmd", "")
-    name = args.get("name", "")
-    if not cmd or not name:
-        return ToolResult(output="Error: 'cmd' and 'name' required", full_output_path=None, success=False, duration_s=0)
+    parsed = _validate_tool_args(BgRunArgs, args, "bg_run")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    cmd = parsed.cmd
+    name = parsed.name
 
     # Creature world-boundary (same as tool_bash — bg_run was an unfirewalled escape vector).
     _outside = _creature_world_firewall(cmd, config)
@@ -777,9 +1190,10 @@ def tool_bg_run(args: dict, config: Config) -> ToolResult:
 
 def tool_bg_check(args: dict, config: Config) -> ToolResult:
     """Check status of a registered background job."""
-    name = args.get("name", "")
-    if not name:
-        return ToolResult(output="Error: 'name' required", full_output_path=None, success=False, duration_s=0)
+    parsed = _validate_tool_args(BgCheckArgs, args, "bg_check")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    name = parsed.name
 
     jobs = _read_jobs(config)
     job = None
@@ -1070,6 +1484,12 @@ def _pid_alive(pid: int) -> bool:
             return False
     try:
         os.kill(pid, 0)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii", errors="ignore")
+            if stat.rsplit(")", 1)[-1].strip().startswith("Z"):
+                return False
+        except OSError:
+            pass
         return True
     except ProcessLookupError:
         return False
@@ -1117,14 +1537,14 @@ def _read_jobs(config: Config) -> list[dict]:
         if p.stat().st_size > 5_000_000:   # corrupt/runaway — never OOM the tick loop
             return []
         data = json.loads(p.read_text())
-        return data if isinstance(data, list) else []
+        return validate_job_records(data)
     except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError, MemoryError):
         return []
 
 
 def _write_jobs(config: Config, jobs: list[dict]) -> None:
     config.workspace.mkdir(parents=True, exist_ok=True)
-    config.jobs_path.write_text(json.dumps(jobs, indent=2))
+    config.jobs_path.write_text(json.dumps(validate_job_records(jobs), indent=2))
 
 
 _JOB_DONE = ("completed", "failed", "timed_out", "reaped")
@@ -1658,27 +2078,25 @@ def tool_http_request(args: dict, config: Config) -> ToolResult:
     binary). Example — speak: http_request {"method":"POST","url":"http://127.0.0.1:8005/v1/audio/speech",
     "json":{"model":"chatterbox","input":"Hello.","voice":"glados.wav","response_format":"wav"},"save":"say.wav"}."""
     import urllib.request, urllib.error, json as _json
-    url = (args.get("url") or "").strip()
-    if not url:
-        return ToolResult(output="Error: 'url' required.", full_output_path=None, success=False, duration_s=0)
-    headers = dict(args.get("headers") or {})
+    parsed = _validate_tool_args(HttpRequestArgs, args, "http_request")
+    if isinstance(parsed, ToolResult):
+        return parsed
+    url = parsed.url.strip()
+    headers = dict(parsed.headers)
     headers.setdefault("User-Agent", "eiDOS/1.0")
     body = None
-    if args.get("json") is not None:
+    if parsed.json_body is not None:
         try:
-            body = _json.dumps(args["json"]).encode("utf-8")
+            body = _json.dumps(parsed.json_body).encode("utf-8")
         except Exception as e:  # noqa: BLE001
             return ToolResult(output=f"Error: 'json' is not serializable: {e}",
                               full_output_path=None, success=False, duration_s=0)
         headers.setdefault("Content-Type", "application/json")
-    elif args.get("data") is not None:
-        d = args["data"]
+    elif parsed.data is not None:
+        d = parsed.data
         body = d.encode("utf-8") if isinstance(d, str) else bytes(d)
-    method = (args.get("method") or ("POST" if body is not None else "GET")).upper()
-    try:
-        timeout = max(1.0, min(float(args.get("timeout", 30)), 120.0))
-    except Exception:  # noqa: BLE001
-        timeout = 30.0
+    method = parsed.method or ("POST" if body is not None else "GET")
+    timeout = max(1.0, min(parsed.timeout, 120.0))
 
     start = time.monotonic()
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
@@ -1714,7 +2132,7 @@ def tool_http_request(args: dict, config: Config) -> ToolResult:
     ext = {"audio/wav": ".wav", "audio/x-wav": ".wav", "audio/mpeg": ".mp3", "audio/mp3": ".mp3",
            "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "application/pdf": ".pdf"}.get(
                ct.split(";")[0].strip(), ".bin")
-    save = (args.get("save") or args.get("out") or "").strip()
+    save = (parsed.save or parsed.out or "").strip()
     if save:
         p = save if os.path.isabs(save) else str(_root / save)
     else:
@@ -1965,6 +2383,58 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
 # NOT in this set is therefore a skill, and gets the wall-clock watchdog below.
 _BUILTIN_TOOL_NAMES = frozenset(TOOLS)
 
+_TOOL_ARG_MODELS: dict[str, type[_ToolArgs]] = {
+    "bash": BashArgs,
+    "write_file": WriteFileArgs,
+    "read_file": ReadFileArgs,
+    "bg_run": BgRunArgs,
+    "bg_check": BgCheckArgs,
+    "http_request": HttpRequestArgs,
+    "fetch": HttpRequestArgs,
+    "http": HttpRequestArgs,
+    "update_plan": UpdatePlanArgs,
+    "memorize": MemorizeArgs,
+    "update_self_guide": UpdateSelfGuideArgs,
+    "propose_self_edit": ProposeSelfEditArgs,
+    "list_self_edits": EmptyArgs,
+    "recall": RecallArgs,
+    "create_skill": CreateSkillArgs,
+    "edit_skill": EditSkillArgs,
+    "list_skills": EmptyArgs,
+    "check_tools": EmptyArgs,
+    "check_messages": EmptyArgs,
+    "check_system": EmptyArgs,
+    "rollback_skill": RollbackSkillArgs,
+    "note_append": NoteAppendArgs,
+    "note_read": NoteReadArgs,
+    "note_list": EmptyArgs,
+    "note_close": EmptyArgs,
+    "speak": SpeakArgs,
+    "manual": ManualArgs,
+    "ask_ai": AskAiArgs,
+    "vision": VisionArgs,
+    "see": VisionArgs,
+    "objective_add": ObjectiveAddArgs,
+    "objective_done": ObjectiveKeyArgs,
+    "objective_block": ObjectiveBlockArgs,
+    "objective_list": EmptyArgs,
+    "tcp_probe": TcpProbeArgs,
+    "net_scan": NetScanArgs,
+    "http_probe": HttpProbeArgs,
+    "udp_listen": UdpListenArgs,
+    "delegate": DelegateArgs,
+}
+
+
+def _validate_builtin_tool_call(call: ToolCall) -> ToolCall | ToolResult:
+    model = _TOOL_ARG_MODELS.get(call.tool)
+    if model is None:
+        return call
+    parsed = _validate_tool_args(model, call.args, call.tool)
+    if isinstance(parsed, ToolResult):
+        return parsed
+    return dataclasses.replace(call, args=parsed.model_dump(exclude_none=True, exclude_unset=True))
+
 # Wall-clock cap for a single self-authored skill call. A skill runs SYNCHRONOUSLY in the tick and has
 # no internal timeout, so a blocking network/socket/subprocess call with no timeout wedges the whole
 # loop (tick 342: a camera_snapshot skill held a connection to 192.168.86.63 and froze the loop ~6.7
@@ -2034,6 +2504,11 @@ def execute_tool(call: ToolCall, config: Config) -> ToolResult:
             fail_kind="no_such_tool",
         )
     try:
+        if call.tool in _BUILTIN_TOOL_NAMES:
+            validated_call = _validate_builtin_tool_call(call)
+            if isinstance(validated_call, ToolResult):
+                return validated_call
+            call = validated_call
         # Self-authored skills are time-bounded: they run in the tick with no internal cap, so a hung
         # one would freeze the loop. Built-in tools are already bounded (bash auto-backgrounds, the net
         # primitives self-time-out) — run them directly.

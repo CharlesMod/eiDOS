@@ -32,6 +32,7 @@ from config import load_config, Config
 from ascii_art import get_creature
 from persona import load_persona, compute_level
 from telemetry import get_cpu_pct
+from typed_boundary import DashboardPayloadError, validate_dashboard_post_payload
 
 import os
 
@@ -1060,17 +1061,12 @@ def _make_handler(config: Config):
                 if length > 10_000:
                     self._respond(413, "application/json", '{"error":"too large"}')
                     return
-                body = self.rfile.read(length)
                 try:
-                    data = json.loads(body)
-                except (json.JSONDecodeError, ValueError):
-                    self._respond(400, "application/json", '{"error":"invalid json"}')
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"error": str(exc)}))
                     return
-                message = str(data.get("message", "")).strip()
-                if not message:
-                    self._respond(400, "application/json", '{"error":"empty message"}')
-                    return
-                message = message[:2000]
+                message = payload.message
                 idir = config.interventions_dir
                 idir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
@@ -1097,12 +1093,13 @@ def _make_handler(config: Config):
                 if not _token_ok(self.headers, self.path, config):
                     self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
                 length = int(self.headers.get("Content-Length", 0) or 0)
-                mode = "rebirth"
-                if 0 < length <= 1000:
-                    try:
-                        mode = str(json.loads(self.rfile.read(length)).get("mode") or "rebirth")
-                    except (json.JSONDecodeError, ValueError):
-                        mode = "rebirth"
+                if length > 1000:
+                    self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
+                try:
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
+                mode = payload.mode
                 self._respond(200, "application/json", json.dumps(_ctrl_reset(config, mode)))
             elif self.path == "/api/config":
                 # Save settings to the machine-local overlay (config.local.toml), then optionally
@@ -1111,12 +1108,12 @@ def _make_handler(config: Config):
                 if length <= 0 or length > 20000:
                     self._respond(400, "application/json", '{"ok":false,"error":"bad body"}'); return
                 try:
-                    body = json.loads(self.rfile.read(length))
-                except (json.JSONDecodeError, ValueError):
-                    self._respond(400, "application/json", '{"ok":false,"error":"invalid json"}'); return
+                    body = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
                 import settings_schema
                 from config import save_overrides
-                overrides, errors = settings_schema.build_overrides(body.get("settings") or {})
+                overrides, errors = settings_schema.build_overrides(body.settings)
                 if errors:
                     self._respond(400, "application/json",
                                   json.dumps({"ok": False, "errors": errors})); return
@@ -1131,7 +1128,7 @@ def _make_handler(config: Config):
                 # Apply by restarting eidos on the new config (boots PAUSED → click GO), unless the
                 # caller just wants to save. The dashboard re-reads config per request, so the menu
                 # reflects the change immediately regardless.
-                applied = bool(body.get("apply", True))
+                applied = bool(body.apply)
                 result = _ctrl_start(config) if applied else {"ok": True}
                 self._respond(200, "application/json", json.dumps({
                     "ok": True, "saved": overrides, "applied": applied,
@@ -1140,12 +1137,14 @@ def _make_handler(config: Config):
                     "control": result}))
             elif self.path == "/api/llm/test":
                 length = int(self.headers.get("Content-Length", 0) or 0)
+                if length > 2000:
+                    self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
                 url = config.llm_url
-                if 0 < length <= 2000:
-                    try:
-                        url = (json.loads(self.rfile.read(length)).get("url") or url).strip() or url
-                    except (json.JSONDecodeError, ValueError):
-                        pass
+                try:
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
+                url = payload.url or url
                 self._respond(200, "application/json", json.dumps(_probe_llm(url)))
             elif self.path == "/api/chat_hold":
                 # Listening hold — focusing the chat box quiets the loop. Best-effort,
@@ -1153,12 +1152,13 @@ def _make_handler(config: Config):
                 if not _token_ok(self.headers, self.path, config):
                     self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
                 length = int(self.headers.get("Content-Length", 0) or 0)
-                held = False
-                if 0 < length <= 1000:
-                    try:
-                        held = bool(json.loads(self.rfile.read(length)).get("held"))
-                    except (json.JSONDecodeError, ValueError):
-                        held = False
+                if length > 1000:
+                    self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
+                try:
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
+                held = payload.held
                 self._respond(200, "application/json", json.dumps(_write_chat_hold(config, held)))
             elif self.path == "/api/self_guide":
                 # Operator saves the LIVE self-guide (clears any pending eiDOS proposal).
@@ -1168,12 +1168,12 @@ def _make_handler(config: Config):
                 if length > 20000:
                     self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
                 try:
-                    data = json.loads(self.rfile.read(length)) if length else {}
-                except (json.JSONDecodeError, ValueError):
-                    self._respond(400, "application/json", '{"ok":false,"error":"invalid json"}'); return
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
                 from memory import write_self_guide
                 try:
-                    write_self_guide(config, str(data.get("content", "")))
+                    write_self_guide(config, payload.content)
                     try:
                         config.self_guide_proposed_path.unlink()
                     except FileNotFoundError:
@@ -1193,46 +1193,50 @@ def _make_handler(config: Config):
                 if not _token_ok(self.headers, self.path, config):
                     self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
                 length = int(self.headers.get("Content-Length", 0) or 0)
-                label = ""
-                if 0 < length <= 2000:
-                    try:
-                        label = str(json.loads(self.rfile.read(length)).get("label", ""))[:80]
-                    except (json.JSONDecodeError, ValueError):
-                        label = ""
+                if length > 2000:
+                    self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
+                try:
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
+                label = payload.label
                 self._respond(200, "application/json", json.dumps(_git_checkpoint_endpoint(config, label)))
             elif self.path == "/api/git/restore":
                 if not _token_ok(self.headers, self.path, config):
                     self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
                 length = int(self.headers.get("Content-Length", 0) or 0)
-                tag = ""
-                if 0 < length <= 2000:
-                    try:
-                        tag = str(json.loads(self.rfile.read(length)).get("tag", ""))[:120]
-                    except (json.JSONDecodeError, ValueError):
-                        tag = ""
+                if length > 2000:
+                    self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
+                try:
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
+                tag = payload.tag
                 self._respond(200, "application/json", json.dumps(_git_restore_endpoint(config, tag)))
             elif self.path == "/api/selfedit/apply":
                 if not _token_ok(self.headers, self.path, config):
                     self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
                 length = int(self.headers.get("Content-Length", 0) or 0)
-                pid = ""
-                if 0 < length <= 2000:
-                    try:
-                        pid = str(json.loads(self.rfile.read(length)).get("id", ""))[:80]
-                    except (json.JSONDecodeError, ValueError):
-                        pid = ""
+                if length > 2000:
+                    self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
+                try:
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
+                pid = payload.id
                 self._respond(200, "application/json", json.dumps(_selfedit_apply_endpoint(config, pid)))
             elif self.path == "/api/selfedit/reject":
                 if not _token_ok(self.headers, self.path, config):
                     self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
                 import selfedit
                 length = int(self.headers.get("Content-Length", 0) or 0)
-                pid, reason = "", ""
-                if 0 < length <= 2000:
-                    try:
-                        d = json.loads(self.rfile.read(length)); pid = str(d.get("id",""))[:80]; reason = str(d.get("reason",""))[:200]
-                    except (json.JSONDecodeError, ValueError):
-                        pass
+                if length > 2000:
+                    self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
+                try:
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
+                pid, reason = payload.id, payload.reason
                 self._respond(200, "application/json", json.dumps(selfedit.reject(config, pid, reason)))
             else:
                 self._respond(404, "text/plain", "not found")

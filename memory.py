@@ -14,6 +14,7 @@ from pathlib import Path
 
 from config import Config
 from atomicio import replace_with_retry
+from typed_boundary import validate_chat_reply_record, validate_observation_record
 
 
 def read_goal(config: Config) -> str:
@@ -227,6 +228,7 @@ def append_chat_line(config: Config, text: str, *, spoken: bool = False, tick=No
             if same_utterance and recent:
                 last["text"] = (text if len(text) >= len(lt) else lt)[:2000]
                 last["spoken"] = bool(spoken or last.get("spoken"))
+                last = validate_chat_reply_record(last)
                 lines[-1] = json.dumps(last)
                 try:
                     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -238,6 +240,7 @@ def append_chat_line(config: Config, text: str, *, spoken: bool = False, tick=No
              "text": text[:2000], "spoken": bool(spoken)}
     if tick is not None:
         entry["tick"] = int(tick)
+    entry = validate_chat_reply_record(entry)
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
@@ -275,6 +278,7 @@ def append_observation(config: Config, entry: dict) -> None:
     config.workspace.mkdir(parents=True, exist_ok=True)
     if "ts" not in entry:
         entry["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    entry = validate_observation_record(entry)
     line = json.dumps(entry, ensure_ascii=False) + "\n"
     with open(config.observations_path, "a", encoding="utf-8") as f:
         f.write(line)
@@ -313,9 +317,10 @@ def read_recent_observations(
             break
         try:
             entry = json.loads(line)
+            entry = validate_observation_record(entry)
             result.append(entry)
             total_chars += len(line)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             # Skip malformed lines (possible crash corruption)
             continue
 
@@ -400,9 +405,9 @@ def validate_observations(config: Config) -> int:
         return 0
 
     try:
-        json.loads(last)
+        validate_observation_record(json.loads(last))
         return 0
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         # Last line is malformed — truncate it
         with open(config.observations_path, "w", encoding="utf-8") as f:
             f.writelines(lines[:-1])
@@ -432,5 +437,4 @@ def read_interventions(config: Config) -> list[dict]:
             continue
 
     return results
-
 

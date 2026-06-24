@@ -1,0 +1,1261 @@
+{
+  "config": {
+    "document": {
+      "$defs": {
+        "DashboardConfigSection": {
+          "additionalProperties": false,
+          "properties": {
+            "port": {
+              "anyOf": [
+                {
+                  "maximum": 65535,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Port"
+            },
+            "token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Token"
+            },
+            "voice_port": {
+              "anyOf": [
+                {
+                  "maximum": 65535,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Voice Port"
+            }
+          },
+          "title": "DashboardConfigSection",
+          "type": "object"
+        },
+        "DelegateConfigSection": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_dirs": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Allowed Dirs"
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Enabled"
+            },
+            "max_sessions": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Sessions"
+            },
+            "pi_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pi Model"
+            },
+            "pi_path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pi Path"
+            },
+            "pi_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pi Provider"
+            },
+            "timeout_s": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Timeout S"
+            }
+          },
+          "title": "DelegateConfigSection",
+          "type": "object"
+        },
+        "IdeConfigSection": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Enabled"
+            },
+            "max_stints": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Stints"
+            },
+            "pi_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pi Model"
+            },
+            "pi_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pi Provider"
+            },
+            "port": {
+              "anyOf": [
+                {
+                  "maximum": 65535,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Port"
+            },
+            "stint_idle_timeout_s": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stint Idle Timeout S"
+            }
+          },
+          "title": "IdeConfigSection",
+          "type": "object"
+        },
+        "LlmConfigSection": {
+          "additionalProperties": false,
+          "properties": {
+            "frequency_penalty": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Frequency Penalty"
+            },
+            "grammar_enabled": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Grammar Enabled"
+            },
+            "max_tokens": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Tokens"
+            },
+            "min_p": {
+              "anyOf": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Min P"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "presence_penalty": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Presence Penalty"
+            },
+            "repeat_penalty": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Repeat Penalty"
+            },
+            "request_timeout_s": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Request Timeout S"
+            },
+            "temperature": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Temperature"
+            },
+            "top_k": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Top K"
+            },
+            "top_p": {
+              "anyOf": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Top P"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Url"
+            }
+          },
+          "title": "LlmConfigSection",
+          "type": "object"
+        },
+        "PathsConfigSection": {
+          "additionalProperties": false,
+          "properties": {
+            "workspace": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace"
+            }
+          },
+          "title": "PathsConfigSection",
+          "type": "object"
+        },
+        "SafetyConfigSection": {
+          "additionalProperties": false,
+          "properties": {
+            "bg_job_max_age_s": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Bg Job Max Age S"
+            },
+            "bg_output_max_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Bg Output Max Bytes"
+            },
+            "cmd_async_ceiling_s": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Async Ceiling S"
+            },
+            "cmd_timeout_s": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cmd Timeout S"
+            },
+            "disk_min_gb": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Disk Min Gb"
+            },
+            "protected_patterns": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Protected Patterns"
+            },
+            "ram_max_pct": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 100,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ram Max Pct"
+            }
+          },
+          "title": "SafetyConfigSection",
+          "type": "object"
+        },
+        "TickConfigSection": {
+          "additionalProperties": false,
+          "properties": {
+            "interval_active_s": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Interval Active S"
+            },
+            "interval_s": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Interval S"
+            },
+            "loop_detect_window": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Loop Detect Window"
+            }
+          },
+          "title": "TickConfigSection",
+          "type": "object"
+        }
+      },
+      "additionalProperties": true,
+      "description": "Typed subset of config.toml.\n\nTop-level extras stay allowed for unmodeled legacy sections, while modeled\nsafety-sensitive sections reject unknown keys.",
+      "properties": {
+        "creature_mode": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Creature Mode"
+        },
+        "creature_shell": {
+          "anyOf": [
+            {
+              "enum": [
+                "wsl",
+                "powershell"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Creature Shell"
+        },
+        "creature_wsl_distro": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Creature Wsl Distro"
+        },
+        "dashboard": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardConfigSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "delegate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DelegateConfigSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ide": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IdeConfigSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LlmConfigSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "paths": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PathsConfigSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "safety": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SafetyConfigSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tick": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TickConfigSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "ConfigDocument",
+      "type": "object"
+    },
+    "env": {
+      "description": "Validated process-env overrides for load_config().",
+      "properties": {
+        "llm_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Llm Url"
+        },
+        "mock": {
+          "default": false,
+          "title": "Mock",
+          "type": "boolean"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace"
+        }
+      },
+      "title": "EidosEnvOverrides",
+      "type": "object"
+    },
+    "resolved": {
+      "additionalProperties": false,
+      "properties": {
+        "bg_job_max_age_s": {
+          "exclusiveMinimum": 0,
+          "title": "Bg Job Max Age S",
+          "type": "number"
+        },
+        "cmd_async_ceiling_s": {
+          "exclusiveMinimum": 0,
+          "title": "Cmd Async Ceiling S",
+          "type": "number"
+        },
+        "cmd_timeout_s": {
+          "exclusiveMinimum": 0,
+          "title": "Cmd Timeout S",
+          "type": "number"
+        },
+        "dashboard_port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Dashboard Port",
+          "type": "integer"
+        },
+        "llm_url": {
+          "minLength": 1,
+          "title": "Llm Url",
+          "type": "string"
+        },
+        "protected_patterns": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Protected Patterns",
+          "type": "array"
+        },
+        "voice_port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Voice Port",
+          "type": "integer"
+        },
+        "workspace_dir": {
+          "minLength": 1,
+          "title": "Workspace Dir",
+          "type": "string"
+        }
+      },
+      "required": [
+        "llm_url",
+        "workspace_dir",
+        "cmd_timeout_s",
+        "cmd_async_ceiling_s",
+        "bg_job_max_age_s",
+        "dashboard_port",
+        "voice_port",
+        "protected_patterns"
+      ],
+      "title": "ResolvedConfigBoundary",
+      "type": "object"
+    }
+  },
+  "dashboard_posts": {
+    "/api/chat": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "title": "DashboardChatPost",
+      "type": "object"
+    },
+    "/api/chat_hold": {
+      "additionalProperties": false,
+      "properties": {
+        "held": {
+          "default": false,
+          "title": "Held",
+          "type": "boolean"
+        }
+      },
+      "title": "DashboardChatHoldPost",
+      "type": "object"
+    },
+    "/api/config": {
+      "additionalProperties": false,
+      "properties": {
+        "apply": {
+          "default": true,
+          "title": "Apply",
+          "type": "boolean"
+        },
+        "settings": {
+          "additionalProperties": true,
+          "minProperties": 1,
+          "title": "Settings",
+          "type": "object"
+        }
+      },
+      "required": [
+        "settings"
+      ],
+      "title": "DashboardConfigPost",
+      "type": "object"
+    },
+    "/api/control/reset": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "default": "rebirth",
+          "enum": [
+            "rebirth",
+            "full"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "DashboardResetPost",
+      "type": "object"
+    },
+    "/api/git/checkpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "default": "",
+          "maxLength": 80,
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "title": "DashboardGitCheckpointPost",
+      "type": "object"
+    },
+    "/api/git/restore": {
+      "additionalProperties": false,
+      "properties": {
+        "tag": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Tag",
+          "type": "string"
+        }
+      },
+      "title": "DashboardGitRestorePost",
+      "type": "object"
+    },
+    "/api/llm/test": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "title": "DashboardLlmTestPost",
+      "type": "object"
+    },
+    "/api/self_guide": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "default": "",
+          "maxLength": 20000,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "title": "DashboardSelfGuidePost",
+      "type": "object"
+    },
+    "/api/selfedit/apply": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "DashboardSelfEditApplyPost",
+      "type": "object"
+    },
+    "/api/selfedit/reject": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "maxLength": 200,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "DashboardSelfEditRejectPost",
+      "type": "object"
+    }
+  },
+  "generated_by": "scripts/check_boundary_schemas.py --write",
+  "state_records": {
+    "chat_reply": {
+      "additionalProperties": true,
+      "properties": {
+        "spoken": {
+          "default": false,
+          "title": "Spoken",
+          "type": "boolean"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Status"
+        },
+        "text": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "tick": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tick"
+        },
+        "ts": {
+          "title": "Ts",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ts",
+        "text"
+      ],
+      "title": "ChatReplyRecord",
+      "type": "object"
+    },
+    "job": {
+      "additionalProperties": true,
+      "properties": {
+        "cmd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cmd"
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit Code"
+        },
+        "exit_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit Path"
+        },
+        "intent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kind"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "notified": {
+          "default": false,
+          "title": "Notified",
+          "type": "boolean"
+        },
+        "output_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Path"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pid"
+        },
+        "started": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started"
+        },
+        "started_ts": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started Ts"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "completed",
+            "failed",
+            "timed_out",
+            "reaped"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "waited": {
+          "default": false,
+          "title": "Waited",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ],
+      "title": "JobRecord",
+      "type": "object"
+    },
+    "observation": {
+      "additionalProperties": true,
+      "properties": {
+        "args": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Args"
+        },
+        "duration_s": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration S"
+        },
+        "fail_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fail Kind"
+        },
+        "output": {
+          "default": null,
+          "title": "Output"
+        },
+        "success": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Success"
+        },
+        "tick": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "const": "compaction",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tick"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool"
+        },
+        "ts": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ts"
+        }
+      },
+      "title": "ObservationRecord",
+      "type": "object"
+    }
+  }
+}
