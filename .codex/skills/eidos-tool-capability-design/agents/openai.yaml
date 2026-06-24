@@ -1,0 +1,4 @@
+interface:
+  display_name: "eiDOS Tool Capability Design"
+  short_description: "Design eiDOS tools, atoms, skills, and delegates."
+  default_prompt: "Use $eidos-tool-capability-design to design an eiDOS tool or skill capability."

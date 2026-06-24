@@ -1,0 +1,4 @@
+interface:
+  display_name: "eiDOS Tick Context Agency"
+  short_description: "Improve eiDOS context, salience, recall, and action."
+  default_prompt: "Use $eidos-tick-context-agency to redesign an eiDOS tick context or agency path."

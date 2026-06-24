@@ -1,0 +1,4 @@
+interface:
+  display_name: "eiDOS Organism Loop Design"
+  short_description: "Model creature drives as honest feedback loops."
+  default_prompt: "Use $eidos-organism-loop-design to design an eiDOS drive or organism loop."

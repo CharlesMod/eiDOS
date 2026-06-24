@@ -1,0 +1,4 @@
+interface:
+  display_name: "eiDOS Tradeoff Decision"
+  short_description: "eiDOS architecture choices with honest tradeoffs."
+  default_prompt: "Use $eidos-tradeoff-decision to decide an eiDOS architecture tradeoff."

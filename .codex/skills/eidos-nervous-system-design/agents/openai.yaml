@@ -1,0 +1,4 @@
+interface:
+  display_name: "eiDOS Nervous System Design"
+  short_description: "Design eiDOS V3 organs, bus seams, and senses."
+  default_prompt: "Use $eidos-nervous-system-design to design an eiDOS nervous-system change."
