@@ -21,7 +21,9 @@ Landed & gate-green, all **dark behind their flags** (running eiDOS unaffected u
 
 Full integrated regression: **996 passed** (3 pre-existing environmental failures unrelated to this work: `python`-alias-on-PATH, Windows `pi.cmd`).
 
-Remaining in Phase 0/1: **0.5** slot-sharing spike (MANUAL — needs the live GPU; pause eiDOS + stop HouseAI-Llama first per CLAUDE.md) and **1.1** organ lifecycle hooks (not yet built). Then Phase 2 (memory core) begins.
+- ✅ **0.5** slot-sharing spike — DONE (2026-07-03). gemma4-12b `--parallel 2`: per-slot KV ≈ 454 MiB, concurrent throughput 70.8 tok/s each vs 77.8 solo (~9% hit). **Verdict: slot-sharing is the primary substrate for generals** (§5b). No small GGUF present for a CPU tier.
+
+Remaining in Phase 0/1: **1.1** organ lifecycle hooks (agent in progress). Then Phase 2 (memory core) begins. Note: 0.5 required stopping the live services — see `RUNTIME_SPRINTER.md` for the correct Sprinter procedure.
 
 ---
 

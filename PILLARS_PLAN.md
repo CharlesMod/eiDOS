@@ -263,11 +263,26 @@ Shadow {
 ### 5b. Generals — delegated LLM minds
 
 A general is a scoped mind on a mission. One contract, three deployments (I9): **slot-sharing
-the house model** (llama.cpp parallel slots on :8081 — separate KV, arbiter-mediated below the
-mind's priority; needs a T8-style cost spike before design freeze), **CPU-run small model**
-(qwen-class on spare cores — slow, genuinely parallel, lesser grade), or **remote ganglia**
-(Pi/Jetson agents over the ZMQ transport — the "Pi agents"). Grade follows substrate; missions
-declare required grade; the capability registry binds to what the body has (I8).
+the house model** (llama.cpp parallel slots — separate KV, arbiter-mediated below the mind's
+priority), **CPU-run small model** (qwen-class on spare cores — slow, genuinely parallel, lesser
+grade), or **remote ganglia** (Pi/Jetson agents over the ZMQ transport — the "Pi agents"). Grade
+follows substrate; missions declare required grade; the capability registry binds to what the
+body has (I8).
+
+> **0.5 slot-sharing spike — RESOLVED (measured 2026-07-03 on Sprinter, RTX 5080 16 GB, gemma4-12b
+> q4 full-offload).** Slot-sharing is the clear primary substrate for generals:
+> - **KV per extra slot (8k ctx) ≈ 454 MiB** (parallel-1 = 10767 MiB, parallel-2 = 11221 MiB
+>   resident incl. ~2.6 GB desktop). Model+mmproj+1 slot ≈ 8.2 GB; each further general slot is
+>   cheap. On 16 GB that leaves room for **several** concurrent general slots at 8k ctx.
+> - **Throughput hit is tiny**: one decode 77.8 tok/s → two concurrent decodes **70.8 tok/s each**
+>   (~9% per-slot loss, ~1.8× aggregate). Continuous batching means the mind + a general run
+>   effectively simultaneously — no serialization behind the mind.
+> - **Verdict:** default generals to **`llama.cpp --parallel` slots on the house gemma model**,
+>   arbiter-mediated at a priority below the mind. No second model to load; the GPU stays the
+>   home. CPU-small stays an *optional* lesser-grade tier — but note **no small GGUF is present**
+>   on Sprinter today (only gemma-12b + qwen-27b), so a CPU tier needs a small model acquired
+>   first; the slot-sharing numbers mean we likely won't need it. Remote ganglia remain the
+>   distributed-robot path (I9), unchanged.
 
 ```
 Mission {
