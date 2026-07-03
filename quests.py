@@ -1,0 +1,551 @@
+"""The System — the quest engine (PILLARS_PLAN §7, PILLARS_TODO 5.1).
+
+This is the ENGINE only: issue, track, adjudicate, and cadence the quests that goad the creature
+onto new ground. The fourth-wall Administrator LLM (§7a / phase 5.2) that AUTHORS quests, and the
+level-gates (phase 4.3) that some rewards unlock, are LATER — this module leaves clean seams for
+them (`propose()` to enqueue, `reward_sink`/criteria hooks for adjudication) and builds neither.
+
+Doctrine bindings (PILLARS_PLAN §0):
+  §0.5  The glue judges; the creature never grades its own homework. A quest's success_criteria is
+        a GLUE-CHECKABLE spec — a typed predicate over a passed-in stats dict (persona / objectives
+        / skill manifest), NOT free text the model could narrate its way past. `check()` evaluates
+        that predicate against typed state; self-report is never the reward signal.
+  §0.4  Every constant here is either derived or a DECLARED knob with a one-line justification.
+  §0.2  No line of code names the behavior it hopes to produce. This module builds the FIELD — an
+        impersonal trainer that issues one challenge at a time on a state-driven cadence — and
+        the "competent, not coddled" growth is what a creature under that field does.
+
+Cadence (the not-coddled rule, §7): exactly ONE active quest at a time (BIBLE L-2). A queue holds
+proposed quests; `issue_next()` promotes one to active ONLY when the prior closed AND ≥1 sleep
+cycle has passed AND condition is healthy (not RECOVERY — read from glue). Silence otherwise.
+Expiry / ignore is itself recorded as a failure-lite episode-shaped record — challenge is not
+withheld to protect the creature from challenge.
+
+State lives in a bounded `workspace/quests.jsonl` (+ dated monthly archive), the same
+single-writer / bounded-file / monthly-archive shape as observations.jsonl and pressures.jsonl.
+Ships DARK behind `config.pillars_quests_enabled` (default False); a LATER phase wires
+`render_active()` into the context and calls `issue_next()` on the sleep boundary.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+# --- Declared knobs (§0.4: each a labeled design knob with its one-line justification) -----------
+QUESTS_MAX_BYTES = 1_000_000   # declared: rotate quests.jsonl at ~1 MB — years of quests, not hours
+SLEEPS_REQUIRED = 1            # declared (§7): ≥1 sleep cycle between a close and the next issue —
+                               # mandatory digestion, the spacing effect as a hard floor
+_HEALTHY_BLOCK = ("RECOVERY",)  # declared (§7): the ONLY condition that stays the System's hand —
+                               # silence is reserved for genuine recovery, never to dodge challenge
+ARCHIVE_PREFIX = "quests_archive_"   # + YYYYMM.jsonl (house monthly-archive convention)
+
+# Quest lifecycle states.
+OFFERED = "offered"     # in the queue, not yet promoted
+ACTIVE = "active"       # the one live quest (at most one)
+PASSED = "passed"       # criteria met; reward applied
+FAILED = "failed"       # closed unmet by the model (explicit) — reserved for a later abandon path
+EXPIRED = "expired"     # expiry reached (or ignored) before criteria met → failure-lite
+_TERMINAL = (PASSED, FAILED, EXPIRED)
+
+# Reward kinds. Only `xp` pays out in 5.1; `unlock`/`capacity` are recorded and handed to the
+# reward_sink (the seam the level-gate phase fills) — this engine never unlocks a tier itself.
+REWARD_XP = "xp"
+REWARD_UNLOCK = "unlock"
+REWARD_CAPACITY = "capacity"
+
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+# ============================================================================================
+# Success criteria — the GLUE-CHECKABLE spec (§0.5)
+# ============================================================================================
+# A criterion is a typed predicate over a stats dict, NOT free text. The stats dict is the typed
+# view the harness passes at check time (a LATER phase assembles it): persona, objectives, and the
+# skill manifest. `Criterion.check(stats)` returns a bool from deterministic comparison — the model
+# has no say in whether it passed.
+#
+# Supported (grind-proof primitives; a criterion names a PATH into stats and an OP + threshold):
+#   path : dotted path into the stats dict, e.g. "persona.level" or "skills.trusted_count"
+#   op   : one of ">=", ">", "==", "<=", "<", "in", "contains"
+#   value: the threshold / expected value
+# `all_of` / `any_of` compose criteria so a quest can demand a conjunction (a level AND a
+# calibration floor) — the Administrator (5.2) will emit these, glue evaluates them.
+
+_OPS: dict[str, Callable[[Any, Any], bool]] = {
+    ">=": lambda a, b: a is not None and a >= b,
+    ">": lambda a, b: a is not None and a > b,
+    "<=": lambda a, b: a is not None and a <= b,
+    "<": lambda a, b: a is not None and a < b,
+    "==": lambda a, b: a == b,
+    "!=": lambda a, b: a != b,
+    "in": lambda a, b: a in b if b is not None else False,
+    "contains": lambda a, b: b in a if a is not None else False,
+}
+
+
+def _dig(stats: dict, path: str) -> Any:
+    """Resolve a dotted path into the typed stats dict. Missing → None (a criterion over an absent
+    stat simply cannot pass — glue never guesses)."""
+    cur: Any = stats
+    for part in (path or "").split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+@dataclass
+class Criterion:
+    """One glue-checkable predicate over the typed stats dict (§0.5).
+
+    Leaf form:   Criterion(path="persona.level", op=">=", value=3)
+    Compound:    Criterion(all_of=[...]) / Criterion(any_of=[...])
+    """
+    path: str = ""
+    op: str = ">="
+    value: Any = None
+    all_of: Optional[list["Criterion"]] = None
+    any_of: Optional[list["Criterion"]] = None
+
+    def check(self, stats: dict) -> bool:
+        if self.all_of is not None:
+            return all(c.check(stats) for c in self.all_of)
+        if self.any_of is not None:
+            return any(c.check(stats) for c in self.any_of)
+        fn = _OPS.get(self.op)
+        if fn is None:
+            return False
+        actual = _dig(stats, self.path)
+        if actual is None:
+            return False   # a criterion over an absent stat can never pass — glue never guesses
+        return bool(fn(actual, self.value))
+
+    def to_dict(self) -> dict:
+        if self.all_of is not None:
+            return {"all_of": [c.to_dict() for c in self.all_of]}
+        if self.any_of is not None:
+            return {"any_of": [c.to_dict() for c in self.any_of]}
+        return {"path": self.path, "op": self.op, "value": self.value}
+
+    @staticmethod
+    def from_dict(d: dict) -> "Criterion":
+        if not isinstance(d, dict):
+            return Criterion(op="==", value=object())  # unsatisfiable — corrupt criteria never pass
+        if "all_of" in d:
+            return Criterion(all_of=[Criterion.from_dict(x) for x in d.get("all_of") or []])
+        if "any_of" in d:
+            return Criterion(any_of=[Criterion.from_dict(x) for x in d.get("any_of") or []])
+        return Criterion(path=d.get("path", ""), op=d.get("op", ">="), value=d.get("value"))
+
+
+# ============================================================================================
+# Quest schema
+# ============================================================================================
+@dataclass
+class Quest:
+    id: str
+    directive: str                       # terse, impersonal — the voice (§7)
+    success_criteria: Criterion          # GLUE-CHECKABLE (§0.5), never free text
+    reward: dict = field(default_factory=lambda: {"kind": REWARD_XP, "amount": 0})
+    tier: int = 1                        # difficulty / level tier (level-gates are a LATER phase)
+    expiry_ts: Optional[float] = None    # epoch seconds; None = no expiry (e.g. hidden achievements)
+    hidden: bool = False                 # achievement: offered+hidden is not rendered; reveals on pass
+    kind: str = "quest"                  # "quest" | "daily" — daily quests are recurring drill slots
+    state: str = OFFERED
+    created_ts: str = field(default_factory=_now)
+    closed_ts: Optional[str] = None
+    outcome: Optional[str] = None        # freeform close note (glue-set, not self-report)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "directive": self.directive,
+            "success_criteria": self.success_criteria.to_dict(),
+            "reward": self.reward,
+            "tier": self.tier,
+            "expiry_ts": self.expiry_ts,
+            "hidden": self.hidden,
+            "kind": self.kind,
+            "state": self.state,
+            "created_ts": self.created_ts,
+            "closed_ts": self.closed_ts,
+            "outcome": self.outcome,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "Quest":
+        return Quest(
+            id=d["id"],
+            directive=d.get("directive", ""),
+            success_criteria=Criterion.from_dict(d.get("success_criteria") or {}),
+            reward=d.get("reward") or {"kind": REWARD_XP, "amount": 0},
+            tier=int(d.get("tier", 1)),
+            expiry_ts=d.get("expiry_ts"),
+            hidden=bool(d.get("hidden", False)),
+            kind=d.get("kind", "quest"),
+            state=d.get("state", OFFERED),
+            created_ts=d.get("created_ts") or _now(),
+            closed_ts=d.get("closed_ts"),
+            outcome=d.get("outcome"),
+        )
+
+    def is_expired(self, now: Optional[float] = None) -> bool:
+        if self.expiry_ts is None:
+            return False
+        return (now if now is not None else time.time()) >= self.expiry_ts
+
+
+# ============================================================================================
+# Persistence — single writer, bounded jsonl + monthly archive (house pattern)
+# ============================================================================================
+def _live_path(config) -> Path:
+    return config.workspace / "quests.jsonl"
+
+
+def _archive_path(config) -> Path:
+    return config.state_dir / f"{ARCHIVE_PREFIX}{time.strftime('%Y%m')}.jsonl"
+
+
+class QuestStore:
+    """The single writer of quest state. Whole-file rewrite (the quest set is small — one active,
+    a short queue, a bounded terminal tail), atomic via temp+replace. Rotation matches
+    memory.truncate_observations / pressures.PressureLedger: when the live file crosses max_bytes,
+    the oldest TERMINAL quests roll into a dated monthly archive and the live file keeps only the
+    live/queued set plus a recent terminal tail."""
+
+    def __init__(self, config, *, max_bytes: int = QUESTS_MAX_BYTES):
+        self.config = config
+        self.max_bytes = int(max_bytes)
+
+    # --- read ---------------------------------------------------------------------------------
+    def load(self) -> list[Quest]:
+        path = _live_path(self.config)
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return []
+        out: list[Quest] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(Quest.from_dict(json.loads(line)))
+            except (ValueError, KeyError, json.JSONDecodeError):
+                continue
+        return out
+
+    def active(self) -> Optional[Quest]:
+        for q in self.load():
+            if q.state == ACTIVE:
+                return q
+        return None
+
+    def queue(self) -> list[Quest]:
+        return [q for q in self.load() if q.state == OFFERED]
+
+    # --- write --------------------------------------------------------------------------------
+    def save(self, quests: list[Quest]) -> None:
+        """Atomically rewrite the whole quest set, rotating terminal overflow to the archive first."""
+        self.config.workspace.mkdir(parents=True, exist_ok=True)
+        quests = self._rotate_if_needed(quests)
+        path = _live_path(self.config)
+        tmp = path.with_suffix(".jsonl.tmp")
+        body = "\n".join(json.dumps(q.to_dict(), ensure_ascii=False) for q in quests)
+        tmp.write_text(body + ("\n" if body else ""), encoding="utf-8")
+        tmp.replace(path)
+
+    def _rotate_if_needed(self, quests: list[Quest]) -> list[Quest]:
+        """When the serialized set would exceed max_bytes, archive the OLDEST terminal quests and
+        drop them from the live file. Live/queued quests are never archived; a small terminal tail
+        stays for context. Returns the (possibly trimmed) list to persist."""
+        body = "\n".join(json.dumps(q.to_dict(), ensure_ascii=False) for q in quests)
+        if len(body.encode("utf-8")) < self.max_bytes:
+            return quests
+        live = [q for q in quests if q.state not in _TERMINAL]
+        terminal = [q for q in quests if q.state in _TERMINAL]
+        terminal.sort(key=lambda q: q.closed_ts or q.created_ts)
+        keep_tail = terminal[-10:]          # declared: keep the last 10 closed quests inline
+        archived = terminal[:-10]
+        if archived:
+            try:
+                self.config.state_dir.mkdir(parents=True, exist_ok=True)
+                with open(_archive_path(self.config), "a", encoding="utf-8", errors="replace") as f:
+                    for q in archived:
+                        f.write(json.dumps(q.to_dict(), ensure_ascii=False) + "\n")
+            except OSError:
+                pass
+        return live + keep_tail
+
+
+# ============================================================================================
+# Reward sink — the payout seam (§0.5: payout through the standard XP path)
+# ============================================================================================
+def default_reward_sink(config, quest: "Quest", persona: Optional[dict] = None) -> None:
+    """Apply a quest's reward via the standard XP path. `unlock`/`capacity` rewards are recorded on
+    the quest (state persists them) and are the level-gate phase's job — this engine flags the
+    intent; it does not unlock a tier. Requires a persona dict for XP payout; if none is supplied
+    the caller wires the sink to persona.add_xp itself."""
+    reward = quest.reward or {}
+    if reward.get("kind") == REWARD_XP and persona is not None:
+        try:
+            import persona as persona_mod
+            persona_mod.award_xp(persona, int(reward.get("amount", 0)),
+                                 reason=f"quest:{quest.id}")
+        except Exception:  # noqa: BLE001 - reward payout is best-effort, never brick the loop
+            pass
+
+
+# ============================================================================================
+# The System — engine over the store
+# ============================================================================================
+class System:
+    """The quest engine. One active quest at a time; state-driven cadence; glue adjudication.
+
+    `reward_sink(config, quest)` is the payout seam — defaults to `default_reward_sink` bound so it
+    calls persona.award_xp. `propose()` is the ONLY hook the Administrator (5.2) needs to enqueue.
+    """
+
+    def __init__(self, config, *, reward_sink: Optional[Callable[[Any, "Quest"], None]] = None):
+        self.config = config
+        self.store = QuestStore(config)
+        self.reward_sink = reward_sink or (lambda cfg, q: default_reward_sink(cfg, q))
+
+    # --- enqueue (the Administrator's only hook, §7a) ----------------------------------------
+    def propose(self, quest: "Quest") -> "Quest":
+        """Enqueue a proposed quest (state=offered). The seam the Administrator (5.2) enqueues
+        through — it authors quests; this engine issues/tracks/adjudicates them. De-dups by id."""
+        quests = self.store.load()
+        if any(q.id == quest.id for q in quests):
+            return next(q for q in quests if q.id == quest.id)
+        quest.state = OFFERED
+        quests.append(quest)
+        self.store.save(quests)
+        return quest
+
+    # --- cadence: issue the next quest (the not-coddled state gate, §7) ----------------------
+    def issue_next(self, *, sleeps_since_close: int, condition: str) -> Optional["Quest"]:
+        """Promote one queued quest to ACTIVE — but ONLY when the not-coddled cadence permits:
+          1. no quest is currently active (BIBLE L-2: exactly one at a time), AND
+          2. the prior quest closed AND ≥ SLEEPS_REQUIRED sleep cycles have passed since
+             (`sleeps_since_close` is fed in — this engine never reads the clock), AND
+          3. condition is healthy — NOT in _HEALTHY_BLOCK (RECOVERY). Read from glue by the caller.
+        Returns the newly active quest, or None (silence — the correct default, §7).
+
+        The caller feeds `sleeps_since_close` (a counter it advances on each sleep boundary) and
+        `condition` (glue.compute_condition). Event-driven, not scheduled (ARCH #1)."""
+        if self.store.active() is not None:
+            return None                       # one active quest at a time — silence
+        if condition in _HEALTHY_BLOCK:
+            return None                       # silence is reserved for genuine RECOVERY
+        if int(sleeps_since_close) < SLEEPS_REQUIRED:
+            return None                       # mandatory digestion between challenges
+        queue = self.store.queue()
+        if not queue:
+            return None
+        # FIFO within the queue; the Administrator decides ordering by proposing in order.
+        nxt = queue[0]
+        quests = self.store.load()
+        for q in quests:
+            if q.id == nxt.id:
+                q.state = ACTIVE
+                break
+        self.store.save(quests)
+        return next(q for q in self.store.load() if q.id == nxt.id)
+
+    # --- adjudication (glue judges; self-report never counts, §0.5) --------------------------
+    def check(self, quest: "Quest", stats: dict, *, now: Optional[float] = None) -> dict:
+        """Adjudicate the ACTIVE quest against the typed `stats` dict. GLUE judges — the criteria
+        predicate is evaluated over typed state, never self-report.
+
+        Order of resolution:
+          - criteria met  → PASS: apply reward via the sink, close PASSED, return {passed, quest}.
+          - expiry reached (unmet) → EXPIRED: close, return an episode-shaped failure-lite record.
+          - otherwise      → still active, no change.
+
+        Returns {"passed": bool, "expired": bool, "quest": Quest, "reveal": bool, "episode": dict?}.
+        `reveal` is True on the tick a HIDDEN quest passes (the achievement announces on completion)."""
+        now = time.time() if now is None else now
+        result: dict = {"passed": False, "expired": False, "quest": quest, "reveal": False}
+
+        if quest.state != ACTIVE:
+            return result
+
+        if quest.success_criteria.check(stats):
+            self._close(quest, PASSED, outcome="criteria met (glue-adjudicated)")
+            try:
+                self.reward_sink(self.config, quest)
+            except Exception:  # noqa: BLE001 - a payout failure must not brick adjudication
+                pass
+            result["passed"] = True
+            result["reveal"] = bool(quest.hidden)   # hidden achievement announces on completion
+            result["quest"] = quest
+            return result
+
+        if quest.is_expired(now):
+            self._close(quest, EXPIRED, outcome="expired before criteria met")
+            result["expired"] = True
+            result["quest"] = quest
+            result["episode"] = self._failure_lite_episode(quest)
+            return result
+
+        return result
+
+    def expire_if_due(self, stats: Optional[dict] = None,
+                      *, now: Optional[float] = None) -> Optional[dict]:
+        """Close the active quest as EXPIRED if its expiry has passed and criteria are unmet.
+        The 'ignoring a quest is itself recorded' path (§7) — call it on the sleep boundary or when
+        the queue is being serviced. Returns the failure-lite episode record, or None.
+
+        If `stats` is given, a quest whose criteria are ALREADY met is passed instead of expired
+        (so a just-completed quest at the deadline still pays out). Otherwise expiry wins."""
+        q = self.store.active()
+        if q is None:
+            return None
+        now = time.time() if now is None else now
+        if stats is not None and q.success_criteria.check(stats):
+            r = self.check(q, stats, now=now)
+            return None if r.get("passed") else r.get("episode")
+        if q.is_expired(now):
+            self._close(q, EXPIRED, outcome="expired / ignored before criteria met")
+            return self._failure_lite_episode(q)
+        return None
+
+    def _close(self, quest: "Quest", state: str, *, outcome: str) -> None:
+        quest.state = state
+        quest.closed_ts = _now()
+        quest.outcome = outcome
+        quests = self.store.load()
+        for i, q in enumerate(quests):
+            if q.id == quest.id:
+                quests[i] = quest
+                break
+        self.store.save(quests)
+
+    def _failure_lite_episode(self, quest: "Quest") -> dict:
+        """An EPISODE-SHAPED failure-lite record (§7: a failed/ignored quest becomes an episode).
+        This engine RETURNS it; it does NOT write episodes itself (episodes.py owns that store).
+        Shape mirrors episodes.py's {situation→action→outcome→fix} so the caller can hand it
+        straight to the episodic store."""
+        return {
+            "key": f"quest|{quest.id}",
+            "obj": "system_quest",
+            "step": quest.directive,
+            "tool": "quest",
+            "sig": quest.id,
+            "fail_kind": "quest_expired",
+            "success": False,
+            "summary": f"quest expired unmet: {quest.directive}",
+            "tier": quest.tier,
+            "ts": _now(),
+        }
+
+
+# ============================================================================================
+# Daily quests — recurring drill slots (§7). Factory of quest OBJECTS + criteria HOOKS only;
+# the actual drills (scar retests / calibration / backup) are wired by a LATER phase.
+# ============================================================================================
+# Each daily kind maps to a criteria hook: a name for the glue-checkable stat the drill will set,
+# plus the op/threshold. The drill machinery (extinction trials, calibration harness, backup
+# restore-verify) writes that stat; this engine only issues the quest and adjudicates the stat.
+_DAILY_KINDS: dict[str, dict] = {
+    # scar_retest: an extinction trial (pitfall #4) — the drill records a pass into
+    # skills.scar_retest_passed; the quest demands it be true today.
+    "scar_retest": {
+        "directive": "Retest a scar. Re-attempt a past failure to prove it no longer binds you.",
+        "criterion": {"path": "drills.scar_retest_passed", "op": "==", "value": True},
+        "reward": {"kind": REWARD_XP, "amount": 10},
+    },
+    # calibration_drill: a confidence-vs-outcome calibration exercise; the drill sets a score.
+    "calibration_drill": {
+        "directive": "Run a calibration drill. Predict, then measure; close the gap.",
+        "criterion": {"path": "drills.calibration_score", "op": ">=", "value": 0.7},
+        "reward": {"kind": REWARD_XP, "amount": 10},
+    },
+    # backup_verify: a restore-verify of a backup (pitfall maintenance); the drill sets a flag.
+    "backup_verify": {
+        "directive": "Verify a backup. Restore it and confirm it is whole.",
+        "criterion": {"path": "drills.backup_verified", "op": "==", "value": True},
+        "reward": {"kind": REWARD_XP, "amount": 8},
+    },
+}
+
+DAILY_KINDS = tuple(_DAILY_KINDS.keys())
+
+
+def daily_quest(kind: str, *, tier: int = 1, expiry_ts: Optional[float] = None,
+                id_suffix: str = "") -> Quest:
+    """Build a recurring drill quest of `kind` (one of DAILY_KINDS). Returns just the quest object
+    with its glue-checkable criterion hook — the drill that SETS the criterion's stat is wired by a
+    LATER phase. `expiry_ts` defaults to end-of-day-style behavior chosen by the caller; a daily
+    quest that lapses records a failure-lite episode like any other (not-coddled)."""
+    spec = _DAILY_KINDS.get(kind)
+    if spec is None:
+        raise ValueError(f"unknown daily quest kind: {kind!r} (known: {', '.join(DAILY_KINDS)})")
+    qid = f"daily_{kind}" + (f"_{id_suffix}" if id_suffix else "")
+    return Quest(
+        id=qid,
+        directive=spec["directive"],
+        success_criteria=Criterion.from_dict(spec["criterion"]),
+        reward=dict(spec["reward"]),
+        tier=tier,
+        expiry_ts=expiry_ts,
+        hidden=False,
+        kind="daily",
+    )
+
+
+# ============================================================================================
+# Rendering — the System's terse register (a LATER phase injects it into context)
+# ============================================================================================
+def render_active(quest: Optional["Quest"]) -> str:
+    """Render the active quest as a terse, distinct 'System' register string for context (§7).
+    Impersonal — not Dean, not self-talk. A HIDDEN quest is NOT rendered while offered/active
+    (achievements announce only on completion). Returns '' when there is nothing to show — a LATER
+    phase injects this block; this module never touches eidos.py/context.py.
+
+    The register is deliberately unmistakable (bracketed, uppercase SYSTEM header) so the creature
+    reads it as an external authority, distinct from operator chat and its own thoughts."""
+    if quest is None or quest.state != ACTIVE:
+        return ""
+    if quest.hidden:
+        return ""    # hidden while active — reveals on pass via render_reveal / check(reveal=True)
+    lines = [
+        "╔══ SYSTEM ══════════════════════════════════════",
+        f"║ QUEST [T{quest.tier}]  {quest.directive}",
+        f"║ REWARD  {_reward_str(quest.reward)}",
+    ]
+    if quest.expiry_ts is not None:
+        lines.append(f"║ EXPIRES {time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(quest.expiry_ts))}")
+    lines.append("╚════════════════════════════════════════════════")
+    return "\n".join(lines)
+
+
+def render_reveal(quest: "Quest") -> str:
+    """The completion announcement for a HIDDEN quest — 'the System sees everything' (§7). A LATER
+    phase surfaces this the tick check() returns reveal=True."""
+    return "\n".join([
+        "╔══ SYSTEM ══════════════════════════════════════",
+        f"║ ACHIEVEMENT UNLOCKED  {quest.directive}",
+        f"║ REWARD  {_reward_str(quest.reward)}",
+        "╚════════════════════════════════════════════════",
+    ])
+
+
+def _reward_str(reward: dict) -> str:
+    reward = reward or {}
+    kind = reward.get("kind", REWARD_XP)
+    if kind == REWARD_XP:
+        return f"{reward.get('amount', 0)} XP"
+    if kind == REWARD_UNLOCK:
+        return f"unlock: {reward.get('what', '?')}"
+    if kind == REWARD_CAPACITY:
+        return f"+{reward.get('amount', 1)} capacity: {reward.get('what', '?')}"
+    return str(kind)
