@@ -2513,9 +2513,17 @@ def execute_tool(call: ToolCall, config: Config) -> ToolResult:
         # one would freeze the loop. Built-in tools are already bounded (bash auto-backgrounds, the net
         # primitives self-time-out) — run them directly.
         if call.tool not in _BUILTIN_TOOL_NAMES:
-            timeout_s = float(getattr(config, "skill_watchdog_s", _SKILL_WATCHDOG_DEFAULT_S)
-                              or _SKILL_WATCHDOG_DEFAULT_S)
-            result = _run_skill_under_watchdog(call, handler, config, timeout_s)
+            if getattr(config, "pillars_killable_skills_enabled", False):
+                # Pillars 1.2 (flag ON): the skill's own runner executes it in a fresh, HARD-KILLABLE
+                # subprocess bounded by its derived (p95×3-clamped) timeout, so a hang dies with the
+                # process — no orphan thread. The thread-watchdog is redundant here (and would only
+                # abandon a thread blocked on the killable subprocess), so we call the handler directly.
+                result = handler(call.args, config)
+            else:
+                # Flag OFF: byte-for-byte the historical thread-watchdog path (abandon on overrun).
+                timeout_s = float(getattr(config, "skill_watchdog_s", _SKILL_WATCHDOG_DEFAULT_S)
+                                  or _SKILL_WATCHDOG_DEFAULT_S)
+                result = _run_skill_under_watchdog(call, handler, config, timeout_s)
         else:
             result = handler(call.args, config)
         # Contract guard: ToolResult.output is typed `str`, but a SELF-AUTHORED skill can return a
