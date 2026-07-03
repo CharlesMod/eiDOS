@@ -243,6 +243,8 @@ max_open_predictions = 12         # 4.1 bound on simultaneously-open predictions
 salience_gate_enabled = false     # 1.3 salience-gate organ: admission bias = salience × relevance × neuromod gain
 bet_ledger_enabled = false        # 2.3 recall-utility loop: injected engrams are bets settled by glue (never self-report)
 learning_xp_enabled = false       # 4.2 XP weighted by learning progress (falling error slope); grind/noise pay ~0
+news_enabled = false              # 4.4 news queue: deferred communication, presence-gated, engagement-ranked
+news_max_items = 20               # 4.4 bound on queued news (eviction/expiry past this)
 
 [paths]
 # Relative paths anchor at the repo root (resolved in config.py), so this is portable across machines

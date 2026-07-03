@@ -368,6 +368,8 @@ class Config:
     pillars_salience_gate_enabled: bool = False        # 1.3 salience-gate organ: admission bias = salience × relevance × neuromod gain (nervous/salience.py)
     pillars_bet_ledger_enabled: bool = False           # 2.3 recall-utility loop: every injected engram is a bet settled by glue (bets.py; decision #5)
     pillars_learning_xp_enabled: bool = False          # 4.2 XP = learning-progress-weighted adjudicated success — falling error slope pays, noise/mastery pay ~0 (decision #5b)
+    pillars_news_enabled: bool = False                 # 4.4 news queue: deferred-communication store, presence-gated, engagement-ranked (news.py)
+    pillars_news_max_items: int = 20                   # declared: bound on queued news items (expiry + eviction past this; no unbounded growth)
     # Phase 3 — skill economy (from library to language)
     pillars_skill_affordances_enabled: bool = False    # 3.1 surface top-K situation-relevant skills at the decision point
     pillars_skill_affordance_k: int = 3                # declared: how many affordances to surface
@@ -737,6 +739,8 @@ def load_config(path: str = "config.toml") -> Config:
         config.pillars_salience_gate_enabled = pillars.get("salience_gate_enabled", config.pillars_salience_gate_enabled)
         config.pillars_bet_ledger_enabled = pillars.get("bet_ledger_enabled", config.pillars_bet_ledger_enabled)
         config.pillars_learning_xp_enabled = pillars.get("learning_xp_enabled", config.pillars_learning_xp_enabled)
+        config.pillars_news_enabled = pillars.get("news_enabled", config.pillars_news_enabled)
+        config.pillars_news_max_items = int(pillars.get("news_max_items", config.pillars_news_max_items))
         config.pillars_skill_affordances_enabled = pillars.get("skill_affordances_enabled", config.pillars_skill_affordances_enabled)
         config.pillars_skill_affordance_k = int(pillars.get("skill_affordance_k", config.pillars_skill_affordance_k))
         config.pillars_skill_economy_enabled = pillars.get("skill_economy_enabled", config.pillars_skill_economy_enabled)
