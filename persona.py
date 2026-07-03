@@ -82,8 +82,25 @@ def compute_level(xp: int) -> int:
     return 1 + int(math.floor(math.sqrt(xp / 50)))
 
 
-def award_xp(persona: dict, amount: int, reason: str = "") -> int:
-    """Add XP and recompute level. Returns new level."""
+def award_xp(persona: dict, amount: int, reason: str = "",
+             *, domain: Optional[str] = None, config=None) -> int:
+    """Add XP and recompute level. Returns new level.
+
+    Pillars 4.2 (decision #5b, flag-gated): when `config.pillars_learning_xp_enabled` is on AND the
+    caller names the domain the success was adjudicated in, the award routes through the
+    learning-progress weighting (learning_progress.weighted_xp) — pay the falling slope of
+    prediction error, never raw volume (PILLARS_PLAN §6; pitfall #1, the noisy-TV trap). With the
+    flag off — or for domain-less awards (every pre-4.2 call site, including the flat +5
+    error-recovery bonus in record_error_recovery, which keeps its bonus untouched) — this is
+    byte-identical to the legacy volume path. Fail-open: a broken tracker never blocks an award
+    (XP is an incentive signal, not load-bearing)."""
+    if (domain is not None and config is not None
+            and getattr(config, "pillars_learning_xp_enabled", False)):
+        try:
+            import learning_progress
+            amount = learning_progress.weighted_xp(config, int(amount), domain)
+        except Exception:  # noqa: BLE001 — fail-open: pay the unweighted base rather than crash
+            pass
     persona["xp"] = persona.get("xp", 0) + amount
     persona["level"] = compute_level(persona["xp"])
     return persona["level"]
