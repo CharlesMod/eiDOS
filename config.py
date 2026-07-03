@@ -357,6 +357,14 @@ class Config:
     pillars_killable_skills_enabled: bool = False      # 1.2 subprocess-isolated, hard-killable skills
     pillars_skill_timeout_floor_s: float = 5.0         # derived timeout = p95*3, clamped to [floor, ceiling]
     pillars_skill_timeout_ceiling_s: float = 60.0
+    # Phase 3 — skill economy (from library to language)
+    pillars_skill_affordances_enabled: bool = False    # 3.1 surface top-K situation-relevant skills at the decision point
+    pillars_skill_affordance_k: int = 3                # declared: how many affordances to surface
+    pillars_skill_economy_enabled: bool = False        # 3.2 similarity-priced authoring + reuse-favoring XP + auto-retire
+    pillars_skill_author_energy_cost: float = 0.02     # declared: metabolic cost of authoring a FULLY-NOVEL skill (scaled by similarity)
+    pillars_skill_retire_unused_days: float = 30.0     # declared: archive skills unused this long (recoverable via rollback)
+    # Phase 5 — the System (quests)
+    pillars_quests_enabled: bool = False               # 5.1 quest engine (issue/track/adjudicate; one active quest)
 
     @property
     def workspace(self) -> Path:
@@ -707,6 +715,12 @@ def load_config(path: str = "config.toml") -> Config:
         config.pillars_killable_skills_enabled = pillars.get("killable_skills_enabled", config.pillars_killable_skills_enabled)
         config.pillars_skill_timeout_floor_s = float(pillars.get("skill_timeout_floor_s", config.pillars_skill_timeout_floor_s))
         config.pillars_skill_timeout_ceiling_s = float(pillars.get("skill_timeout_ceiling_s", config.pillars_skill_timeout_ceiling_s))
+        config.pillars_skill_affordances_enabled = pillars.get("skill_affordances_enabled", config.pillars_skill_affordances_enabled)
+        config.pillars_skill_affordance_k = int(pillars.get("skill_affordance_k", config.pillars_skill_affordance_k))
+        config.pillars_skill_economy_enabled = pillars.get("skill_economy_enabled", config.pillars_skill_economy_enabled)
+        config.pillars_skill_author_energy_cost = float(pillars.get("skill_author_energy_cost", config.pillars_skill_author_energy_cost))
+        config.pillars_skill_retire_unused_days = float(pillars.get("skill_retire_unused_days", config.pillars_skill_retire_unused_days))
+        config.pillars_quests_enabled = pillars.get("quests_enabled", config.pillars_quests_enabled)
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

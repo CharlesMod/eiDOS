@@ -229,6 +229,9 @@ power_battery_capacity_ah = 100.0  # 24V 100Ah ≈ 2.56 kWh
 causal_ledger_enabled = false     # 0.3 per-tick pressure-field log for "show me why it did that"
 backup_enabled = false            # 0.4 automated workspace snapshots during sleep (life insurance)
 killable_skills_enabled = false   # 1.2 subprocess-isolated, hard-killable skills (no more tick freezes)
+skill_affordances_enabled = false # 3.1 surface top-K situation-relevant skills at the decision point
+skill_economy_enabled = false     # 3.2 similarity-priced authoring + reuse-favoring XP + auto-retire
+quests_enabled = false            # 5.1 quest engine (the System: issue/track/adjudicate)
 
 [paths]
 # Relative paths anchor at the repo root (resolved in config.py), so this is portable across machines
