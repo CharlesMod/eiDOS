@@ -10,6 +10,21 @@
 
 ---
 
+## Progress (branch `feat/pillars-m1`)
+
+Landed & gate-green, all **dark behind their flags** (running eiDOS unaffected until flipped on):
+- ✅ **0.1** config scaffold — central `[pillars]` flags (`482a2d0`)
+- ✅ **0.2** T9 mailbox fix — O(n) list → O(log n) heaps; in-proc hop p95 ~730ms → ~0.006ms, delivery semantics byte-identical (139 nervous/bus tests)
+- ✅ **0.3** causal ledger — dark per-tick pressure-field log + `/api/why` (7 tests, no tick-loop regression)
+- ✅ **0.4** backups — snapshot/rotation/restore-verify + CLI (12 tests)
+- ✅ **1.2** killable skills — subprocess isolation + hard-kill + authoring contract + telemetry (10 gate tests; flag-off path preserved byte-for-byte)
+
+Full integrated regression: **996 passed** (3 pre-existing environmental failures unrelated to this work: `python`-alias-on-PATH, Windows `pi.cmd`).
+
+Remaining in Phase 0/1: **0.5** slot-sharing spike (MANUAL — needs the live GPU; pause eiDOS + stop HouseAI-Llama first per CLAUDE.md) and **1.1** organ lifecycle hooks (not yet built). Then Phase 2 (memory core) begins.
+
+---
+
 ## Phase 0 — Foundations & measurements (no creature-facing changes)
 
 **0.1 Branch & scaffolding**
