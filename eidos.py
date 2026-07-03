@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 
 from config import Config, load_config
@@ -514,6 +515,39 @@ def _extract_thought(response: str) -> str:
     return _THOUGHT_TAG_RE.sub("", response).strip()
 
 
+# --- Phase 1.1: per-tick hooks for the 2 drive organs migrated onto the organ registry
+#     (goal-tension, curiosity). Each is a pure f(ctx) closure over the tick's locals, which the loop
+#     packs into `ctx` (a SimpleNamespace) and hands to `organ_registry.run_post_tick(ctx)`. The
+#     bodies are lifted VERBATIM from the old inline call sites — same inputs, same effects, same bus
+#     events — so this is a strictly behaviour-preserving change of *dispatch*, not of behaviour. Each
+#     is guarded by the registry (I5), so its logging matches the old per-organ try/except. ---
+
+def _goaltension_post_tick(ctx):
+    """Goal-tension drive (Ventral Striatum): fold this tick's objective state into the incompletion/
+    regret pressure. Lifted from the old inline block: an OPEN objective with no progress charges the
+    tension (a frustrated one harder); progress discharges it; past threshold it raises a bounded
+    arousal floor. Initiative temperament scales how hard it bites."""
+    _active = ctx.gate.get("active")
+    _open = bool(_active)
+    _frac = (float(_active.get("frustration", 0)) / max(1, (ctx.park_at or ctx.obj.FRUST_PARK))
+             if _active else 0.0)
+    _init = ctx.temperament.initiative if ctx.temperament is not None else 0.5
+    ctx.goaltension.observe(made_progress=ctx.made_progress, open_objective=_open,
+                            frustration_frac=_frac, initiative=_init)
+
+
+def _curiosity_post_tick(ctx):
+    """Curiosity drive: turn the world-model's LEARNING PROGRESS at this transition into a small
+    intrinsic-reward bonus + restlessness. Lifted from the old inline block inside the reward-learner
+    step: observe the (prev_sit, prev_act -> this_sit) transition, read last_progress, fold it into
+    curiosity. The intrinsic bonus is written back onto ctx for the (non-migrated) learner to consume
+    this same tick — so the value still flows exactly as before."""
+    if ctx.worldmodel is not None and ctx.wm_prev_sit is not None:
+        ctx.worldmodel.observe(ctx.wm_prev_sit, ctx.wm_prev_act, ctx.tick_situation)
+        _progress = float(getattr(ctx.worldmodel, "last_progress", 0.0) or 0.0)
+        ctx.intrinsic = ctx.curiosity.observe(_progress)
+
+
 def run_loop(config: Config, persona=None, wal=None):
     """Main tick loop with compaction."""
     global _shutdown_requested
@@ -681,14 +715,24 @@ def run_loop(config: Config, persona=None, wal=None):
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} power monitor start failed (continuing on internal energy sim): {_e}")
 
+    # Phase 1.1: the organ registry — organs plug in via lifecycle hooks (pre/post_tick, on_sleep)
+    # instead of being hand-called through the god-loop. The 4 migrated organs (interoception,
+    # neuromod, goal-tension, curiosity) register below; the loop iterates the registry for their
+    # per-tick work (see `organ_registry.run_post_tick` in the tick body). Incremental: the other
+    # organs stay hand-called for now. Guarded per-hook inside the registry (I5).
+    organ_registry = nervous.OrganRegistry() if nervous_bus is not None else None
+    nervous_interoception = None
+
     # P1a: start interoception — the first organ. The creature feels its body: host telemetry ->
     # coarse felt bars on the bus -> surfaced in context via the afferent intake. Guarded (I5).
     if nervous_bus is not None and getattr(config, "nervous_interoception_enabled", True):
         try:
             from nervous.interoception import Interoception
-            Interoception(nervous_bus,
-                          interval_s=getattr(config, "nervous_interoception_interval_s", 5.0),
-                          config=config, metabolism=nervous_metabolism).start()
+            nervous_interoception = Interoception(
+                nervous_bus,
+                interval_s=getattr(config, "nervous_interoception_interval_s", 5.0),
+                config=config, metabolism=nervous_metabolism)
+            nervous_interoception.start()
             print(f"{pfx} interoception organ started — the creature feels its body")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} interoception start failed (continuing): {_e}")
@@ -758,6 +802,29 @@ def run_loop(config: Config, persona=None, wal=None):
             print(f"{pfx} goal-tension drive started — an unfinished objective now keeps it awake")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} goal-tension start failed (continuing): {_e}")
+
+    # --- Phase 1.1: register the 4 migrated organs with the registry, IN PER-TICK ORDER, so the
+    #     loop iterates the registry for their per-tick work instead of hand-calling them. Order
+    #     matters and matches the pre-refactor call sequence: interoception → neuromod (both
+    #     thread-driven, so no per-tick hook — declared topics only), then goal-tension, then
+    #     curiosity (goal-tension fired before curiosity in the old loop). reads/writes are the
+    #     declared bus topics for future conflict-checking (inert today). The organs' hooks read
+    #     everything they need from the per-tick `ctx` handed to run_post_tick below. ---
+    if organ_registry is not None:
+        if nervous_interoception is not None:
+            # Self-runs on its own thread (I6, single writer of the felt-state); no per-tick hook.
+            organ_registry.register(nervous_interoception, name="interoception",
+                                    writes=("interoceptive/intero",))
+        if nervous_neuromod is not None:
+            # Self-runs on its own thread (drains interoception, publishes modulation); no per-tick hook.
+            organ_registry.register(nervous_neuromod, name="neuromod",
+                                    reads=("interoceptive/intero",), writes=("modulation/system",))
+        if nervous_goaltension is not None:
+            organ_registry.register(nervous_goaltension, name="goal_tension",
+                                    post_tick=_goaltension_post_tick, writes=("drive/goal_tension",))
+        if nervous_curiosity is not None:
+            organ_registry.register(nervous_curiosity, name="curiosity",
+                                    post_tick=_curiosity_post_tick, writes=("drive/curiosity",))
 
     # --- Causal ledger (Pillars 0.3): one record of the full pressure field per tick, so any
     #     action is replayable as "show me the field that produced this" (§8 pitfall #12). Ships
