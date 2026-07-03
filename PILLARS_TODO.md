@@ -18,12 +18,15 @@ Landed & gate-green, all **dark behind their flags** (running eiDOS unaffected u
 - ✅ **0.3** causal ledger — dark per-tick pressure-field log + `/api/why` (7 tests, no tick-loop regression)
 - ✅ **0.4** backups — snapshot/rotation/restore-verify + CLI (12 tests)
 - ✅ **1.2** killable skills — subprocess isolation + hard-kill + authoring contract + telemetry (10 gate tests; flag-off path preserved byte-for-byte)
+- ✅ **1.1** organ registry — the god-loop dies; organs plug in via lifecycle hooks (pre/post_tick, on_sleep) + declared bus topics; 4 organs migrated in per-tick order, every hook guarded (I5). Behavior byte-for-byte (`a417ea2`)
+- ✅ **3.1/3.2** skill economy — affordance ranking (`similarity × trust × birth-episode`) + ε-exploration, similarity-priced authoring (novel≈0.02 → dup≈0.20 energy), reuse-XP(8) > create-XP(3), auto-retire unused → out of affordances (11 gate tests; flag-off byte-for-byte) (`b305be3`)
+- ✅ **5.1** quest engine — the System's mechanical core: typed glue-checkable `Criterion` (never self-report), one-active cadence gated on close+sleep+healthy, reward-sink seam, daily/hidden quests, Administrator propose/render seams (20 tests) (`325d7fd`)
 
-Full integrated regression: **996 passed** (3 pre-existing environmental failures unrelated to this work: `python`-alias-on-PATH, Windows `pi.cmd`).
+Full integrated regression after 1.1 + 3.1/3.2 + 5.1: **1027 passed** (3 pre-existing environmental failures unrelated to this work: `python`-alias-on-PATH, Windows `pi.cmd`).
 
-- ✅ **0.5** slot-sharing spike — DONE (2026-07-03). gemma4-12b `--parallel 2`: per-slot KV ≈ 454 MiB, concurrent throughput 70.8 tok/s each vs 77.8 solo (~9% hit). **Verdict: slot-sharing is the primary substrate for generals** (§5b). No small GGUF present for a CPU tier.
+- ✅ **0.5** slot-sharing spike — DONE (2026-07-03). gemma4-12b `--parallel 2`: per-slot KV ≈ 454 MiB, concurrent throughput 70.8 tok/s each vs 77.8 solo (~9% hit). **Verdict: slot-sharing is the primary substrate for generals** (§5b). max_generals ceiling 8 / recommend 5; no global on-beat tick (overlap as emergent equilibrium). No small GGUF present for a CPU tier.
 
-Remaining in Phase 0/1: **1.1** organ lifecycle hooks (agent in progress). Then Phase 2 (memory core) begins. Note: 0.5 required stopping the live services — see `RUNTIME_SPRINTER.md` for the correct Sprinter procedure.
+In flight (agents, worktree-isolated, based on `a417ea2`): **2.1** engram core (memory keystone) · **3.3** skill composition (call atom + promotion). Next wave once 2.1 lands: **2.2** manager+migration, **2.4** sleep engine, **4.1** expectation ledger (all key off the engram). Note: 0.5 required stopping the live services — see `RUNTIME_SPRINTER.md` for the correct Sprinter procedure.
 
 ---
 
