@@ -223,6 +223,13 @@ power_stale_after_s = 600.0
 power_battery_cells = 8            # LiFePO4 8S = 24V nominal
 power_battery_capacity_ah = 100.0  # 24V 100Ah ≈ 2.56 kWh
 
+[pillars]
+# Pillars roadmap (PILLARS_PLAN.md / PILLARS_TODO.md). Every feature ships DARK behind its flag;
+# a flag flips ON only after that phase's red-able gate passes. Defaults live in config.py.
+causal_ledger_enabled = false     # 0.3 per-tick pressure-field log for "show me why it did that"
+backup_enabled = false            # 0.4 automated workspace snapshots during sleep (life insurance)
+killable_skills_enabled = false   # 1.2 subprocess-isolated, hard-killable skills (no more tick freezes)
+
 [paths]
 # Relative paths anchor at the repo root (resolved in config.py), so this is portable across machines
 # and OSes. Use an absolute path or "~/..." only to put the mind's memory somewhere else.

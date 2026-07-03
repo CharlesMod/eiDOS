@@ -345,6 +345,19 @@ class Config:
     power_battery_capacity_ah: float = 100.0          # 24V 100Ah ≈ 2.56 kWh (for Wh framing)
     power_battery_r_internal: float = 0.015           # ohms, for the resting-voltage correction
 
+    # --- Pillars roadmap (PILLARS_PLAN.md / PILLARS_TODO.md). Every feature ships DARK behind its
+    # flag; a flag flips ON only after that phase's gate passes. See PILLARS_TODO.md. ---
+    # Phase 0
+    pillars_causal_ledger_enabled: bool = False       # 0.3 per-tick pressure-field log (pressures.py)
+    pillars_causal_ledger_max_bytes: int = 8_000_000  # rotate the ledger to state/ at this size
+    pillars_backup_enabled: bool = False              # 0.4 workspace snapshot/restore (backup.py)
+    pillars_backup_daily_keep: int = 14               # rotation: daily snapshots retained
+    pillars_backup_weekly_keep: int = 8               # rotation: weekly snapshots retained
+    # Phase 1
+    pillars_killable_skills_enabled: bool = False      # 1.2 subprocess-isolated, hard-killable skills
+    pillars_skill_timeout_floor_s: float = 5.0         # derived timeout = p95*3, clamped to [floor, ceiling]
+    pillars_skill_timeout_ceiling_s: float = 60.0
+
     @property
     def workspace(self) -> Path:
         return Path(self.workspace_dir)
@@ -684,6 +697,16 @@ def load_config(path: str = "config.toml") -> Config:
         config.power_battery_cells = int(nervous.get("power_battery_cells", config.power_battery_cells))
         config.power_battery_capacity_ah = float(nervous.get("power_battery_capacity_ah", config.power_battery_capacity_ah))
         config.power_battery_r_internal = float(nervous.get("power_battery_r_internal", config.power_battery_r_internal))
+
+        pillars = data.get("pillars", {})
+        config.pillars_causal_ledger_enabled = pillars.get("causal_ledger_enabled", config.pillars_causal_ledger_enabled)
+        config.pillars_causal_ledger_max_bytes = int(pillars.get("causal_ledger_max_bytes", config.pillars_causal_ledger_max_bytes))
+        config.pillars_backup_enabled = pillars.get("backup_enabled", config.pillars_backup_enabled)
+        config.pillars_backup_daily_keep = int(pillars.get("backup_daily_keep", config.pillars_backup_daily_keep))
+        config.pillars_backup_weekly_keep = int(pillars.get("backup_weekly_keep", config.pillars_backup_weekly_keep))
+        config.pillars_killable_skills_enabled = pillars.get("killable_skills_enabled", config.pillars_killable_skills_enabled)
+        config.pillars_skill_timeout_floor_s = float(pillars.get("skill_timeout_floor_s", config.pillars_skill_timeout_floor_s))
+        config.pillars_skill_timeout_ceiling_s = float(pillars.get("skill_timeout_ceiling_s", config.pillars_skill_timeout_ceiling_s))
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)
