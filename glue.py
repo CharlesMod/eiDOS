@@ -201,3 +201,50 @@ def gate_frustration_bump(outcomes: list[dict]) -> int:
     if repeated_failure_signature(outcomes, k=3):
         bump += 1                 # the exact same dead end, 3+ in a row → push to pivot now
     return bump
+
+
+# ============================================================================================
+# Pillars 4.1: prediction settlement — GLUE is the only closer of expectations (M-4, §4 CA1)
+# ============================================================================================
+def settle_predictions(config, *, event_text: str = "", tick: int = 0,
+                       reward=None, curiosity=None) -> list:
+    """Settle open predictions MECHANICALLY (Dean, confirmed 2026-07-03: settlement is mechanical
+    only). Two grounds, both outside the model: a bet's DEADLINE passed (the future arrived — it did
+    not come true), or a MATCHING EVENT was observed (it did). The LLM saying "that came true"
+    settles nothing — this glue call is the only closure path, and expectations.close_prediction
+    rejects any reason that is not deadline/event ground truth.
+
+    Each closure's surprise (f(confidence, wrongness) — a confident-wrong bet scores highest) feeds
+    the SAME intrinsic channel the world model uses: `curiosity.observe(surprise)` turns it into the
+    bounded intrinsic bonus + restlessness, and `reward.observe(..., intrinsic=bonus)` folds that
+    into this beat's RPE (success = whether the bet came true). Both hooks are optional + duck-typed
+    (the eidos.py cutover passes the live CuriosityDrive / RewardLearner) so glue stays free of the
+    nervous package. Each closure has already birthed its residue episode engram (the §M-4
+    highest-value episodic input) inside expectations.close_prediction.
+
+    DARK behind `config.pillars_expectations_enabled` — returns [] untouched when off. Best-effort:
+    settlement failures never raise into the loop (glue convention). Returns the list of
+    expectations.Closure settled by this call."""
+    if not getattr(config, "pillars_expectations_enabled", False):
+        return []
+    try:
+        import expectations
+        ledger = expectations.ExpectationLedger(config)
+        closures = []
+        if event_text:
+            closures += expectations.close_event_predictions(config, ledger, event_text, tick=tick)
+        closures += expectations.close_due_predictions(config, ledger, tick=tick)
+    except Exception:  # noqa: BLE001 - glue is best-effort
+        return []
+    for c in closures:
+        try:
+            intrinsic = 0.0
+            if curiosity is not None and hasattr(curiosity, "observe"):
+                intrinsic = float(curiosity.observe(c.surprise) or 0.0)
+            if reward is not None and hasattr(reward, "observe"):
+                reward.observe(situation=f"prediction:{c.prediction.domain}",
+                               action="prediction_settled", success=bool(c.outcome),
+                               made_progress=bool(c.outcome), intrinsic=intrinsic, tick=tick)
+        except Exception:  # noqa: BLE001 - the closure stands even if a hook hiccups
+            pass
+    return closures

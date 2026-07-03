@@ -171,6 +171,31 @@ class MemorizeArgs(_ToolArgs):
         return _present(value, "fact")
 
 
+class PredictArgs(_ToolArgs):
+    """Pillars 4.1: a grammar-constrained typed bet. `statement` = what you expect in words;
+    `target` = the MEASURABLE claim glue will adjudicate against; `deadline` = when it must resolve
+    (a human hint like "02:30" or "in 2h" — parsed to an epoch by the handler); `confidence` in
+    [0,1]. The grammar governs FORM; the handler + expectations.py enforce content + the bound."""
+    statement: str = Field(validation_alias=AliasChoices("statement", "prediction", "claim"))
+    target: str = Field(default="", validation_alias=AliasChoices("target", "measure", "metric"))
+    deadline: str = Field(default="", validation_alias=AliasChoices("deadline", "by", "when"))
+    confidence: float = 0.6
+    domain: str = "general"
+
+    @field_validator("statement")
+    @classmethod
+    def _statement_not_empty(cls, value: str) -> str:
+        return _present(value, "statement")
+
+    @field_validator("confidence")
+    @classmethod
+    def _confidence_in_unit(cls, value: float) -> float:
+        v = float(value)
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("confidence must be a number in [0, 1]")
+        return v
+
+
 class RecallArgs(_ToolArgs):
     query: str
 
@@ -2327,6 +2352,70 @@ def tool_delegate(args: dict, config: Config) -> ToolResult:
     return delegate.tool_delegate(args, config)
 
 
+# Pillars 4.1 default horizon: a bet with no parseable deadline resolves in this many seconds. One
+# hour is the "next few ticks-to-hours" default — long enough that a same-tick close is the exception,
+# short enough that an unresolved bet doesn't clog the bounded ledger indefinitely.
+_PREDICT_DEFAULT_HORIZON_S = 3600.0
+
+
+def _parse_deadline(raw: str) -> float:
+    """Best-effort parse of a deadline hint into an epoch second. Accepts a relative offset ("in 2h",
+    "30m", "90s") or a bare number of seconds; anything unparseable falls back to now + the default
+    horizon (a bet always has a resolvable deadline). Absolute clock times are left to a later parser —
+    the deadline just has to be a FUTURE epoch glue can compare against, not calendar-perfect."""
+    now = time.time()
+    s = (raw or "").strip().lower()
+    if not s:
+        return now + _PREDICT_DEFAULT_HORIZON_S
+    m = re.search(r"(\d+(?:\.\d+)?)\s*([smhd])", s)
+    if m:
+        n = float(m.group(1))
+        mult = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}[m.group(2)]
+        return now + n * mult
+    try:
+        return now + float(s)   # a bare number = seconds from now
+    except ValueError:
+        return now + _PREDICT_DEFAULT_HORIZON_S
+
+
+def tool_predict(args: dict, config: Config) -> ToolResult:
+    """Commit a TYPED, measurable BET about what will happen — "backup done by 02:30", "the scan
+    finds a new host in 5m". args: {"statement": what you expect, "target": the measurable claim,
+    "deadline": when it must resolve (e.g. "in 2h"), "confidence": 0..1, "domain"?: bucket}. GLUE — not
+    your word — later scores it; a confident-wrong bet is the most valuable memory you can make. The
+    open-bet ledger is BOUNDED; if it's full, an old bet must close before you make a new one."""
+    if not getattr(config, "pillars_expectations_enabled", False):
+        # DARK: unreachable in practice (the tool isn't registered when the flag is off) — this is the
+        # belt-and-suspenders guard so a direct dispatch can't create a bet while the organ is dark.
+        return ToolResult(output="The prediction organ is not enabled.", full_output_path=None,
+                          success=False, duration_s=0, fail_kind="blocked")
+    import expectations
+    statement = (args.get("statement") or "").strip()
+    if not statement:
+        return ToolResult(output="Error: provide a 'statement' — what you expect to happen.",
+                          full_output_path=None, success=False, duration_s=0, fail_kind="args")
+    try:
+        confidence = float(args.get("confidence", expectations.DEFAULT_CONFIDENCE))
+    except (TypeError, ValueError):
+        confidence = expectations.DEFAULT_CONFIDENCE
+    confidence = max(0.0, min(1.0, confidence))
+    deadline = _parse_deadline(str(args.get("deadline", "")))
+    ledger = expectations.ExpectationLedger(config)
+    try:
+        p = ledger.predict(statement=statement, target=(args.get("target") or "").strip(),
+                           deadline=deadline, confidence=confidence,
+                           domain=(args.get("domain") or "general").strip() or "general")
+    except ValueError as e:
+        # The bound (ledger full) or an empty statement — a clean, typed refusal, not a crash.
+        return ToolResult(output=f"Prediction refused: {e}", full_output_path=None,
+                          success=False, duration_s=0, fail_kind="blocked")
+    when = max(0, int(deadline - time.time()))
+    return ToolResult(
+        output=(f"Bet placed: \"{p.statement}\" (target: {p.target or '—'}; confidence "
+                f"{p.confidence:.0%}; resolves in ~{when}s). Glue will score it — not your word."),
+        full_output_path=None, success=True, duration_s=0)
+
+
 TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "bash": tool_bash,
     "write_file": tool_write_file,
@@ -2376,6 +2465,19 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     # (background job on the shared ledger; result returns tagged [↩ delegate N])
     "delegate": tool_delegate,
 }
+
+
+def register_predict_tool(config: Config) -> bool:
+    """Pillars 4.1 (DARK by default): register the grammar-constrained `predict` tool ONLY when
+    `pillars_expectations_enabled` is on. Idempotent. Called by the loop wiring once config is loaded;
+    with the flag off the tool is absent from TOOLS, so it never enters the tick grammar and the organ
+    stays fully dark. Returns True if `predict` is present after the call."""
+    if getattr(config, "pillars_expectations_enabled", False):
+        TOOLS.setdefault("predict", tool_predict)
+        _TOOL_ARG_MODELS.setdefault("predict", PredictArgs)
+    else:
+        TOOLS.pop("predict", None)
+    return "predict" in TOOLS
 
 
 # Built-in tool names, snapshotted at import time — BEFORE any self-authored skill is hot-loaded into
