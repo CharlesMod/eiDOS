@@ -107,7 +107,7 @@ class TestValidation:
 
     def test_valid_kinds_and_provenance_frozen(self):
         assert "episode" in KINDS and "identity" in KINDS
-        assert PROVENANCE == frozenset({"experienced", "told", "inherited"})
+        assert PROVENANCE == frozenset({"experienced", "told", "inherited", "dreamed"})
 
 
 # =================================================================================================

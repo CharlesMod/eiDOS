@@ -91,6 +91,7 @@ PROVENANCE = frozenset({
     "experienced",  # first-hand: the creature lived it
     "told",         # second-hand: Dean / an afferent / a general's report said so
     "inherited",    # a nugget: a letter from a previous self (pre-wipe bootstrap knowledge)
+    "dreamed",      # sleep-distilled hypothesis (pitfall #5): confidence-capped until corroborated
 })
 
 

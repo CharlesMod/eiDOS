@@ -396,11 +396,7 @@ class DistillationJob:
     `provenance='dreamed'` and confidence CAPPED at DREAMED_CONFIDENCE_CAP (pitfall #5: a dream is a
     hypothesis until experience corroborates it), committed through the Consolidator (§I6). Malformed
     model output is DROPPED WITH A LOG and counted — never silently (the gate asserts zero silent drops).
-
-    `provenance='dreamed'` is not yet in engram.PROVENANCE (which is experienced|told|inherited); until
-    the schema adds it, we tag `told` (second-hand — the creature was 'told' by its own dreaming self)
-    and stamp the dreamed origin in the body-adjacent stats/links so the cap still applies. The confidence
-    cap is the load-bearing damper regardless of the provenance label."""
+"""
     name = "distillation"
     priority = 30
 
@@ -451,7 +447,7 @@ class DistillationJob:
             try:
                 eg = Engram(
                     kind=kind, body=body,
-                    provenance="told",                       # a 'letter' from the dreaming self (see docstring)
+                    provenance="dreamed",                    # sleep-distilled hypothesis (§M-2 source monitoring)
                     confidence=min(self.confidence_cap, 0.7),  # capped: a dream is a hypothesis (pitfall #5)
                 )
                 eg.stats["dreamed"] = True                   # origin stamp so 2.3 can key the cap on it
