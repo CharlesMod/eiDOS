@@ -71,6 +71,12 @@ for _group, _fields in SPEC:
     for _f in _fields:
         _BY_ID[_f[1] if _f[0] is None else f"{_f[0]}.{_f[1]}"] = _f
 
+# Sampler fields that are stored PER MODEL (config [llm.profiles.<model>]) rather than globally: their
+# displayed value tracks the active model, and saving routes them under the selected model's profile.
+PER_MODEL_FIELDS = {f"llm.{_k}" for _k in
+                    ("temperature", "top_p", "top_k", "min_p",
+                     "presence_penalty", "frequency_penalty", "repeat_penalty")}
+
 
 def _field_id(section, key):
     return key if section is None else f"{section}.{key}"
@@ -90,20 +96,39 @@ def _coerce(typ, raw):
 
 
 def current_settings(config) -> list:
-    """Grouped current values for the UI: [{group, fields:[{id,key,label,type,help,value,picker,secret}]}]."""
+    """Grouped current values for the UI:
+    [{group, fields:[{id,key,label,type,help,value,picker,secret,per_model}]}].
+    Per-model sampler fields show the ACTIVE model's effective value (base ⊕ its profile)."""
+    from config import active_sampler
+    sampler = active_sampler(config)      # active model's effective sampler values
     out = []
     for group, fields in SPEC:
         items = []
         for spec in fields:
             section, key, attr, typ, label, help_ = spec[:6]
             extra = spec[6] if len(spec) > 6 else {}
-            val = getattr(config, attr, None)
+            fid = _field_id(section, key)
+            per_model = fid in PER_MODEL_FIELDS
+            val = sampler[key] if (per_model and key in sampler) else getattr(config, attr, None)
             if extra.get("secret") and val:
                 val = "********"          # never echo a configured token back to the browser
-            items.append({"id": _field_id(section, key), "key": key, "label": label, "type": typ,
+            items.append({"id": fid, "key": key, "label": label, "type": typ,
                           "help": help_, "value": val, "picker": bool(extra.get("picker")),
-                          "secret": bool(extra.get("secret"))})
+                          "secret": bool(extra.get("secret")), "per_model": per_model})
         out.append({"group": group, "fields": items})
+    return out
+
+
+def model_profiles(config) -> dict:
+    """{model: {field_id: value}} of per-model sampler values, so the UI can repopulate the sampler
+    fields the instant the model dropdown changes. Covers every model with a stored profile plus the
+    active model (so switching away and back always shows real numbers)."""
+    from config import active_sampler
+    models = set(getattr(config, "llm_profiles", None) or {}) | {config.llm_model}
+    out = {}
+    for m in models:
+        s = active_sampler(config, m)
+        out[m] = {f"llm.{k}": s[k] for k in s}
     return out
 
 
@@ -112,6 +137,8 @@ def build_overrides(payload: dict):
     Returns (overrides, errors). Unknown ids are ignored; type errors are collected, not raised. A
     masked secret ('********') is skipped so an unchanged token isn't overwritten with the mask."""
     overrides, errors = {}, []
+    # Per-model sampler fields save under this model's profile ([llm.profiles.<model>]).
+    target_model = (payload or {}).get("llm.model")
     for fid, raw in (payload or {}).items():
         spec = _BY_ID.get(fid)
         if spec is None:
@@ -125,7 +152,10 @@ def build_overrides(payload: dict):
         except (ValueError, TypeError):
             errors.append(f"{fid}: expected {typ}")
             continue
-        if section is None:
+        if fid in PER_MODEL_FIELDS and target_model:
+            # llm -> profiles -> <model> -> key
+            overrides.setdefault("llm", {}).setdefault("profiles", {}).setdefault(target_model, {})[key] = val
+        elif section is None:
             overrides[key] = val
         else:
             overrides.setdefault(section, {})[key] = val

@@ -7,7 +7,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-from config import Config
+from config import Config, active_sampler
 
 logger = logging.getLogger("eidos.llm")
 
@@ -136,8 +136,11 @@ def complete(
     reasoning_content with zero content tokens — callers should catch
     this and retry with a larger budget or smaller prompt.
     """
+    # Per-model "best settings": base llm_* overlaid with the active model's profile
+    # (config [llm.profiles.<model>]). An explicit `temperature` arg still wins.
+    sampler = active_sampler(config)
     if temperature is None:
-        temperature = config.llm_temperature
+        temperature = sampler["temperature"]
     if max_tokens is None:
         max_tokens = config.llm_max_tokens
 
@@ -159,16 +162,17 @@ def complete(
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "top_p": config.llm_top_p,
-        "top_k": config.llm_top_k,
-        "min_p": config.llm_min_p,
-        "presence_penalty": config.llm_presence_penalty,
+        "top_p": sampler["top_p"],
+        "top_k": sampler["top_k"],
+        "min_p": sampler["min_p"],
+        "presence_penalty": sampler["presence_penalty"],
         # Anti-degeneration: presence_penalty is a flat one-time penalty and can't break a tight
         # repeat loop (the ¥¥¡ byte-token collapse). frequency_penalty scales with how often a token
         # has appeared, and repeat_penalty is llama.cpp's n-gram penalty — together they stop the loop
         # from forming. (The degenerate-output guard in memory.py is the backstop if one slips through.)
-        "frequency_penalty": config.llm_frequency_penalty,
-        "repeat_penalty": config.llm_repeat_penalty,
+        # All resolved per active model via active_sampler() — see [llm.profiles.<model>].
+        "frequency_penalty": sampler["frequency_penalty"],
+        "repeat_penalty": sampler["repeat_penalty"],
         "stream": use_stream,
         # Reuse the KV of the unchanging prompt prefix (system + stable durable head) across ticks
         # instead of re-prefilling it every tick — llama.cpp's biggest latency/FLOP win. Pairs with

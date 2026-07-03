@@ -986,6 +986,8 @@ def _make_handler(config: Config):
                 _shell = "PowerShell" if os.name == "nt" else " ".join(_ps.posix_shell(_fresh))
                 self._respond(200, "application/json", json.dumps({
                     "groups": settings_schema.current_settings(_fresh),
+                    "profiles": settings_schema.model_profiles(_fresh),
+                    "active_model": _fresh.llm_model,
                     "has_overlay": (_kdir / LOCAL_CONFIG_NAME).exists(),
                     "platform": sys.platform, "shell": _shell, "llm_url": _fresh.llm_url,
                 }))
