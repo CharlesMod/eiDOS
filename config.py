@@ -371,6 +371,7 @@ class Config:
     pillars_skill_economy_enabled: bool = False        # 3.2 similarity-priced authoring + reuse-favoring XP + auto-retire
     pillars_skill_author_energy_cost: float = 0.02     # declared: metabolic cost of authoring a FULLY-NOVEL skill (scaled by similarity)
     pillars_skill_retire_unused_days: float = 30.0     # declared: archive skills unused this long (recoverable via rollback)
+    pillars_skill_composition_enabled: bool = False    # 3.3 the `call` atom (skill→skill) + promotion-to-atom (depth cap, shared budget, static cycle check)
     # Phase 5 — the System (quests)
     pillars_quests_enabled: bool = False               # 5.1 quest engine (issue/track/adjudicate; one active quest)
 
@@ -735,6 +736,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.pillars_skill_economy_enabled = pillars.get("skill_economy_enabled", config.pillars_skill_economy_enabled)
         config.pillars_skill_author_energy_cost = float(pillars.get("skill_author_energy_cost", config.pillars_skill_author_energy_cost))
         config.pillars_skill_retire_unused_days = float(pillars.get("skill_retire_unused_days", config.pillars_skill_retire_unused_days))
+        config.pillars_skill_composition_enabled = pillars.get("skill_composition_enabled", config.pillars_skill_composition_enabled)
         config.pillars_quests_enabled = pillars.get("quests_enabled", config.pillars_quests_enabled)
 
         paths = data.get("paths", {})

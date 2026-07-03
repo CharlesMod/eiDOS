@@ -32,6 +32,9 @@ from typing import Optional
 from config import Config
 from tools import ToolResult, TOOLS, _kill_pid_tree  # _kill_pid_tree: hard-kill a subprocess tree
 from skill_atoms import build_atoms, ATOM_NAMES  # M2: the in-scope vocabulary skills compose
+from skill_atoms import (                          # 3.3 composition: authoring-time cycle check + graph
+    check_composition_cycle, static_calls_in_source, COMPOSITION_MAX_DEPTH,
+)
 
 logger = logging.getLogger("eidos.skills")
 
@@ -44,6 +47,7 @@ RESERVED_NAMES = {
     "bash", "write_file", "read_file", "bg_run", "bg_check",
     "update_plan", "memorize", "recall",
     "create_skill", "edit_skill", "list_skills", "rollback_skill",
+    "call",        # 3.3 composition atom — a skill named `call` would shadow it in every namespace
     *ATOM_NAMES,   # a skill must not shadow an atom in its own namespace
 }
 
@@ -104,6 +108,18 @@ _XP_REUSE = 8                        # declared: XP for a SUCCESSFUL reuse of an
                                      # > _XP_CREATE so the settled economy rewards reuse over creation.
 # Statuses that mean "archived / retired" — filtered out of the brief AND the affordance list.
 _RETIRED_STATUS = "retired"
+
+# --- Pillars 3.3: promotion-to-atom (a proven, reused composition congeals into a new atom) ----------
+# The chunking half of the striatal design: when a TRUSTED composition has been REUSED enough, it is a
+# candidate to become an atom of the vocabulary — congealed experience formalized (plan S-4). The seam
+# mirrors selfedit: eiDOS/glue PROPOSES (propose_promotion → a candidate queue), the operator-controlled
+# dashboard APPLIES (apply_promotion → the composition is compiled into the promoted-atom store that
+# build_atoms injects). All dark behind pillars_skill_composition_enabled.
+_PROMOTION_MIN_REUSES = 5            # declared: a composition needs at least this many SUCCESSFUL uses
+                                     # before it's an atom candidate — the same automatization bar the
+                                     # trust promotion uses (_TRUST_MIN_USES), applied to composition:
+                                     # an atom is a move that has proven itself by repetition, not once.
+_PROMOTED_ATOMS_NAME = "_promoted_atoms.json"   # the compiled-atom store, alongside the manifest.
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +227,21 @@ def _validate_source(name: str, code: str, sandbox: bool = True) -> list[str]:
     return out
 
 
+def _validate_composition(config: Config, name: str, code: str) -> list[str]:
+    """3.3: authoring-time composition checks. When composition is ON, REJECT source that introduces a
+    call-graph cycle (A→B→A) — a static check so a cyclic composition never reaches the runtime (the
+    runtime then only has to bound depth + budget of an acyclic-but-large composition). When composition
+    is OFF, a `call(...)` in the source references a name that isn't in scope, so refuse it early with a
+    clear message instead of letting the dry-run NameError. Empty list == OK."""
+    calls = static_calls_in_source(code)
+    if not calls:
+        return []
+    if not getattr(config, "pillars_skill_composition_enabled", False):
+        return [f"skill '{name}' uses call(...) but composition is disabled "
+                f"(pillars_skill_composition_enabled=false) — the `call` atom is not in scope."]
+    return check_composition_cycle(config, name, code)
+
+
 def _sample_args(args_schema: Optional[dict]) -> dict:
     """Build a schema-shaped sample argument dict so the dry-run CALLS the skill the way the model will,
     not with an empty `{}` that masks arg-independent contract bugs. Best-effort and type-guessed: a
@@ -256,6 +287,10 @@ def _dry_run(config: Config, name: str, version: str,
         skill_file=repr(str(skill_file)),
         func=f"tool_{name}",
         sample_args=repr(json.dumps(_sample_args(args_schema) if strict_contract else {})),
+        # 3.3: the dry-run's atom namespace must match the RUNTIME's — so a composition validates with
+        # `call` in scope exactly when it would have it live. The harness reloads config from disk (which
+        # may not carry the caller's in-memory flag), so we thread the effective composition flag in.
+        compose=repr(bool(getattr(config, "pillars_skill_composition_enabled", False))),
     )
     harness_path = _skills_dir(config) / ".dryrun.py"
     harness_path.write_text(harness, encoding="utf-8")
@@ -308,6 +343,7 @@ sys.path.insert(0, {kairos})
 from config import load_config, Config
 from tools import ToolResult
 cfg = load_config("config.toml")
+cfg.pillars_skill_composition_enabled = {compose}   # 3.3: match the authoring context's atom namespace
 code = open({skill_file}, encoding="utf-8").read()
 ns = {{"Config": Config, "ToolResult": ToolResult}}
 try:
@@ -356,6 +392,7 @@ def _emit(obj):
     sys.stdout.write(_SENT + _json.dumps(obj) + "\\n"); sys.stdout.flush()
 try:
     cfg = load_config("config.toml")
+    cfg.pillars_skill_composition_enabled = {compose}   # 3.3: match the live atom namespace (call in scope)
     args = _json.loads(sys.argv[1]) if len(sys.argv) > 1 else {{}}
     code = open({skill_file}, encoding="utf-8").read()
     ns = {{"Config": Config, "ToolResult": ToolResult}}
@@ -412,6 +449,7 @@ def run_skill_killable(config: Config, name: str, args: dict, timeout_s: float) 
         kairos=repr(str(KAIROS_DIR)),
         skill_file=repr(str(skill_file)),
         func=f"tool_{name}",
+        compose=repr(bool(getattr(config, "pillars_skill_composition_enabled", False))),
     )
     # A per-invocation harness file (name-scoped) so concurrent skills don't clobber each other's harness.
     harness_path = _skills_dir(config) / f".exec_{name}.py"
@@ -1035,6 +1073,10 @@ def create_skill(config: Config, name: str, code: str,
     errs = _validate_source(name, code, sandbox=getattr(config, "skill_sandbox_enabled", True))
     if errs:
         return {"success": False, "errors": errs}
+    # 3.3: reject a cyclic composition (or a `call` used with the flag off) at authoring — before runtime.
+    cerrs = _validate_composition(config, name, code)
+    if cerrs:
+        return {"success": False, "errors": cerrs}
 
     # 3.2(a) Similarity-priced authoring: charge metabolic energy scaling with how close this new skill
     # is to an existing one (embedding cosine). Novel ≈ base cost; near-duplicate ≈ base × up to _AUTHOR_
@@ -1097,6 +1139,10 @@ def edit_skill(config: Config, name: str, code: str,
     errs = _validate_source(name, code, sandbox=getattr(config, "skill_sandbox_enabled", True))
     if errs:
         return {"success": False, "errors": errs}
+    # 3.3: an edit that turns a skill into a cyclic composition is rejected here (the good version stays).
+    cerrs = _validate_composition(config, name, code)
+    if cerrs:
+        return {"success": False, "errors": cerrs, "kept_active": ent.get("active_version")}
 
     version = _next_version(ent)
     _skill_file(config, name, version).write_text(code, encoding="utf-8")
@@ -1192,3 +1238,135 @@ def list_skills(config: Config) -> dict:
         "create_skill", "edit_skill", "list_skills", "rollback_skill"})
     return {"builtin_tools": builtins, "skills": skills,
             "loaded_in_registry": sorted(n for n in m.get("skills", {}) if n in TOOLS)}
+
+
+# ---------------------------------------------------------------------------
+# Pillars 3.3: the promotion pipeline (composition → candidate queue → atom)
+#
+# Shape mirrors selfedit.propose()/apply(): eiDOS (or glue) PROPOSES a promotion; the
+# operator-controlled dashboard APPLIES it. propose_promotion() only stages a candidate; the actual
+# compile-into-the-vocabulary is apply_promotion(), the clean seam the dashboard calls. Everything is
+# dark behind pillars_skill_composition_enabled and never mutates skill_atoms.py source — the promoted
+# atom lives in a data store (`_promoted_atoms.json`) that build_atoms reads at namespace-build time.
+# ---------------------------------------------------------------------------
+
+def _promoted_atoms_path(config: Config) -> Path:
+    return _skills_dir(config) / _PROMOTED_ATOMS_NAME
+
+
+def _load_promoted_atoms(config: Config) -> dict:
+    """The compiled promoted-atom store: {name: {source, from_skill, from_version, promoted_at}}. This
+    is the mutable extension of the atom vocabulary; build_atoms injects each entry as a callable."""
+    try:
+        return json.loads(_promoted_atoms_path(config).read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_promoted_atoms(config: Config, store: dict) -> None:
+    p = _promoted_atoms_path(config)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(store, indent=2), encoding="utf-8")
+    tmp.replace(p)
+
+
+def promoted_atom_names(config: Config) -> list[str]:
+    """Names currently in the promoted-atom vocabulary (what build_atoms injects on top of ATOM_NAMES)."""
+    return sorted(_load_promoted_atoms(config).keys())
+
+
+def _promotion_candidates_key(m: dict) -> dict:
+    return m.setdefault("promotion_candidates", {})
+
+
+def _is_composition(config: Config, name: str, ent: dict) -> bool:
+    """True iff this skill's active source statically calls another skill (i.e. it IS a composition)."""
+    try:
+        ver = str(ent.get("active_version") or "1.0.0")
+        code = _skill_file(config, name, ver).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return bool(static_calls_in_source(code))
+
+
+def propose_promotion(config: Config, name: str, rationale: str = "") -> dict:
+    """PROPOSE that a trusted, repeatedly-reused composition become an atom. Stages a candidate into the
+    manifest's promotion queue (status 'pending'); never compiles anything. The eligibility bar — trusted
+    + a composition + ≥ _PROMOTION_MIN_REUSES successful uses — is the automatization bar (a move proven
+    by repetition), read from the manifest's typed stats, never self-report. Returns the staged candidate
+    or an error. No-op when composition is disabled."""
+    if not getattr(config, "pillars_skill_composition_enabled", False):
+        return {"success": False, "errors": ["composition is disabled (pillars_skill_composition_enabled=false)"]}
+    name = (name or "").strip()
+    m = _load_manifest(config)
+    ent = m.get("skills", {}).get(name)
+    if not ent:
+        return {"success": False, "errors": [f"no skill '{name}'"]}
+    if ent.get("status") != "trusted":
+        return {"success": False, "errors": [f"'{name}' is '{ent.get('status')}', not trusted — "
+                                             f"only a trusted composition can be promoted to an atom"]}
+    if not _is_composition(config, name, ent):
+        return {"success": False, "errors": [f"'{name}' is not a composition (it calls no other skill) — "
+                                             f"there is nothing to chunk into an atom"]}
+    reuses = int(ent.get("successes", 0) or 0)
+    if reuses < _PROMOTION_MIN_REUSES:
+        return {"success": False, "errors": [f"'{name}' has {reuses} successful reuse(s); "
+                                             f"needs ≥ {_PROMOTION_MIN_REUSES} to be an atom candidate"]}
+    cands = _promotion_candidates_key(m)
+    cands[name] = {
+        "skill": name, "version": str(ent.get("active_version") or "1.0.0"),
+        "reuses": reuses, "rationale": (rationale or "")[:500],
+        "status": "pending", "proposed_at": _now(),
+    }
+    _save_manifest(config, m)
+    return {"success": True, "candidate": name, "status": "pending",
+            "message": f"Promotion of composition '{name}' staged for Dean to approve."}
+
+
+def list_promotion_candidates(config: Config, status: Optional[str] = None) -> list[dict]:
+    """The promotion queue (newest first). `status` filters (e.g. 'pending'). Dashboard-facing read."""
+    cands = list(_load_manifest(config).get("promotion_candidates", {}).values())
+    if status:
+        cands = [c for c in cands if c.get("status") == status]
+    cands.sort(key=lambda c: c.get("proposed_at", ""), reverse=True)
+    return cands
+
+
+def apply_promotion(config: Config, name: str) -> dict:
+    """DASHBOARD-ONLY (operator approval): compile a pending composition candidate into the promoted-atom
+    vocabulary. Reads the candidate's active-version source, stores it in `_promoted_atoms.json` under the
+    skill's name, and marks the candidate 'applied'. From now on build_atoms injects `name` as a callable
+    atom — a chunk has become a single unit (the promotion-to-atom of the striatal design). The clean seam
+    the dashboard calls; mirrors selfedit.apply (propose stages, apply compiles). Re-validates eligibility
+    at apply time so a candidate that lost trust/was retired since proposal can't sneak through."""
+    if not getattr(config, "pillars_skill_composition_enabled", False):
+        return {"success": False, "errors": ["composition is disabled (pillars_skill_composition_enabled=false)"]}
+    name = (name or "").strip()
+    m = _load_manifest(config)
+    cand = _promotion_candidates_key(m).get(name)
+    if not cand:
+        return {"success": False, "errors": [f"no promotion candidate '{name}' — propose it first"]}
+    if cand.get("status") != "pending":
+        return {"success": False, "errors": [f"candidate '{name}' is '{cand.get('status')}', not pending"]}
+    ent = m.get("skills", {}).get(name)
+    if not ent or ent.get("status") != "trusted":
+        return {"success": False, "errors": [f"'{name}' is no longer a trusted skill — cannot promote"]}
+    ver = str(ent.get("active_version") or "1.0.0")
+    try:
+        source = _skill_file(config, name, ver).read_text(encoding="utf-8")
+    except OSError as e:
+        return {"success": False, "errors": [f"cannot read '{name}' v{ver}: {e}"]}
+
+    store = _load_promoted_atoms(config)
+    store[name] = {"source": source, "from_skill": name, "from_version": ver,
+                   "promoted_at": _now()}
+    _save_promoted_atoms(config, store)
+
+    cand["status"] = "applied"
+    cand["applied_at"] = _now()
+    cand["applied_version"] = ver
+    _save_manifest(config, m)
+    return {"success": True, "atom": name, "from_version": ver,
+            "in_vocabulary": name in _load_promoted_atoms(config),
+            "message": f"Composition '{name}' v{ver} compiled into the atom vocabulary."}
