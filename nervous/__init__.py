@@ -13,9 +13,9 @@ from .felt import to_felt, felt_state, FeltStateView
 from .arbiter import GpuArbiter, Lease, PRI_BACKGROUND, PRI_MIND, PRI_SPEECH, PRI_REFLEX
 from .change import Novelty, ChangeDetector
 from .efferent import Effector, SelfModel, ReflexArc, Proprioceptor
-from .neuromod import NeuromodulatoryState
+from .neuromod import NeuromodulatoryState, Adenosine
 from .exteroception import PreFilter, FrameDiffFilter, VadFilter, Exteroceptor
-from .sleep import SleepCycle
+from .sleep import SleepCycle, SleepEngine, SleepJob, SleepReport, run_sleep
 from .monitor import NervousMonitor
 from .reward import RewardLearner
 from .worldmodel import WorldModel
@@ -49,9 +49,10 @@ __all__ = [
     "GpuArbiter", "Lease", "PRI_BACKGROUND", "PRI_MIND", "PRI_SPEECH", "PRI_REFLEX",
     "Novelty", "ChangeDetector",
     "Effector", "SelfModel", "ReflexArc", "Proprioceptor",
-    "NeuromodulatoryState",
+    "NeuromodulatoryState", "Adenosine",
     "PreFilter", "FrameDiffFilter", "VadFilter", "Exteroceptor",
-    "SleepCycle", "NervousMonitor", "RewardLearner", "WorldModel", "CuriosityDrive",
+    "SleepCycle", "SleepEngine", "SleepJob", "SleepReport", "run_sleep",
+    "NervousMonitor", "RewardLearner", "WorldModel", "CuriosityDrive",
     "GoalTensionDrive", "Temperament",
     "Metabolism", "hunger_to_bar", "solar_charge_in",
     "PowerMonitor", "lifepo4_soc", "parse_mppt",
