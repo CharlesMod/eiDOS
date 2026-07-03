@@ -759,6 +759,19 @@ def run_loop(config: Config, persona=None, wal=None):
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} goal-tension start failed (continuing): {_e}")
 
+    # --- Causal ledger (Pillars 0.3): one record of the full pressure field per tick, so any
+    #     action is replayable as "show me the field that produced this" (§8 pitfall #12). Ships
+    #     DARK — instantiated only when the flag is on, so it is a strict no-op otherwise. ---
+    pressure_ledger = None
+    if getattr(config, "pillars_causal_ledger_enabled", False):
+        try:
+            import pressures as _pressures
+            pressure_ledger = _pressures.PressureLedger(
+                config, max_bytes=config.pillars_causal_ledger_max_bytes)
+            print(f"{pfx} causal ledger on — logging the pressure field each tick (pressures.jsonl)")
+        except Exception as _e:  # noqa: BLE001 - the ledger must never break boot (I5)
+            print(f"{pfx} causal ledger start failed (continuing without it): {_e}")
+
     while not _shutdown_requested:
         # --- Operator pause check ---
         pause_path = config.workspace / "paused"
@@ -815,6 +828,11 @@ def run_loop(config: Config, persona=None, wal=None):
             _interruptible_sleep(config)
             continue
         idle_since = None
+
+        # Causal ledger (0.3): snapshot XP now so end-of-tick can log the DELTA this tick paid.
+        # Cheap and flag-independent (a plain int read); the ledger only consumes it when on.
+        _xp_at_tick_start = persona.get("xp", 0) if persona else 0
+        _tick_admitted_events = 0
 
         # --- Goal change detection (hash tracking only) ---
         import hashlib
@@ -935,6 +953,7 @@ def run_loop(config: Config, persona=None, wal=None):
         if afferent is not None:
             try:
                 afferent_block, _aff_n = afferent.drain_block()
+                _tick_admitted_events = int(_aff_n or 0)
             except Exception:  # noqa: BLE001 - a sensory bug must never break the tick (I5)
                 afferent_block = ""
         messages = assemble_context(
@@ -1462,6 +1481,49 @@ def run_loop(config: Config, persona=None, wal=None):
                     nervous_neuromod.observe_energy(nervous_metabolism.energy)
             except Exception as _me:  # noqa: BLE001 - metabolism must never break the tick
                 logger.warning("metabolism failed: %s", _me)
+
+        # --- Causal ledger (Pillars 0.3): with every organ updated, append ONE record of the full
+        #     pressure field for THIS tick — the sole collection site. It is the last thing the tick
+        #     does before the counter advances, so tick_number still names the tick that produced the
+        #     field. Ships dark: a strict no-op when pressure_ledger is None (flag off). Guarded — a
+        #     ledger fault must never wound the tick (I5). Signal→source map lives in pressures.py. ---
+        if pressure_ledger is not None:
+            try:
+                import pressures as _pressures
+                _xp_delta = (persona.get("xp", 0) if persona else 0) - _xp_at_tick_start
+                # Derive the payout's source from the tick's typed events (glue judges, §0.5): a
+                # dreamed compaction, a climbed-out-of-failure recovery, or an ordinary tool success.
+                if _xp_delta <= 0:
+                    _xp_src = ""
+                elif tick_compacted:
+                    _xp_src = "compaction"
+                elif not tick_tool_success:
+                    _xp_src = "error_recovery"
+                else:
+                    _xp_src = tick_tool_name or "tool"
+                # The condition label + strain are pure functions of this tick's outcome window,
+                # already gathered above; recompute defensively from _outcomes (empty if the strain
+                # glue block failed to run this tick).
+                _cond, _strain_val = "", 0
+                try:
+                    import glue as _glue_mod
+                    _win = _outcomes  # noqa: F821 - set in the strain block above
+                    _cond = _glue_mod.compute_condition(_win)
+                    _strain_val = _glue_mod.compute_strain(_win)
+                except Exception:  # noqa: BLE001 - condition is decorative here, never fatal
+                    pass
+                _field = _pressures.collect_field(
+                    tick=tick_number,
+                    neuromod=nervous_neuromod, goaltension=nervous_goaltension,
+                    curiosity=nervous_curiosity, metabolism=nervous_metabolism,
+                    active_objective=(_gate.get("active") if isinstance(_gate, dict) else None),
+                    condition=_cond, strain=_strain_val,
+                    admitted_events=_tick_admitted_events,
+                    xp_delta=_xp_delta, xp_source=_xp_src,
+                )
+                pressure_ledger.append(_field)
+            except Exception as _pe:  # noqa: BLE001 - the ledger must never break the tick (I5)
+                logger.warning("causal ledger append failed: %s", _pe)
 
         # --- Sleep ---
         tick_number += 1
