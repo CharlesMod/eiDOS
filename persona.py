@@ -6,9 +6,13 @@ working memory. Inspired by persistent file-based identity patterns.
 
 import json
 import math
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
+
+from atomicio import replace_with_retry
 
 
 def _default_persona() -> dict:
@@ -50,12 +54,25 @@ def load_persona(workspace: Path) -> dict:
 
 
 def save_persona(workspace: Path, persona: dict) -> None:
-    """Atomically save persona to workspace/persona.json."""
+    """Atomically save persona to workspace/persona.json.
+
+    Writes a UNIQUE temp file (not a shared 'persona.tmp') so two eidos processes briefly overlapping
+    — e.g. a watchdog respawn racing the dying process — can't rename each other's temp away. The old
+    fixed-name tmp made concurrent saves crash with FileNotFoundError on the rename, which cascaded into
+    a full crash-loop. replace_with_retry tolerates the dashboard holding persona.json open (Windows).
+    """
     path = workspace / "persona.json"
-    tmp = path.with_suffix(".tmp")
-    with open(tmp, "w") as f:
-        json.dump(persona, f, indent=2)
-    tmp.replace(path)
+    fd, tmpname = tempfile.mkstemp(dir=str(workspace), prefix=".persona-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(persona, f, indent=2)
+        replace_with_retry(tmpname, path)
+    except BaseException:
+        try:
+            os.unlink(tmpname)
+        except OSError:
+            pass
+        raise
 
 
 def compute_level(xp: int) -> int:

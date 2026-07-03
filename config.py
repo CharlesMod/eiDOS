@@ -53,22 +53,41 @@ def _toml_scalar(v) -> str:
     return f'"{s}"'
 
 
+def _toml_key(k: str) -> str:
+    """A table-header/key segment: bare when safe (A-Za-z0-9_-), else quoted. Lets model names like
+    `gemma4-12b` head a sub-table [llm.profiles.gemma4-12b] while still handling odd names safely."""
+    import re
+    return k if re.fullmatch(r"[A-Za-z0-9_-]+", k or "") else _toml_scalar(str(k))
+
+
+def _emit_table(prefix: str, table: dict, lines: list) -> None:
+    """Emit one [prefix] table: its scalar keys first (TOML requires them before any sub-table header),
+    then recurse into nested dicts as dotted sub-tables ([prefix.sub]). Handles arbitrary depth so the
+    per-model [llm.profiles.<model>] overlay round-trips."""
+    scalars = {k: v for k, v in table.items() if not isinstance(v, dict)}
+    subs = {k: v for k, v in table.items() if isinstance(v, dict)}
+    lines.append(f"[{prefix}]")
+    for k, v in scalars.items():
+        lines.append(f"{_toml_key(k)} = {_toml_scalar(v)}")
+    lines.append("")
+    for k, v in subs.items():
+        _emit_table(f"{prefix}.{_toml_key(k)}", v, lines)
+
+
 def _dump_toml(data: dict) -> str:
-    """Minimal TOML writer for the overlay: top-level scalars first, then [section] tables. Sufficient
-    for the settings the dashboard persists (no nested-table arrays, no datetimes)."""
+    """Minimal TOML writer for the overlay: top-level scalars first, then [section] tables (nested tables
+    emitted as dotted sub-tables). Sufficient for the settings the dashboard persists (no nested-table
+    arrays, no datetimes)."""
     top = {k: v for k, v in data.items() if not isinstance(v, dict)}
-    tables = {k: v for k, v in data.items() if isinstance(v, dict)}
     lines = ["# eiDOS machine-local settings — written by the dashboard Settings menu.",
              "# Overrides config.toml; safe to edit by hand or delete to reset to defaults.", ""]
     for k, v in top.items():
         lines.append(f"{k} = {_toml_scalar(v)}")
     if top:
         lines.append("")
-    for sect, kv in tables.items():
-        lines.append(f"[{sect}]")
-        for k, v in kv.items():
-            lines.append(f"{k} = {_toml_scalar(v)}")
-        lines.append("")
+    for sect, kv in data.items():
+        if isinstance(kv, dict):
+            _emit_table(sect, kv, lines)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -105,6 +124,10 @@ class Config:
     llm_presence_penalty: float = 1.5
     llm_frequency_penalty: float = 0.4   # scales with token count → breaks degenerate repeat loops
     llm_repeat_penalty: float = 1.1      # llama.cpp n-gram repeat penalty (1.0 = off)
+    # Per-model sampler profiles: {model_name: {temperature, top_p, top_k, min_p, presence_penalty,
+    # frequency_penalty, repeat_penalty}}. When the active llm_model has an entry, those keys override
+    # the base llm_* values for that model (each model's "best settings"). config [llm.profiles.<model>].
+    llm_profiles: dict = dataclasses.field(default_factory=dict)
     llm_grammar_enabled: bool = True   # GBNF tick-output contract (BIBLE 2.1)
 
     # Tick
@@ -426,6 +449,25 @@ class Config:
         return self.state_dir / self.nervous_snapshot_name
 
 
+# Sampler keys that can be tuned per-model via [llm.profiles.<model>] (each model's "best settings").
+SAMPLER_KEYS = ("temperature", "top_p", "top_k", "min_p",
+                "presence_penalty", "frequency_penalty", "repeat_penalty")
+
+
+def active_sampler(config: "Config", model: str = None) -> dict:
+    """Effective sampler settings for `model` (default: the active llm_model): the base llm_* values
+    with that model's profile (config [llm.profiles.<model>]) overlaid on top. Single source of truth
+    for 'which numbers does this model actually run with', used by llm.py and the Settings UI."""
+    model = model or config.llm_model
+    base = {k: getattr(config, "llm_" + k) for k in SAMPLER_KEYS}
+    prof = (getattr(config, "llm_profiles", None) or {}).get(model, {})
+    for k in SAMPLER_KEYS:
+        v = prof.get(k)
+        if v is not None:
+            base[k] = v
+    return base
+
+
 def load_config(path: str = "config.toml") -> Config:
     """Load config from TOML file, then apply env var overrides."""
     config = Config()
@@ -464,6 +506,10 @@ def load_config(path: str = "config.toml") -> Config:
         config.llm_presence_penalty = llm.get("presence_penalty", config.llm_presence_penalty)
         config.llm_frequency_penalty = llm.get("frequency_penalty", config.llm_frequency_penalty)
         config.llm_repeat_penalty = llm.get("repeat_penalty", config.llm_repeat_penalty)
+        # Per-model sampler overrides live under [llm.profiles.<model>]; keep only mapping values so a
+        # stray scalar can't poison the merge in llm.py / active_sampler().
+        config.llm_profiles = {m: dict(p) for m, p in (llm.get("profiles") or {}).items()
+                               if isinstance(p, dict)}
         config.llm_grammar_enabled = llm.get("grammar_enabled", config.llm_grammar_enabled)
 
         tick = data.get("tick", {})

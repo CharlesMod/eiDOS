@@ -694,7 +694,8 @@ body::after {
 #nx-settings-panel .nxs-row{display:flex;align-items:center;gap:6px;margin:3px 0}
 #nx-settings-panel .nxs-row label{flex:1;color:#9ab89a;font-size:11px}
 #nx-settings-panel .nxs-row .nxs-help{display:block;color:#5f7a5f;font-size:9px}
-#nx-settings-panel input[type=text],#nx-settings-panel input[type=number]{width:150px;background:#0d120d;
+#nx-settings-panel .nxs-row .nxs-pm{color:#7CFC9B;font-size:8px;margin-left:3px;vertical-align:top}
+#nx-settings-panel input[type=text],#nx-settings-panel input[type=number],#nx-settings-panel select{width:150px;background:#0d120d;
   border:1px solid #1a3a1a;border-radius:3px;color:#cfe9cf;font:inherit;font-size:11px;padding:3px 5px}
 #nx-settings-panel .nxs-act{display:flex;gap:6px}
 #nx-settings-panel .nxs-act button{margin:6px 0}
@@ -846,7 +847,6 @@ body.wb-nocode #wb-code{display:none}
   <button onclick="nxReset('rebirth')">&#8634; Rebirth — back to egg, KEEP knowledge &amp; skills</button>
   <button onclick="nxReset('full')">&#8856; Full wipe — Level 0, fresh nuggets, NEW creature</button>
 </div>
-<datalist id="nxs-models"></datalist>
 <div style="height:38px"></div>
 <script>
 async function nxCtl(action){
@@ -871,6 +871,7 @@ async function nxLoadSettings(){
   const form=document.getElementById('nxs-form');
   try{
     const d=await (await fetch('/api/config')).json();
+    window.nxProfiles = d.profiles || {};   // {model: {field_id: value}} — per-model sampler sets
     document.getElementById('nxs-firstrun').style.display = d.has_overlay ? 'none':'block';
     document.getElementById('nxs-meta').textContent = 'platform: '+d.platform+' · tools run via '+d.shell;
     let h='';
@@ -878,24 +879,33 @@ async function nxLoadSettings(){
       h+='<div class="nxs-group">'+nxEsc(g.group)+'</div>';
       g.fields.forEach(f=>{
         const v=f.value;
-        h+='<div class="nxs-row"><label title="'+nxEsc(f.help||'')+'">'+nxEsc(f.label);
+        const pm=f.per_model?' data-permodel="1"':'';   // sampler field stored per-model
+        const pmTip=f.per_model?' • per-model':'';
+        h+='<div class="nxs-row"><label title="'+nxEsc((f.help||'')+pmTip)+'">'+nxEsc(f.label);
+        if(f.per_model) h+='<span class="nxs-pm">◆</span>';
         if(f.help) h+='<span class="nxs-help">'+nxEsc(f.help)+'</span>';
         h+='</label>';
         if(f.type==='bool'){
           h+='<input type="checkbox" data-id="'+f.id+'" data-type="bool"'+(v?' checked':'')+'>';
         } else if(f.type==='int'||f.type==='float'){
-          h+='<input type="number" step="'+(f.type==='float'?'0.01':'1')+'" data-id="'+f.id+'" data-type="'+f.type+'" value="'+nxEsc(v==null?'':v)+'">';
+          h+='<input type="number" step="'+(f.type==='float'?'0.01':'1')+'" data-id="'+f.id+'" data-type="'+f.type+'"'+pm+' value="'+nxEsc(v==null?'':v)+'">';
         } else if(f.picker){
-          h+='<input type="text" list="nxs-models" data-id="'+f.id+'" data-type="str" value="'+nxEsc(v==null?'':v)+'">';
+          const cv=nxEsc(v==null?'':v);
+          h+='<select data-id="'+f.id+'" data-type="str" id="nxs-model-select" onchange="nxModelSelChange(this)">'
+            +'<option value="'+cv+'" selected>'+(v==null?'(none)':cv)+'</option>'
+            +'<option value="__custom__">✎ custom name…</option>'
+            +'</select>';
         } else {
           h+='<input type="text" data-id="'+f.id+'" data-type="str" value="'+nxEsc(v==null?'':v)+'">';
         }
         h+='</div>';
         if(f.id==='llm.model'){ h+='<div class="nxs-row"><button class="nxs-mini" onclick="nxTestLLM()">Test connection</button>'
-          +'<button class="nxs-mini" onclick="nxListModels()">List models</button></div>'; }
+          +'<button class="nxs-mini" onclick="nxRefreshModels(true)">Refresh list</button></div>'
+          +'<div class="nxs-row"><span class="nxs-help">◆ sampler settings below are saved <b>per model</b> — switch model to see/edit its own set</span></div>'; }
       });
     });
     form.innerHTML=h;
+    nxRefreshModels();          // auto-fill the model dropdown from the endpoint (best-effort)
   }catch(e){ form.textContent='failed to load settings: '+e; }
 }
 
@@ -910,13 +920,51 @@ async function nxTestLLM(){
   catch(e){ msg.textContent='✗ '+e; }
 }
 
-async function nxListModels(){
-  const msg=document.getElementById('nx-settings-msg'); msg.textContent='listing models…';
+// Fill the Model dropdown with the endpoint's models, keeping `cur` selected and always
+// offering a "✎ custom name…" escape hatch so arbitrary server model names still work.
+function nxSetModelOptions(models, cur){
+  const sel=document.getElementById('nxs-model-select'); if(!sel) return;
+  const current = (cur!=null ? cur : sel.value) || '';
+  const list=(models||[]).slice();
+  if(current && current!=='__custom__' && !list.includes(current)) list.unshift(current);
+  let h='';
+  list.forEach(m=>{ h+='<option value="'+nxEsc(m)+'"'+(m===current?' selected':'')+'>'+nxEsc(m)+'</option>'; });
+  if(!list.length) h+='<option value="" selected>(none)</option>';
+  h+='<option value="__custom__">✎ custom name…</option>';
+  sel.innerHTML=h;
+}
+// Pull the model list from the currently-entered endpoint. Silent on auto-load; chatty when
+// the operator clicks "Refresh list" (manual=true).
+async function nxRefreshModels(manual){
+  const sel=document.getElementById('nxs-model-select'); if(!sel) return;
+  const msg=document.getElementById('nx-settings-msg');
+  if(manual) msg.textContent='listing models…';
+  const cur=sel.value;
   try{ const r=await (await fetch('/api/llm/models?url='+encodeURIComponent(nxFieldVal('llm.url')||''))).json();
-    const dl=document.getElementById('nxs-models'); dl.innerHTML='';
-    (r.models||[]).forEach(m=>{ const o=document.createElement('option'); o.value=m; dl.appendChild(o); });
-    msg.textContent = r.ok ? ('✓ '+r.models.length+' model(s) — pick from the Model box') : ('✗ '+(r.error||'none')); }
-  catch(e){ msg.textContent='✗ '+e; }
+    if(r.ok){ nxSetModelOptions(r.models, cur); if(manual) msg.textContent='✓ '+r.models.length+' model(s) — pick one, then Apply'; }
+    else if(manual){ msg.textContent='✗ '+(r.error||'none'); } }
+  catch(e){ if(manual) msg.textContent='✗ '+e; }
+}
+// Model dropdown changed: load that model's stored sampler set into the ◆ per-model fields.
+// "✎ custom name…" → prompt for a name (preserving discovered options), then load its set too.
+function nxModelSelChange(sel){
+  if(sel.value==='__custom__'){
+    const existing=[...sel.options].map(o=>o.value).filter(v=>v && v!=='__custom__');
+    const name=(prompt('Model name (exactly as the server expects it):','')||'').trim();
+    if(name){ nxSetModelOptions(existing, name); nxApplyProfileToFields(name); }
+    else { sel.selectedIndex=0; }
+    return;
+  }
+  nxApplyProfileToFields(sel.value);
+}
+// Overlay a model's stored sampler set (window.nxProfiles) onto the ◆ per-model inputs.
+// Unknown model (no stored profile) → leave the current field values as-is.
+function nxApplyProfileToFields(model){
+  const prof=(window.nxProfiles||{})[model]; if(!prof) return;
+  document.querySelectorAll('#nxs-form [data-permodel="1"]').forEach(el=>{
+    const id=el.getAttribute('data-id');
+    if(id in prof && prof[id]!=null) el.value=prof[id];
+  });
 }
 
 async function nxApplySettings(apply){

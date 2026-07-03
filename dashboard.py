@@ -986,6 +986,8 @@ def _make_handler(config: Config):
                 _shell = "PowerShell" if os.name == "nt" else " ".join(_ps.posix_shell(_fresh))
                 self._respond(200, "application/json", json.dumps({
                     "groups": settings_schema.current_settings(_fresh),
+                    "profiles": settings_schema.model_profiles(_fresh),
+                    "active_model": _fresh.llm_model,
                     "has_overlay": (_kdir / LOCAL_CONFIG_NAME).exists(),
                     "platform": sys.platform, "shell": _shell, "llm_url": _fresh.llm_url,
                 }))
@@ -1385,12 +1387,27 @@ def _ctrl_pid_alive(pid):
     hit = _pid_cache.get(pid)
     if hit and now - hit[0] < 2.5:
         return hit[1]
-    try:
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                             capture_output=True, text=True, timeout=10)
-        alive = str(pid) in (out.stdout or "")
-    except Exception:
-        alive = False
+    if os.name == "nt":
+        try:
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                                 capture_output=True, text=True, timeout=10)
+            alive = str(pid) in (out.stdout or "")
+        except Exception:
+            alive = False
+    else:
+        # POSIX: signal 0 probes existence without touching the process. Using tasklist here (as the
+        # original did) always raised FileNotFoundError on Linux → alive=False for EVERY pid, so the
+        # watchdog saw a live, paused eidos as "died" and respawn-looped it forever (Start appeared to
+        # do nothing; processes piled up).
+        try:
+            os.kill(pid, 0)
+            alive = True
+        except ProcessLookupError:
+            alive = False
+        except PermissionError:
+            alive = True   # exists, owned by another user — still "alive"
+        except OSError:
+            alive = False
     _pid_cache[pid] = (now, alive)
     return alive
 

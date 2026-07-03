@@ -72,6 +72,17 @@ class EidosEnvOverrides(BaseSettings):
         return value
 
 
+class LlmSamplerProfile(_StrictBoundaryModel):
+    """Per-model sampler overrides under [llm.profiles.<model>] — each model's 'best settings'."""
+    temperature: float | None = Field(default=None, ge=0)
+    top_p: float | None = Field(default=None, ge=0, le=1)
+    top_k: int | None = Field(default=None, ge=0)
+    min_p: float | None = Field(default=None, ge=0, le=1)
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    repeat_penalty: float | None = Field(default=None, gt=0)
+
+
 class LlmConfigSection(_StrictBoundaryModel):
     url: str | None = Field(default=None, min_length=1)
     model: str | None = Field(default=None, min_length=1)
@@ -84,6 +95,7 @@ class LlmConfigSection(_StrictBoundaryModel):
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
     repeat_penalty: float | None = Field(default=None, gt=0)
+    profiles: dict[str, LlmSamplerProfile] | None = None
     grammar_enabled: bool | None = None
 
 
