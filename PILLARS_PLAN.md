@@ -283,6 +283,30 @@ body has (I8).
 >   on Sprinter today (only gemma-12b + qwen-27b), so a CPU tier needs a small model acquired
 >   first; the slot-sharing numbers mean we likely won't need it. Remote ganglia remain the
 >   distributed-robot path (I9), unchanged.
+>
+> **`max_generals` — empirically pinned (2026-07-03, 8k ctx/slot).** The naive KV-linear math
+> predicted ~12 slots; **the real ceiling is 8** — the CUDA compute/graph buffer grows with
+> total-context × parallelism (a nonlinearity the 1→2 extrapolation missed), so effective per-slot
+> cost is ~600 MiB, not the flat 454. Measured curve:
+>
+> | total slots | VRAM used | load | per-slot tok/s @ N-concurrent |
+> |---|---|---|---|
+> | 1 | 10767 MiB | ✅ | 77.8 |
+> | 2 | 11221 MiB | ✅ | 70.8 |
+> | 6 | 13776 MiB | ✅ | ~45 |
+> | 8 | 14966 MiB | ✅ (~1.3 GB free) | 40.4 |
+> | 10 | — | ❌ OOM (compute buffer) | — |
+> | 12 | — | ❌ OOM (5760 MiB buffer) | — |
+>
+> - **Hard ceiling: 8 total slots @8k** (9 marginal, 10 OOMs). The mind holds slot 0 → **max 7
+>   generals** at full VRAM. Throughput is not the binding constraint (40 tok/s/slot even at 8-way,
+>   aggregate 323); **VRAM is**.
+> - **Recommended design constant `max_generals = 5`** (≈ empirical max − 2, per Dean): mind + 5
+>   generals = 6 slots, leaving ~2.5 GB VRAM headroom for fragmentation/desktop spikes and ~45
+>   tok/s/slot. The arbiter enforces this cap; it is *derived from measurement*, not guessed (§0.4).
+> - **Context-scaled** (KV ∝ ctx): the cap moves with per-slot context — ~12–14 slots @4k, ~8 @8k,
+>   ~4–5 @16k. If the mind runs at its full 16k in a shared server, all slots inherit 16k and the
+>   general budget shrinks accordingly; a dedicated general-server at 8k keeps the higher count.
 
 ```
 Mission {
