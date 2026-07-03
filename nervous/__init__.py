@@ -27,6 +27,7 @@ from .power import (PowerMonitor, lifepo4_soc, parse_mppt,
                     read_power_cache, write_power_cache, cache_reader)
 from .battery_profiler import BatteryProfiler
 from .organs import OrganRegistry, Organ
+from .salience import SalienceGate, publish_relevance_set
 
 
 def build_bus(config, *, payload_store=None):
@@ -59,4 +60,5 @@ __all__ = [
     "read_power_cache", "write_power_cache", "cache_reader",
     "BatteryProfiler",
     "OrganRegistry", "Organ",
+    "SalienceGate", "publish_relevance_set",
 ]
