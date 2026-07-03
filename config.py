@@ -359,6 +359,12 @@ class Config:
     pillars_skill_timeout_ceiling_s: float = 60.0
     # Phase 2 — the memory core (the engram economy)
     pillars_memory_engram_enabled: bool = False        # 2.1 the engram + hot/episodic/long-term stores (engram.py; a LIBRARY until 2.2 wires it)
+    pillars_memory_manager_enabled: bool = False       # 2.2 the manager: store importer + 4-layer recall cascade (memory_manager.py)
+    pillars_recall_explore_ratio: float = 0.15         # declared: fraction of a recall set reserved for a low-strength sample slot (anti-Matthew, plan §6)
+    pillars_sleep_engine_enabled: bool = False         # 2.4 real sleep engine: job-list consolidation/decay/distillation (nervous/sleep.py)
+    pillars_max_wake_hours: float = 18.0               # declared: adenosine cap — past this, sleep-pressure overrides all drive floors (pitfall #2)
+    pillars_expectations_enabled: bool = False         # 4.1 expectation ledger: typed open predictions closed by glue → surprise (expectations.py)
+    pillars_max_open_predictions: int = 12             # declared: bound on simultaneously-open predictions (no unbounded growth)
     # Phase 3 — skill economy (from library to language)
     pillars_skill_affordances_enabled: bool = False    # 3.1 surface top-K situation-relevant skills at the decision point
     pillars_skill_affordance_k: int = 3                # declared: how many affordances to surface
@@ -718,6 +724,12 @@ def load_config(path: str = "config.toml") -> Config:
         config.pillars_skill_timeout_floor_s = float(pillars.get("skill_timeout_floor_s", config.pillars_skill_timeout_floor_s))
         config.pillars_skill_timeout_ceiling_s = float(pillars.get("skill_timeout_ceiling_s", config.pillars_skill_timeout_ceiling_s))
         config.pillars_memory_engram_enabled = pillars.get("memory_engram_enabled", config.pillars_memory_engram_enabled)
+        config.pillars_memory_manager_enabled = pillars.get("memory_manager_enabled", config.pillars_memory_manager_enabled)
+        config.pillars_recall_explore_ratio = float(pillars.get("recall_explore_ratio", config.pillars_recall_explore_ratio))
+        config.pillars_sleep_engine_enabled = pillars.get("sleep_engine_enabled", config.pillars_sleep_engine_enabled)
+        config.pillars_max_wake_hours = float(pillars.get("max_wake_hours", config.pillars_max_wake_hours))
+        config.pillars_expectations_enabled = pillars.get("expectations_enabled", config.pillars_expectations_enabled)
+        config.pillars_max_open_predictions = int(pillars.get("max_open_predictions", config.pillars_max_open_predictions))
         config.pillars_skill_affordances_enabled = pillars.get("skill_affordances_enabled", config.pillars_skill_affordances_enabled)
         config.pillars_skill_affordance_k = int(pillars.get("skill_affordance_k", config.pillars_skill_affordance_k))
         config.pillars_skill_economy_enabled = pillars.get("skill_economy_enabled", config.pillars_skill_economy_enabled)

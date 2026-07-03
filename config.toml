@@ -233,6 +233,12 @@ memory_engram_enabled = false     # 2.1 the engram + hot/episodic/long-term stor
 skill_affordances_enabled = false # 3.1 surface top-K situation-relevant skills at the decision point
 skill_economy_enabled = false     # 3.2 similarity-priced authoring + reuse-favoring XP + auto-retire
 quests_enabled = false            # 5.1 quest engine (the System: issue/track/adjudicate)
+memory_manager_enabled = false    # 2.2 store importer + 4-layer recall cascade (memory_manager.py)
+recall_explore_ratio = 0.15       # 2.2 fraction of a recall set reserved for a low-strength sample (anti-Matthew)
+sleep_engine_enabled = false      # 2.4 job-list sleep: consolidation/decay/distillation (nervous/sleep.py)
+max_wake_hours = 18.0             # 2.4 adenosine cap: past this, sleep-pressure overrides all drive floors
+expectations_enabled = false      # 4.1 expectation ledger: typed predictions closed by glue → surprise
+max_open_predictions = 12         # 4.1 bound on simultaneously-open predictions
 
 [paths]
 # Relative paths anchor at the repo root (resolved in config.py), so this is portable across machines
