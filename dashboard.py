@@ -1025,6 +1025,15 @@ def _make_handler(config: Config):
             elif self.path == "/api/nervous":
                 self._respond(200, "application/json", json.dumps(build_nervous(config)))
 
+            elif self.path.startswith("/api/why"):
+                # Causal ledger (Pillars 0.3): the pressure field that produced a given tick —
+                # ?tick=N returns that tick's record; no tick returns the recent field for a panel.
+                from urllib.parse import urlparse, parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                _tick_q = (q.get("tick") or [""])[0]
+                self._respond(200, "application/json",
+                              json.dumps(build_why(config, _tick_q)))
+
             elif self.path == "/api/control/status":
                 self._respond(200, "application/json", json.dumps(_ctrl_status(config)))
 
@@ -2102,6 +2111,25 @@ def _raw_substrate(config):
     except Exception:  # noqa: BLE001
         pass
     return sub
+
+
+def build_why(config, tick_q: str) -> dict:
+    """Causal ledger read (Pillars 0.3): the pressure field that produced a tick.
+
+    `/api/why?tick=N` → {"tick": N, "field": {...}} (or field=None if none logged / off).
+    `/api/why` with no tick → {"recent": [...]} newest-first, so the panel can list what
+    exists. Off by default (feature ships dark): reports enabled=False when the flag is off.
+    """
+    import pressures
+    enabled = bool(getattr(config, "pillars_causal_ledger_enabled", False))
+    if tick_q:
+        try:
+            tick = int(tick_q)
+        except (TypeError, ValueError):
+            return {"error": "tick must be an integer", "enabled": enabled}
+        field = pressures.read_field_by_tick(config, tick)
+        return {"tick": tick, "field": field, "enabled": enabled}
+    return {"recent": pressures.read_recent_fields(config, n=30), "enabled": enabled}
 
 
 def build_nervous(config):
