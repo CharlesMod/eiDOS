@@ -20,6 +20,8 @@ skill *source*, and the existing command-blocking in tool_bash still guards shel
 import ast
 import json
 import logging
+import math
+import os
 import re
 import subprocess
 import sys
@@ -28,7 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import Config
-from tools import ToolResult, TOOLS
+from tools import ToolResult, TOOLS, _kill_pid_tree  # _kill_pid_tree: hard-kill a subprocess tree
 from skill_atoms import build_atoms, ATOM_NAMES  # M2: the in-scope vocabulary skills compose
 
 logger = logging.getLogger("eidos.skills")
@@ -57,6 +59,18 @@ _DEMOTE_RATE = 0.5           # a trusted skill's active version under this rate 
 # Statuses that mean "a live, callable skill" (brief/dup-guard/etc. must include BOTH —
 # filtering on just "active" made trusted skills invisible, the worst possible incentive).
 _LIVE_STATUSES = ("active", "trusted")
+
+# --- Pillars 1.2: killable subprocess execution + per-skill telemetry --------------------------
+# The old thread-watchdog ABANDONED a hung skill (Python can't kill a thread) — tick 342's 6.7-min
+# freeze. When `config.pillars_killable_skills_enabled` is ON, a skill instead runs in a one-shot
+# subprocess (same harness family as the author-time dry-run) that we HARD-KILL on overrun. The
+# whole path is dark behind the flag; flag-OFF keeps the thread-watchdog byte-for-byte.
+_TELEMETRY_LATENCY_SAMPLES = 50      # declared knob: rolling window of per-skill latency samples kept
+                                     # for p50/p95 (bounded so the manifest can't grow unboundedly).
+_SKILL_TIMEOUT_MULTIPLIER = 3.0      # declared knob: per-skill timeout = measured p95 × 3, then
+                                     # clamped to [pillars_skill_timeout_floor_s, ..._ceiling_s].
+_SUBPROC_KILL_GRACE_S = 3.0          # declared knob: after terminate on overrun, wait this long for
+                                     # the process to die before the hard SIGKILL tree-kill.
 
 
 # ---------------------------------------------------------------------------
@@ -164,17 +178,51 @@ def _validate_source(name: str, code: str, sandbox: bool = True) -> list[str]:
     return out
 
 
-def _dry_run(config: Config, name: str, version: str) -> tuple[bool, str]:
+def _sample_args(args_schema: Optional[dict]) -> dict:
+    """Build a schema-shaped sample argument dict so the dry-run CALLS the skill the way the model will,
+    not with an empty `{}` that masks arg-independent contract bugs. Best-effort and type-guessed: a
+    skill declares `args_schema` as {arg_name: type_hint | {"type": ...}}; we fill each with a benign
+    value of the hinted type. An unhinted/opaque schema yields `{}` (same as the old behavior)."""
+    out: dict = {}
+    if not isinstance(args_schema, dict):
+        return out
+    for key, spec in args_schema.items():
+        t = spec.get("type") if isinstance(spec, dict) else spec
+        t = str(t or "").lower()
+        if "int" in t:
+            out[key] = 1
+        elif "float" in t or "number" in t:
+            out[key] = 1.0
+        elif "bool" in t:
+            out[key] = False
+        elif "list" in t or "array" in t:
+            out[key] = []
+        elif "dict" in t or "object" in t or "map" in t:
+            out[key] = {}
+        else:
+            out[key] = "x"   # default: a short non-empty string (covers str / unknown)
+    return out
+
+
+def _dry_run(config: Config, name: str, version: str,
+             args_schema: Optional[dict] = None, strict_contract: bool = False) -> tuple[bool, str]:
     """Run the saved skill file in a fresh subprocess. Returns (ok_to_activate, note).
 
     LOAD_ERROR (syntax/import/not-defined) or a timeout block activation.
-    A runtime CALL_RAISED with empty args is fine (skills often need real args).
+    A runtime CALL_RAISED with empty/sample args is fine (skills often need real args).
+
+    Pillars 1.2: when `strict_contract` (the killable-skills path), the harness is CALLED with
+    `_sample_args(args_schema)` and a return that is NOT a ToolResult is REJECTED at authoring time
+    (the dict-vs-ToolResult bug used to be caught only at dispatch, after it already crash-looped the
+    creature — tick 14066). Flag-OFF keeps the lenient behavior (CALL_BADRESULT normalized, not
+    rejected) so nothing changes for the current path.
     """
     skill_file = _skill_file(config, name, version)
     harness = HARNESS_TEMPLATE.format(
         kairos=repr(str(KAIROS_DIR)),
         skill_file=repr(str(skill_file)),
         func=f"tool_{name}",
+        sample_args=repr(json.dumps(_sample_args(args_schema) if strict_contract else {})),
     )
     harness_path = _skills_dir(config) / ".dryrun.py"
     harness_path.write_text(harness, encoding="utf-8")
@@ -197,6 +245,15 @@ def _dry_run(config: Config, name: str, version: str) -> tuple[bool, str]:
         return False, line[:300]
     if line.startswith("CALL_OK"):
         return True, "dry-run clean"
+    if line.startswith("CALL_BADRESULT"):
+        # The skill loaded and ran but returned the WRONG TYPE (a dict/str/number, not a ToolResult).
+        # Under the killable path we enforce the contract HERE (authoring time) so a mis-typed return
+        # can never reach dispatch and KeyError the tick-loop display. Flag-OFF falls through to the
+        # lenient handling below (normalized at dispatch, historical behavior).
+        if strict_contract:
+            return False, (f"{line[:200]} — a skill MUST `return ToolResult(output=..., "
+                           f"full_output_path=None, success=True/False, duration_s=...)`. Returning a "
+                           f"dict/str/number is rejected: build a ToolResult before returning.")
     if line.startswith("CALL_RAISED") or line.startswith("CALL_BADRESULT"):
         # A reference to something UNAVAILABLE (a missing import, an undefined name) means the skill can
         # NEVER work — reject it now. The predecessor MASKED these as "probably just needs args" and so
@@ -206,13 +263,13 @@ def _dry_run(config: Config, name: str, version: str) -> tuple[bool, str]:
             return False, (f"{line[:200]} — the package/name isn't available. Use the in-scope ATOMS "
                            f"(http_get, http_post, json_parse, sh, read, write, recall, memorize, note, "
                            f"look, net_scan, tcp_probe, http_probe) instead of importing.")
-        # loaded fine; raised only because it was called with empty args — acceptable
+        # loaded fine; raised only because it was called with sample args — acceptable
         return True, f"loads OK; {line[:200]} (expected if it needs args)"
     return False, f"dry-run produced no verdict: {out[:200]}"
 
 
 HARNESS_TEMPLATE = '''\
-import sys, os
+import sys, os, json as _json
 os.chdir({kairos})
 sys.path.insert(0, {kairos})
 from config import load_config, Config
@@ -233,7 +290,11 @@ fn = ns.get("{func}")
 if fn is None:
     print("LOAD_ERROR: {func} not defined after exec"); sys.exit(0)
 try:
-    r = fn({{}}, cfg)
+    _sample = _json.loads({sample_args})
+except Exception:
+    _sample = {{}}
+try:
+    r = fn(_sample, cfg)
     print("CALL_OK" if isinstance(r, ToolResult) else "CALL_BADRESULT: returned " + type(r).__name__)
 except SystemExit:
     print("CALL_RAISED: SystemExit")
@@ -243,14 +304,223 @@ except Exception as e:
 
 
 # ---------------------------------------------------------------------------
+# Pillars 1.2: killable subprocess execution
+# ---------------------------------------------------------------------------
+
+# A one-shot execution harness: load the skill (atoms + config injected, identical to _build_runner /
+# the dry-run), call it with the REAL args handed in on argv, and print the ToolResult back as a single
+# JSON line on a sentinel-prefixed stdout line. Any load/exec failure prints a typed marker. The parent
+# HARD-KILLS this process on overrun, so a hang (while True / timeout-less socket) dies with the process
+# — no orphan thread, no tick freeze (the tick-342 fix done right).
+EXEC_HARNESS_TEMPLATE = '''\
+import sys, os, json as _json
+os.chdir({kairos})
+sys.path.insert(0, {kairos})
+from config import load_config, Config
+from tools import ToolResult
+_SENT = "__EIDOS_SKILL_RESULT__"
+def _emit(obj):
+    sys.stdout.write(_SENT + _json.dumps(obj) + "\\n"); sys.stdout.flush()
+try:
+    cfg = load_config("config.toml")
+    args = _json.loads(sys.argv[1]) if len(sys.argv) > 1 else {{}}
+    code = open({skill_file}, encoding="utf-8").read()
+    ns = {{"Config": Config, "ToolResult": ToolResult}}
+    try:
+        from skill_atoms import build_atoms
+        ns.update(build_atoms(cfg))
+    except Exception:
+        pass
+    exec(compile(code, {skill_file}, "exec"), ns)
+    fn = ns.get({func!r})
+    if fn is None:
+        _emit({{"kind": "load_error", "msg": "{func} not defined"}}); sys.exit(0)
+    r = fn(args, cfg)
+    if isinstance(r, ToolResult):
+        _emit({{"kind": "ok", "output": r.output, "success": bool(r.success),
+                "duration_s": float(r.duration_s), "fail_kind": r.fail_kind}})
+    else:
+        _emit({{"kind": "bad_result", "type": type(r).__name__,
+                "repr": repr(r)[:2000]}})
+except SystemExit:
+    raise
+except Exception as e:
+    import traceback
+    _emit({{"kind": "raised", "type": type(e).__name__, "msg": str(e)[:500],
+            "tb": traceback.format_exc()[-1000:]}})
+'''
+
+_EXEC_SENTINEL = "__EIDOS_SKILL_RESULT__"
+
+
+def derived_timeout_s(config: Config, entry: Optional[dict]) -> float:
+    """Per-skill timeout = measured p95 × multiplier, clamped to [floor, ceiling] (declared knobs).
+    With no telemetry yet (a fresh skill) we start at the ceiling — generous until it has a record,
+    then it tightens toward its own measured latency. This replaces the guessed 30s wall-clock (§0.4:
+    a constant is a guess; derive it from data)."""
+    floor = float(getattr(config, "pillars_skill_timeout_floor_s", 5.0))
+    ceiling = float(getattr(config, "pillars_skill_timeout_ceiling_s", 60.0))
+    p95 = _percentile((entry or {}).get("latency_samples") or [], 95.0)
+    if p95 is None:
+        return ceiling
+    return max(floor, min(ceiling, p95 * _SKILL_TIMEOUT_MULTIPLIER))
+
+
+def run_skill_killable(config: Config, name: str, args: dict, timeout_s: float) -> ToolResult:
+    """Run one skill invocation in a fresh subprocess bounded by a HARD wall-clock kill.
+
+    Kill is guaranteed because the work lives in a *separate OS process*: on overrun we terminate it and,
+    after a short grace, SIGKILL its whole tree (`_kill_pid_tree`, the same routine tool_bash uses). No
+    Python thread is abandoned, nothing keeps running detached, and the tick loop is freed the instant
+    the timeout fires. Telemetry (latency, arg-shape success) is recorded by the caller.
+    """
+    skill_file = _skill_file(config, name, _active_version(config, name))
+    harness = EXEC_HARNESS_TEMPLATE.format(
+        kairos=repr(str(KAIROS_DIR)),
+        skill_file=repr(str(skill_file)),
+        func=f"tool_{name}",
+    )
+    # A per-invocation harness file (name-scoped) so concurrent skills don't clobber each other's harness.
+    harness_path = _skills_dir(config) / f".exec_{name}.py"
+    try:
+        harness_path.write_text(harness, encoding="utf-8")
+    except OSError as e:
+        return ToolResult(output=f"[skill '{name}'] could not stage runner: {e}",
+                          full_output_path=None, success=False, duration_s=0, fail_kind="crash")
+
+    try:
+        args_json = json.dumps(args, default=str)
+    except Exception:  # noqa: BLE001
+        args_json = "{}"
+
+    t = time.monotonic()
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, str(harness_path), args_json],
+            cwd=str(KAIROS_DIR), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            **({"start_new_session": True} if os.name != "nt"
+               else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}),
+        )
+    except Exception as e:  # noqa: BLE001
+        _unlink(harness_path)
+        return ToolResult(output=f"[skill '{name}'] could not launch subprocess: {type(e).__name__}: {e}",
+                          full_output_path=None, success=False, duration_s=time.monotonic() - t,
+                          fail_kind="crash")
+
+    try:
+        out, err = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        # HARD KILL: terminate, then after a grace SIGKILL the whole process tree so no orphan survives.
+        _kill_pid_tree(proc.pid)
+        try:
+            proc.communicate(timeout=_SUBPROC_KILL_GRACE_S)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                proc.communicate(timeout=_SUBPROC_KILL_GRACE_S)
+            except Exception:  # noqa: BLE001
+                pass
+        _unlink(harness_path)
+        return ToolResult(
+            output=(
+                f"WATCHDOG: skill '{name}' ran past {timeout_s:.0f}s and was KILLED (its whole "
+                f"subprocess tree was terminated — no orphan is left running, unlike the old thread "
+                f"watchdog that could only abandon a hung thread). The tick loop was never blocked. FIX "
+                f"THE SKILL with edit_skill: put an explicit timeout on EVERY network / HTTP / socket / "
+                f"subprocess call, or compose the bounded primitives (tcp_probe / http_probe / net_scan / "
+                f"udp_listen). For genuinely long work, dispatch it with bash/bg_run instead of inline."),
+            full_output_path=None, success=False, duration_s=time.monotonic() - t, fail_kind="timeout")
+    finally:
+        _unlink(harness_path)
+
+    dur = time.monotonic() - t
+    verdict = _parse_exec_stdout(out)
+    if verdict is None:
+        detail = ((out or "").strip()[-300:] or (err or "").strip()[-300:])
+        return ToolResult(output=f"[skill '{name}'] produced no result. {detail}",
+                          full_output_path=None, success=False, duration_s=dur, fail_kind="crash")
+    kind = verdict.get("kind")
+    if kind == "ok":
+        return ToolResult(output=verdict.get("output"), full_output_path=None,
+                          success=bool(verdict.get("success")),
+                          duration_s=float(verdict.get("duration_s") or dur),
+                          fail_kind=verdict.get("fail_kind") or "")
+    if kind == "bad_result":
+        # Should be unreachable once the authoring contract check lands, but a pre-existing skill or one
+        # authored while the flag was off can still be mis-typed — fail typed, never crash the tick loop.
+        return ToolResult(output=f"[skill '{name}' returned {verdict.get('type')}, not a ToolResult] "
+                                 f"{verdict.get('repr','')}",
+                          full_output_path=None, success=False, duration_s=dur, fail_kind="crash")
+    if kind == "load_error":
+        return ToolResult(output=f"[skill '{name}' load error] {verdict.get('msg','')}",
+                          full_output_path=None, success=False, duration_s=dur, fail_kind="crash")
+    # raised
+    return ToolResult(output=f"[skill '{name}' raised] {verdict.get('type')}: {verdict.get('msg','')}",
+                      full_output_path=None, success=False, duration_s=dur, fail_kind="crash")
+
+
+def _parse_exec_stdout(out: Optional[str]) -> Optional[dict]:
+    """Pull the one sentinel-prefixed JSON verdict line out of the subprocess stdout (the skill may have
+    printed its own noise; the sentinel isolates our line)."""
+    for ln in reversed((out or "").splitlines()):
+        if ln.startswith(_EXEC_SENTINEL):
+            try:
+                return json.loads(ln[len(_EXEC_SENTINEL):])
+            except Exception:  # noqa: BLE001
+                return None
+    return None
+
+
+def _unlink(p: Path) -> None:
+    try:
+        p.unlink()
+    except OSError:
+        pass
+
+
+def _active_version(config: Config, name: str) -> str:
+    ent = _load_manifest(config).get("skills", {}).get(name) or {}
+    return str(ent.get("active_version") or "1.0.0")
+
+
+# ---------------------------------------------------------------------------
+# Telemetry helpers (Pillars 1.2)
+# ---------------------------------------------------------------------------
+
+def _percentile(samples: list, pct: float) -> Optional[float]:
+    """Nearest-rank percentile over a numeric sample list. Returns None on an empty list."""
+    xs = sorted(float(x) for x in samples if isinstance(x, (int, float)))
+    if not xs:
+        return None
+    k = max(0, min(len(xs) - 1, math.ceil(pct / 100.0 * len(xs)) - 1))
+    return xs[k]
+
+
+def _arg_shape(args: Optional[dict]) -> str:
+    """A stable signature of an invocation's ARG SHAPE (the sorted set of keys present) so success can be
+    tracked per shape — a skill that works when called with {url} but not {ip} is a different story than
+    a flat success rate. Not the values (unbounded), just which args were supplied."""
+    if not isinstance(args, dict) or not args:
+        return "()"
+    return "(" + ",".join(sorted(str(k) for k in args)) + ")"
+
+
+# ---------------------------------------------------------------------------
 # Hot-load & invocation tracking
 # ---------------------------------------------------------------------------
 
 def _build_runner(config: Config, name: str, code: str):
     """Compile skill source and return a registry-compatible callable.
 
-    The skill runs IN-PROCESS (so it can do real work: network, subprocess, devices).
-    Exceptions are caught and converted to a failed ToolResult; usage is recorded.
+    Flag-OFF (default): the skill runs IN-PROCESS (so it can do real work: network, subprocess,
+    devices) under the caller's thread-watchdog — byte-for-byte the historical path.
+    Flag-ON (`pillars_killable_skills_enabled`): each call runs in a fresh, HARD-KILLABLE subprocess
+    (`run_skill_killable`) so a hang dies with the process instead of freezing the tick loop.
+    Either way, exceptions become a failed ToolResult and usage + latency + arg-shape are recorded.
     """
     ns = {"Config": Config, "ToolResult": ToolResult}
     try:
@@ -262,6 +532,14 @@ def _build_runner(config: Config, name: str, code: str):
 
     def runner(args: dict, cfg: Config) -> ToolResult:
         t = time.monotonic()
+        if getattr(cfg, "pillars_killable_skills_enabled", False):
+            # Killable path: run in a subprocess we can hard-kill. The derived per-skill timeout
+            # (p95×3, clamped) replaces the guessed 30s wall-clock.
+            timeout_s = derived_timeout_s(cfg, _load_manifest(cfg).get("skills", {}).get(name))
+            res = run_skill_killable(cfg, name, args or {}, timeout_s)
+            _record_invocation(cfg, name, res.success,
+                               latency_s=res.duration_s, args=args)
+            return res
         try:
             res = fn(args, cfg)
             if not isinstance(res, ToolResult):
@@ -271,14 +549,16 @@ def _build_runner(config: Config, name: str, code: str):
             res = ToolResult(output=f"[skill '{name}' raised] {type(e).__name__}: {e}",
                              full_output_path=None, success=False,
                              duration_s=time.monotonic() - t)
-        _record_invocation(cfg, name, res.success)
+        _record_invocation(cfg, name, res.success,
+                           latency_s=res.duration_s, args=args)
         return res
 
     runner.__name__ = f"skill_{name}"
     return runner
 
 
-def _record_invocation(config: Config, name: str, ok: bool) -> None:
+def _record_invocation(config: Config, name: str, ok: bool,
+                       latency_s: Optional[float] = None, args: Optional[dict] = None) -> None:
     try:
         m = _load_manifest(config)
         ent = m["skills"].get(name)
@@ -287,6 +567,20 @@ def _record_invocation(config: Config, name: str, ok: bool) -> None:
         ent["invocations"] = ent.get("invocations", 0) + 1
         if ok:
             ent["successes"] = ent.get("successes", 0) + 1
+        # Pillars 1.2 telemetry: rolling latency window (feeds p50/p95 + the derived timeout), the
+        # last-used timestamp, and per-arg-shape success (which call shapes actually work). Bounded so
+        # the manifest can't grow without limit. Kept alongside the existing invocation/success stats.
+        if latency_s is not None:
+            samples = ent.setdefault("latency_samples", [])
+            samples.append(round(float(latency_s), 4))
+            if len(samples) > _TELEMETRY_LATENCY_SAMPLES:
+                del samples[:-_TELEMETRY_LATENCY_SAMPLES]
+        ent["last_used"] = _now()
+        shape = _arg_shape(args)
+        by_shape = ent.setdefault("arg_shapes", {}).setdefault(shape, {"invocations": 0, "successes": 0})
+        by_shape["invocations"] += 1
+        if ok:
+            by_shape["successes"] += 1
         # Per-VERSION stats: trust/quarantine judge the code that is actually running. Lifetime
         # totals survive edits, so a once-good skill kept its trusted badge through a broken
         # rewrite, and a fixed skill kept dragging its broken ancestors' zeros.
@@ -446,7 +740,10 @@ def create_skill(config: Config, name: str, code: str,
     version = "1.0.0"
     _skill_file(config, name, version).write_text(code, encoding="utf-8")
 
-    ok, note = _dry_run(config, name, version)
+    # Pillars 1.2: under the killable path, dry-run CALLS the skill with schema-shaped sample args and
+    # REJECTS a non-ToolResult return at authoring time (flag-off keeps the lenient historical dry-run).
+    _strict = getattr(config, "pillars_killable_skills_enabled", False)
+    ok, note = _dry_run(config, name, version, args_schema=args_schema, strict_contract=_strict)
     if not ok:
         _skill_file(config, name, version).unlink(missing_ok=True)
         return {"success": False, "errors": [f"dry-run rejected: {note}"]}
@@ -484,7 +781,11 @@ def edit_skill(config: Config, name: str, code: str,
     version = _next_version(ent)
     _skill_file(config, name, version).write_text(code, encoding="utf-8")
 
-    ok, note = _dry_run(config, name, version)
+    # Pillars 1.2 contract check (see create_skill). An edited args_schema (or the stored one) shapes
+    # the sample call; only the killable path enforces the ToolResult return.
+    _strict = getattr(config, "pillars_killable_skills_enabled", False)
+    _schema = args_schema if args_schema is not None else ent.get("args_schema")
+    ok, note = _dry_run(config, name, version, args_schema=_schema, strict_contract=_strict)
     if not ok:
         _skill_file(config, name, version).unlink(missing_ok=True)
         return {"success": False, "errors": [f"dry-run rejected: {note}"],
@@ -543,6 +844,16 @@ def list_skills(config: Config) -> dict:
         ver = str(ent.get("active_version") or "?")
         vs = (ent.get("version_stats") or {}).get(ver, {})
         v_inv, v_suc = vs.get("invocations", 0), vs.get("successes", 0)
+        # Pillars 1.2 telemetry surfacing: latency p50/p95, per-arg-shape success, last-used, and the
+        # derived per-skill timeout (p95×3 clamped) — so `list_skills` shows the measured record.
+        samples = ent.get("latency_samples") or []
+        p50 = _percentile(samples, 50.0)
+        p95 = _percentile(samples, 95.0)
+        by_shape = {
+            shape: {"uses": s.get("invocations", 0),
+                    "success_rate": round(s["successes"] / s["invocations"], 2) if s.get("invocations") else None}
+            for shape, s in (ent.get("arg_shapes") or {}).items()
+        }
         skills[name] = {
             "description": ent.get("description", ""),
             "version": ent.get("active_version"),
@@ -551,6 +862,11 @@ def list_skills(config: Config) -> dict:
             "uses": inv, "success_rate": round(suc / inv, 2) if inv else None,
             "active_version_uses": v_inv,
             "active_version_success_rate": round(v_suc / v_inv, 2) if v_inv else None,
+            "latency_p50_s": round(p50, 3) if p50 is not None else None,
+            "latency_p95_s": round(p95, 3) if p95 is not None else None,
+            "success_by_arg_shape": by_shape,
+            "last_used": ent.get("last_used"),
+            "derived_timeout_s": round(derived_timeout_s(config, ent), 1),
         }
     builtins = sorted(n for n in RESERVED_NAMES if n not in {
         "create_skill", "edit_skill", "list_skills", "rollback_skill"})
