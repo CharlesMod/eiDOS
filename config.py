@@ -357,6 +357,8 @@ class Config:
     pillars_killable_skills_enabled: bool = False      # 1.2 subprocess-isolated, hard-killable skills
     pillars_skill_timeout_floor_s: float = 5.0         # derived timeout = p95*3, clamped to [floor, ceiling]
     pillars_skill_timeout_ceiling_s: float = 60.0
+    # Phase 2 — the memory core (the engram economy)
+    pillars_memory_engram_enabled: bool = False        # 2.1 the engram + hot/episodic/long-term stores (engram.py; a LIBRARY until 2.2 wires it)
     # Phase 3 — skill economy (from library to language)
     pillars_skill_affordances_enabled: bool = False    # 3.1 surface top-K situation-relevant skills at the decision point
     pillars_skill_affordance_k: int = 3                # declared: how many affordances to surface
@@ -715,6 +717,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.pillars_killable_skills_enabled = pillars.get("killable_skills_enabled", config.pillars_killable_skills_enabled)
         config.pillars_skill_timeout_floor_s = float(pillars.get("skill_timeout_floor_s", config.pillars_skill_timeout_floor_s))
         config.pillars_skill_timeout_ceiling_s = float(pillars.get("skill_timeout_ceiling_s", config.pillars_skill_timeout_ceiling_s))
+        config.pillars_memory_engram_enabled = pillars.get("memory_engram_enabled", config.pillars_memory_engram_enabled)
         config.pillars_skill_affordances_enabled = pillars.get("skill_affordances_enabled", config.pillars_skill_affordances_enabled)
         config.pillars_skill_affordance_k = int(pillars.get("skill_affordance_k", config.pillars_skill_affordance_k))
         config.pillars_skill_economy_enabled = pillars.get("skill_economy_enabled", config.pillars_skill_economy_enabled)
