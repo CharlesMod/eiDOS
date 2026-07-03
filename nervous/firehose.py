@@ -5,6 +5,12 @@ periodic retained modulation, and occasional large payloads — all at once. `ru
 admits/sec and per-hop latency (p50/p95) per transport: the **T8** number the architecture defers
 to P0, which sets later gate thresholds and ratifies (or vetoes) the ZMQ transport.
 
+Note (T9): this harness deliberately over-produces (unpaced, ~100:1 vs the drain rate), so its
+end-to-end p50/p95 fold in *backlog residency* — how long an event waits behind the flood in a
+bounded priority queue — which no data structure escapes under permanent overload. The O(log n)
+mailbox fix shows up here as ~9× admits/sec, not in this p95. The isolated mailbox-hop gate
+(p95 < 10 ms at flood depth) lives in tests/test_nervous_bus_mailbox_perf.py.
+
 CLI:  python -m nervous.firehose --transport inproc --seconds 10
       python -m nervous.firehose --transport zmq    --seconds 10
 """

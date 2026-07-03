@@ -18,6 +18,7 @@ Delivery classes:
   retained  — last-value-wins global state; a late subscriber gets the current value immediately.
 """
 import dataclasses
+import heapq
 import json
 import logging
 import threading
@@ -40,7 +41,10 @@ class PublishResult:
 
 
 class _Record:
-    __slots__ = ("wire", "delivery", "admit_priority", "seq", "enqueued", "kind")
+    # `alive` supports lazy deletion from the mailbox heaps (T9): removing an arbitrary record from a
+    # binary heap is O(n), so instead we clear the flag and skip cleared records when they surface at
+    # a heap root. Popped/evicted/swept records set alive=False; live_count tracks the survivors.
+    __slots__ = ("wire", "delivery", "admit_priority", "seq", "enqueued", "kind", "alive")
 
     def __init__(self, wire, delivery, admit_priority, seq, kind):
         self.wire = wire
@@ -49,21 +53,33 @@ class _Record:
         self.seq = seq
         self.enqueued = time.monotonic()
         self.kind = kind
+        self.alive = True
 
 
 class Subscription:
-    """One reader. Mailbox is a plain list scanned for highest-priority (small caps → O(n) is fine,
-    same spirit as voice.py's bounded queue). Ordered streams stage here until contiguous/aborted.
-    NOTE (T9): under extreme flood the O(n) scan + single lock tails to ~p95 730 ms in-proc (ZMQ
-    stays ~p95 2 ms); replace with a heap/indexed structure if the in-proc path is ever hot."""
+    """One reader. The mailbox is two indexed heaps over the same live records, so drain/admission
+    are O(log n) instead of the old O(n) list scan (T9: the list tailed to ~p95 730 ms in-proc under
+    flood vs ZMQ's ~2 ms — a real bug, not just theory). Ordered streams stage here until
+    contiguous/aborted; retained/reliable/ordered are never dropped by priority, only fungible is.
+
+    Two heaps share the *same* `_Record` objects, kept consistent by lazy deletion (skip cleared
+    records at a root — see `_Record.alive`):
+      `_pri`  — max-heap by (admit_priority, oldest-seq) for recv()'s pop-highest.
+      `_fung` — min-heap by (admit_priority, oldest-seq) over FUNGIBLE records only, for eviction.
+    `reliable` indexes reliable records by seq so the backstop sweep iterates the few reliable
+    records instead of the whole mailbox. Heap tuples carry `seq` (unique, monotonic) as the second
+    element so two records never compare `_Record` objects and ties resolve to the older seq."""
 
     def __init__(self, topics, deliveries, fungible_cap):
         self.topics = topics          # set of (Kind, Modality), or None = all
         self.deliveries = deliveries  # set of Delivery, or None = all
         self.fungible_cap = int(fungible_cap)
         self.lock = threading.Condition()
-        self.mailbox = []             # list[_Record]
-        self.fungible_count = 0
+        self._pri = []                # max-heap: (-admit_priority, seq, _Record)  -> highest first
+        self._fung = []               # min-heap: (admit_priority, seq, _Record)   -> lowest first
+        self.reliable = {}            # seq -> _Record (reliable records, for the backstop sweep)
+        self.live_count = 0           # live records across the heaps (recv's wait predicate)
+        self.fungible_count = 0       # live fungible records (the fungible cap)
         self.ordered = {}             # sequence_id -> {"buf": {ordinal: _Record}, "next": int}
         self.dropped = 0
         self.closed = False
@@ -74,6 +90,60 @@ class Subscription:
         if self.deliveries is not None and delivery not in self.deliveries:
             return False
         return True
+
+    def _push(self, rec: _Record) -> None:
+        """Admit a live record into the mailbox heaps. Caller holds `self.lock`."""
+        heapq.heappush(self._pri, (-rec.admit_priority, rec.seq, rec))
+        if rec.delivery == Delivery.fungible:
+            heapq.heappush(self._fung, (rec.admit_priority, rec.seq, rec))
+            self.fungible_count += 1
+        elif rec.delivery == Delivery.reliable:
+            self.reliable[rec.seq] = rec
+        self.live_count += 1
+        self._maybe_compact()
+
+    def _maybe_compact(self) -> None:
+        """Reclaim lazy-deletion garbage. A retired record's heap tuples linger until they reach a
+        root; under a sustained flood the `_fung` heap in particular keeps tuples for fungibles that
+        recv() popped from `_pri` (they never surface as a `_fung` root). Rebuild a heap once its
+        dead entries pass half its size — the 2× slack bounds wasted space and makes the O(n) rebuild
+        amortize to O(1) per push (at most one rebuild per n pushes). Caller holds `self.lock`."""
+        if len(self._pri) > 2 * self.live_count + 8:  # +8: don't churn tiny heaps
+            self._pri = [t for t in self._pri if t[2].alive]
+            heapq.heapify(self._pri)
+        if len(self._fung) > 2 * self.fungible_count + 8:
+            self._fung = [t for t in self._fung if t[2].alive and t[2].delivery == Delivery.fungible]
+            heapq.heapify(self._fung)
+
+    def _retire(self, rec: _Record) -> None:
+        """Mark a record dead (lazy delete) and drop the live/fungible/reliable accounting. Its heap
+        slots are reclaimed when they surface at a root. Caller holds `self.lock`."""
+        rec.alive = False
+        self.live_count -= 1
+        if rec.delivery == Delivery.fungible:
+            self.fungible_count -= 1
+        elif rec.delivery == Delivery.reliable:
+            self.reliable.pop(rec.seq, None)
+
+    def _pop_pri(self) -> _Record:
+        """Pop the highest-priority live record; discard dead roots (lazy deletion). Returns None if
+        the mailbox is empty. Caller holds `self.lock`."""
+        while self._pri:
+            _, _, rec = heapq.heappop(self._pri)
+            if rec.alive:
+                self._retire(rec)
+                return rec
+        return None
+
+    def _peek_lowest_fungible(self) -> _Record:
+        """The lowest-priority live fungible record (eviction victim), or None. Discards dead roots.
+        Caller holds `self.lock`."""
+        while self._fung:
+            rec = self._fung[0][2]
+            if rec.alive and rec.delivery == Delivery.fungible:
+                return rec
+            heapq.heappop(self._fung)
+        return None
 
 
 class NervousBus:
@@ -234,34 +304,21 @@ class NervousBus:
                 return (False, 0)
             if rec.delivery == Delivery.fungible:
                 if sub.fungible_count >= sub.fungible_cap:
-                    victim = self._lowest_fungible(sub)
+                    victim = sub._peek_lowest_fungible()
                     if victim is None or victim.admit_priority >= rec.admit_priority:
                         sub.dropped += 1
                         self._record_drop("fungible", rec.wire.get("source_organ", "?"), "queue_full")
                         return (False, 1)
                     # evict the lower-priority victim, admit the incoming
-                    sub.mailbox.remove(victim)
-                    sub.fungible_count -= 1
+                    sub._retire(victim)
                     sub.dropped += 1
                     self._record_drop("fungible", victim.wire.get("source_organ", "?"), "queue_full")
-                    sub.fungible_count += 1
-                    sub.mailbox.append(rec)
+                    sub._push(rec)
                     sub.lock.notify()
                     return (True, 1)
-                sub.fungible_count += 1
-            sub.mailbox.append(rec)
+            sub._push(rec)
             sub.lock.notify()
             return (True, 0)
-
-    @staticmethod
-    def _lowest_fungible(sub: Subscription):
-        lowest = None
-        for r in sub.mailbox:
-            if r.delivery != Delivery.fungible:
-                continue
-            if lowest is None or r.admit_priority < lowest.admit_priority:
-                lowest = r
-        return lowest
 
     def _stage_ordered(self, sub: Subscription, ev: NervousEvent, rec: _Record) -> int:
         """Stage an ordered event; release contiguous ordinals from `next`. Returns 1 if the
@@ -278,7 +335,7 @@ class NervousBus:
             # release contiguous
             while st["next"] in st["buf"]:
                 r = st["buf"].pop(st["next"])
-                sub.mailbox.append(r)
+                sub._push(r)
                 st["next"] += 1
             sub.lock.notify()
             # atomic abort on overflow: too many out-of-order staged → drop the whole sequence
@@ -287,8 +344,8 @@ class NervousBus:
                 self._record_drop("ordered", ev.source_organ, "ordered_overflow")
                 aborted_ev, _ = self._control_event(Kind.sequence_aborted, sequence_id=sid)
                 aborted_wire = aborted_ev.to_wire()
-                sub.mailbox.append(_Record(aborted_wire, Delivery.reliable, RELIABLE_FLOOR,
-                                           self._next_seq(), Kind.sequence_aborted))
+                sub._push(_Record(aborted_wire, Delivery.reliable, RELIABLE_FLOOR,
+                                  self._next_seq(), Kind.sequence_aborted))
                 sub.lock.notify()
                 return 1
             return 0
@@ -299,7 +356,7 @@ class NervousBus:
         timeout/close. Reliable/ordered payloads stay pinned until you `ack`."""
         deadline = None if timeout is None else time.monotonic() + timeout
         with sub.lock:
-            while not sub.mailbox:
+            while sub.live_count == 0:
                 if sub.closed:
                     return None
                 if deadline is None:
@@ -309,19 +366,8 @@ class NervousBus:
                     if remaining <= 0:
                         return None
                     sub.lock.wait(timeout=remaining)
-            rec = self._pop_highest(sub)
+            rec = sub._pop_pri()   # O(log n) highest-priority pop (oldest seq breaks ties)
         return NervousEvent.from_wire(rec.wire)
-
-    @staticmethod
-    def _pop_highest(sub: Subscription) -> _Record:
-        best = None
-        for r in sub.mailbox:
-            if best is None or (r.admit_priority, -r.seq) > (best.admit_priority, -best.seq):
-                best = r
-        sub.mailbox.remove(best)
-        if best.delivery == Delivery.fungible:
-            sub.fungible_count -= 1
-        return best
 
     def ack(self, event: NervousEvent) -> None:
         """Release a reliable/ordered event (unpin its payload). Idempotent / safe for any event."""
@@ -355,11 +401,12 @@ class NervousBus:
         for sub in subs:
             stale = []
             with sub.lock:
-                for r in list(sub.mailbox):
-                    if (r.delivery == Delivery.reliable
-                            and r.kind not in (Kind.sequence_aborted, Kind.reliable_undeliverable)
+                # Only reliable records can go stale; iterate the reliable index, not the whole
+                # mailbox. `_retire` lazily removes them from `_pri` (dead roots are skipped on pop).
+                for r in list(sub.reliable.values()):
+                    if (r.kind not in (Kind.sequence_aborted, Kind.reliable_undeliverable)
                             and now - r.enqueued > self.reliable_backpressure_max_s):
-                        sub.mailbox.remove(r)
+                        sub._retire(r)
                         stale.append(r)
             for r in stale:
                 self.ack(NervousEvent.from_wire(r.wire))  # unpin
