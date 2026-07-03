@@ -248,3 +248,33 @@ def settle_predictions(config, *, event_text: str = "", tick: int = 0,
         except Exception:  # noqa: BLE001 - the closure stands even if a hook hiccups
             pass
     return closures
+
+
+# ============================================================================================
+# Pillars 2.3: bet settlement — GLUE is the only settler of memory bets (M-1, decision #5)
+# ============================================================================================
+def settle_bets(config, *, tick: int = 0, action_tool: str = "", action_args=None,
+                ledger=None) -> list:
+    """Settle this tick's open memory bets MECHANICALLY (decision #5). The outcome comes from
+    glue's OWN adjudicated record (recent_outcomes — the typed fail_kind channel written by the
+    harness), and the action signature is computed from the EXECUTED tool call the harness passes
+    in. There is deliberately no parameter through which a narrated outcome could arrive — the LLM
+    saying "that worked" settles nothing. Call this right after record_outcome() for the same
+    tick (the 4.1 settle_predictions call-site pattern); the cutover phase wires it into eidos.py.
+
+    DARK behind `config.pillars_bet_ledger_enabled` — returns [] untouched when off. Best-effort:
+    settlement failures never raise into the loop (glue convention). Returns the list of
+    settlement dicts from bets.BetLedger.settle."""
+    if not getattr(config, "pillars_bet_ledger_enabled", False):
+        return []
+    try:
+        import bets
+        led = ledger if ledger is not None else bets.BetLedger(config)
+        outs = recent_outcomes(config, 1)
+        if not outs:
+            return []
+        success = bool(outs[-1].get("ok"))
+        sig = bets.action_signature(action_tool or str(outs[-1].get("tool", "")), action_args)
+        return led.settle(tick=tick, success=success, action_sig=sig)
+    except Exception:  # noqa: BLE001 - glue is best-effort
+        return []
