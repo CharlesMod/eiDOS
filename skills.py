@@ -72,6 +72,39 @@ _SKILL_TIMEOUT_MULTIPLIER = 3.0      # declared knob: per-skill timeout = measur
 _SUBPROC_KILL_GRACE_S = 3.0          # declared knob: after terminate on overrun, wait this long for
                                      # the process to die before the hard SIGKILL tree-kill.
 
+# --- Pillars 3.1/3.2: the skill economy (reuse as the resting state) ---------------------------
+# 3.1 Affordances: at the decision point we surface the top-K existing skills most relevant to the
+# CURRENT situation, ranked by similarity × trust × birth-episode-strength. Similarity is cosine over
+# MiniLM embeddings (embedding.py) of "description + tags" vs the situation; trust is derived from the
+# manifest status + success rate. A small exploration ε occasionally hands the LAST slot to a cold
+# (untrusted / never-used) skill so it can earn — norepinephrine's explore/exploit knob, wired into
+# the ranker so the affordance list can't collapse into a rich-get-richer echo chamber (§6 Matthew).
+_AFFORDANCE_EXPLORE_EPS = 0.2        # declared knob: P(last affordance slot goes to a cold skill).
+_TRUST_STATUS_WEIGHT = {             # declared: status → trust prior (before the success-rate factor).
+    "trusted": 1.0, "active": 0.6, "quarantined": 0.0, "disabled": 0.0, "retired": 0.0,
+}
+_TRUST_RATE_FLOOR = 0.3              # declared: a live skill with no record yet still gets this much
+                                     # trust (so a brand-new skill isn't invisible until it has stats).
+_BIRTH_EPISODE_STRENGTH = 1.0        # TODO(Pillars S-6): skills will carry links to the episodes that
+                                     # birthed them; a future phase ranks affordances by that episode's
+                                     # strength. STUBBED at 1.0 now — no dependency on any engram module
+                                     # (another agent owns it). Left as a named factor so wiring it in
+                                     # later is a one-line change, not a re-derivation of the formula.
+
+# 3.2 Economics. Authoring is priced by novelty: a fully-novel skill costs the base energy; a
+# near-duplicate costs a steep multiple (the PRICE is the dedup pressure — replacing the old hard
+# duplicate-veto with an economic disincentive, §3). Reuse (calling an existing skill) pays MORE XP
+# than authoring, so the settled incentive favours reuse over creation. Auto-retire archives skills
+# unused past a threshold so the decision space stays clean (use-dependent pruning).
+_AUTHOR_DUP_MAX_MULTIPLIER = 10.0    # declared: near-duplicate authoring costs up to base × this
+                                     # (at max similarity 1.0); a fully-novel skill (sim 0) costs base×1.
+_XP_CREATE = 3                       # declared: XP for authoring a NEW skill (creation is the cheap,
+                                     # abundant act — it should not be the way to farm XP).
+_XP_REUSE = 8                        # declared: XP for a SUCCESSFUL reuse of an existing skill. Strictly
+                                     # > _XP_CREATE so the settled economy rewards reuse over creation.
+# Statuses that mean "archived / retired" — filtered out of the brief AND the affordance list.
+_RETIRED_STATUS = "retired"
+
 
 # ---------------------------------------------------------------------------
 # Paths & manifest
@@ -510,6 +543,258 @@ def _arg_shape(args: Optional[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Pillars 3.1/3.2: skill economy — embedding similarity, trust, affordances,
+# similarity-priced authoring, reuse-favouring XP, auto-retire. All the callers
+# are dark behind config flags; these helpers are inert until a flag turns them on.
+# ---------------------------------------------------------------------------
+
+def _skill_text(name: str, ent: dict) -> str:
+    """The text an existing skill is embedded from: its name + description + arg-shape keys. This is
+    what a situation is matched AGAINST (3.1) and what a candidate new skill is compared to for the
+    novelty price (3.2). Name is included because the model's names are meaningful (check_mqtt_port)."""
+    parts = [name.replace("_", " ")]
+    desc = (ent.get("description") or "").strip()
+    if desc:
+        parts.append(desc)
+    schema = ent.get("args_schema") or {}
+    if isinstance(schema, dict) and schema:
+        parts.append(" ".join(str(k) for k in schema))
+    return " ".join(parts).strip()
+
+
+def _skill_trust(ent: dict) -> float:
+    """Trust ∈ [0,1] from the manifest: a status prior × the observed success rate (floored so a live
+    skill with no record yet is still visible). A quarantined/disabled/retired skill scores 0 — it is
+    not an affordance. This is the deterministic 'how much do I lean on this' the ranker multiplies by."""
+    prior = _TRUST_STATUS_WEIGHT.get(str(ent.get("status") or ""), 0.0)
+    if prior <= 0.0:
+        return 0.0
+    inv = int(ent.get("invocations", 0) or 0)
+    suc = int(ent.get("successes", 0) or 0)
+    rate = (suc / inv) if inv > 0 else _TRUST_RATE_FLOOR
+    rate = max(_TRUST_RATE_FLOOR, min(1.0, rate))
+    return prior * rate
+
+
+def _embed_or_none(config: Config, text: str):
+    """One-text embedding via embedding.embed_query (mock-aware, fail-open). Returns a (D,) vector or
+    None — None means 'no semantic signal available', and every caller degrades gracefully to that."""
+    if not (text or "").strip():
+        return None
+    try:
+        import embedding
+        return embedding.embed_query(config, text)
+    except Exception:  # noqa: BLE001 - embeddings are optional; never let them break a skill path
+        return None
+
+
+def _cosine(a, b) -> float:
+    """Cosine similarity of two vectors (they arrive L2-normalised from embed_query, so this is a dot;
+    we normalise defensively anyway). Returns 0.0 on any failure."""
+    try:
+        import numpy as np
+        a = np.asarray(a, dtype=np.float64)
+        b = np.asarray(b, dtype=np.float64)
+        na = float(np.linalg.norm(a))
+        nb = float(np.linalg.norm(b))
+        if na <= 0.0 or nb <= 0.0:
+            return 0.0
+        return float(np.dot(a, b) / (na * nb))
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _max_similarity_to_existing(config: Config, description: str,
+                                name: str = "", skills: Optional[dict] = None) -> float:
+    """Max cosine similarity of a candidate skill (name + description) to any EXISTING live skill,
+    ∈ [0,1] (clamped; embeddings can dip slightly negative). This is the novelty signal that prices
+    authoring: ~0 = fully novel (cheap), ~1 = near-duplicate (expensive). Returns 0.0 when there is
+    no semantic signal (no model / no existing skills) so a missing embedder never inflates the price."""
+    if skills is None:
+        skills = _load_manifest(config).get("skills", {})
+    cand = _embed_or_none(config, (name.replace("_", " ") + " " + (description or "")).strip())
+    if cand is None:
+        return 0.0
+    best = 0.0
+    for ex, ent in skills.items():
+        if ex == name or ent.get("status") not in _LIVE_STATUSES:
+            continue
+        vec = _embed_or_none(config, _skill_text(ex, ent))
+        if vec is None:
+            continue
+        best = max(best, _cosine(cand, vec))
+    return max(0.0, min(1.0, best))
+
+
+def _author_energy_cost(config: Config, similarity: float) -> float:
+    """Similarity-priced authoring cost: base × (1 + (max_mult - 1) × similarity). A fully-novel skill
+    (similarity 0) costs the base; a near-duplicate (similarity → 1) costs base × _AUTHOR_DUP_MAX_MULTIPLIER.
+    The price rises monotonically with similarity — THAT is the dedup pressure (the economics replace the
+    old hard veto with a cost the creature feels in its energy reserve)."""
+    base = float(getattr(config, "pillars_skill_author_energy_cost", 0.02))
+    s = max(0.0, min(1.0, float(similarity)))
+    return base * (1.0 + (_AUTHOR_DUP_MAX_MULTIPLIER - 1.0) * s)
+
+
+def _charge_energy(config: Config, cost: float) -> None:
+    """Drain `cost` from the metabolic reserve (feed a negative amount). Bound to config so the drain
+    PERSISTS to workspace/state/metabolism.json — the same reserve the tick loop charges. Best-effort:
+    a missing/short reserve never blocks authoring (the price is a pressure, not a gate)."""
+    if cost <= 0.0:
+        return
+    try:
+        from nervous.metabolism import Metabolism
+        config.state_dir.mkdir(parents=True, exist_ok=True)   # so the reserve file has a home
+        met = Metabolism(config=config)
+        met.feed(-abs(float(cost)))
+        met._save()   # feed() only persists on its own save cadence; force it so the drain survives
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not charge authoring energy (%.4f): %s", cost, e)
+
+
+def _award_persona_xp(config: Config, amount: int, reason: str) -> None:
+    """Award XP through persona.award_xp, persisted to workspace/persona.json (load → award → save).
+    Best-effort — XP is an incentive signal, never load-bearing for the skill mechanics themselves."""
+    if amount <= 0:
+        return
+    try:
+        import persona
+        p = persona.load_persona(config.workspace)
+        persona.award_xp(p, int(amount), reason)
+        persona.save_persona(config.workspace, p)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not award skill XP (%s): %s", reason, e)
+
+
+def retire_unused_skills(config: Config, now_s: Optional[float] = None) -> list[str]:
+    """3.2(c) Auto-retire: archive any LIVE skill whose last use is older than
+    `pillars_skill_retire_unused_days`. Archived = status 'retired', disabled, popped from the live
+    registry — so it vanishes from both `skills_brief` and the affordance list. It is NOT deleted:
+    the versioned file and manifest entry remain, so `rollback_skill` revives it (recoverable). A
+    skill that was never used is dated from its creation. Returns the names retired. No-op when the
+    economy flag is off. Idempotent — an already-retired skill is skipped."""
+    if not getattr(config, "pillars_skill_economy_enabled", False):
+        return []
+    days = float(getattr(config, "pillars_skill_retire_unused_days", 30.0))
+    if days <= 0:
+        return []
+    cutoff = (now_s if now_s is not None else time.time()) - days * 86400.0
+    out: list[str] = []
+    try:
+        m = _load_manifest(config)
+        for name, ent in m.get("skills", {}).items():
+            if ent.get("status") not in _LIVE_STATUSES:
+                continue
+            stamp = ent.get("last_used") or ent.get("created")
+            last = _parse_iso(stamp)
+            if last is None or last >= cutoff:
+                continue
+            ent["status"] = _RETIRED_STATUS
+            ent["enabled"] = False
+            ent["retired_at"] = _now()
+            ent["updated"] = _now()
+            TOOLS.pop(name, None)
+            out.append(name)
+        if out:
+            _save_manifest(config, m)
+            logger.info("auto-retired %d unused skill(s): %s", len(out), ", ".join(out))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("retire_unused_skills failed: %s", e)
+    return out
+
+
+def _parse_iso(stamp: Optional[str]) -> Optional[float]:
+    """Parse a manifest UTC timestamp ('%Y-%m-%dT%H:%M:%SZ', as _now() writes) to epoch seconds, or
+    None on anything unparseable (so a missing/garbage stamp never accidentally retires a skill)."""
+    if not stamp:
+        return None
+    try:
+        return time.mktime(time.strptime(str(stamp), "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+    except (ValueError, TypeError):
+        return None
+
+
+def skill_affordances(config: Config, situation: str,
+                      k: Optional[int] = None, _rng=None) -> list[dict]:
+    """3.1 Affordances: the top-K existing skills most relevant to the CURRENT situation, ranked by
+    similarity × trust × birth-episode-strength (the last STUBBED at 1.0, TODO S-6). Similarity is
+    cosine over MiniLM embeddings of each skill's text vs `situation`; trust is `_skill_trust`.
+
+    Exploration ε (anti-Matthew, §6): with probability `_AFFORDANCE_EXPLORE_EPS` the LAST slot is given
+    to a COLD skill (never used, or untrusted) drawn at random from those not already selected — so a
+    low-strength skill can still surface and earn instead of the list ossifying into the same top few.
+
+    Returns a list of {name, score, similarity, trust, explore} dicts (score-descending; the explore
+    entry, when present, carries explore=True and sits last). Empty when the flag is off, there are no
+    live skills, or no semantic signal is available. Never raises."""
+    if not getattr(config, "pillars_skill_affordances_enabled", False):
+        return []
+    if k is None:
+        k = int(getattr(config, "pillars_skill_affordance_k", 3))
+    if k <= 0:
+        return []
+    try:
+        import random
+        rng = _rng or random
+        m = _load_manifest(config)
+        skills = {n: e for n, e in m.get("skills", {}).items()
+                  if e.get("status") in _LIVE_STATUSES}
+        if not skills:
+            return []
+        qv = _embed_or_none(config, situation)
+        if qv is None:
+            return []
+        scored: list[dict] = []
+        for name, ent in skills.items():
+            vec = _embed_or_none(config, _skill_text(name, ent))
+            if vec is None:
+                continue
+            sim = max(0.0, _cosine(qv, vec))
+            trust = _skill_trust(ent)
+            score = sim * trust * _BIRTH_EPISODE_STRENGTH
+            scored.append({"name": name, "score": round(score, 6),
+                           "similarity": round(sim, 6), "trust": round(trust, 6),
+                           "explore": False})
+        if not scored:
+            return []
+        scored.sort(key=lambda d: d["score"], reverse=True)
+
+        # Exploration ε: occasionally hand the last slot to a COLD skill so it can earn. A cold skill =
+        # never used (invocations 0) or untrusted (status 'active', not yet 'trusted'). We only spend the
+        # slot if such a skill exists OUTSIDE the exploit top-(k-1) — otherwise there's nothing to explore.
+        top = scored[:k]
+        if k >= 1 and rng.random() < _AFFORDANCE_EXPLORE_EPS:
+            keep = scored[:max(0, k - 1)]
+            keep_names = {d["name"] for d in keep}
+            cold = [d for d in scored
+                    if d["name"] not in keep_names
+                    and (int(skills[d["name"]].get("invocations", 0) or 0) == 0
+                         or skills[d["name"]].get("status") != "trusted")]
+            if cold:
+                pick = dict(rng.choice(cold))
+                pick["explore"] = True
+                top = keep + [pick]
+        return top
+    except Exception as e:  # noqa: BLE001 - affordances are additive; never break the context build
+        logger.warning("skill_affordances failed: %s", e)
+        return []
+
+
+def render_affordances(affordances: list[dict]) -> str:
+    """Render affordances as a compact 'tools at hand' block for the decision point (context.py). Empty
+    string for an empty list (so the caller can `if block:`). Distinct from `skills_brief` — this is the
+    situation-ranked shortlist, not the full alphabet."""
+    if not affordances:
+        return ""
+    lines = ["## Tools at hand — these existing skills fit what you're doing RIGHT NOW. "
+             "CALL one (e.g. <tool>{}</tool>) before authoring anything new.".format(affordances[0]["name"])]
+    for a in affordances:
+        tag = " (untried — give it a shot)" if a.get("explore") else ""
+        lines.append(f"- {a['name']}{tag}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Hot-load & invocation tracking
 # ---------------------------------------------------------------------------
 
@@ -605,6 +890,11 @@ def _record_invocation(config: Config, name: str, ok: bool,
             ent["status"] = "active"
             logger.info("skill '%s' demoted from trusted (%d/%d on v%s)", name, suc, inv, ver)
         _save_manifest(config, m)
+        # 3.2(b) Reuse pays: a SUCCESSFUL call of an existing skill grants _XP_REUSE (> _XP_CREATE), so
+        # the settled economy rewards reuse over creation. Fires once per successful invocation, only
+        # under the economy flag (flag-off = no XP side effect, historical behaviour).
+        if ok and getattr(config, "pillars_skill_economy_enabled", False):
+            _award_persona_xp(config, _XP_REUSE, f"reuse:{name}")
     except Exception as e:  # noqa: BLE001
         logger.warning("could not record invocation for %s: %s", name, e)
 
@@ -724,18 +1014,38 @@ def create_skill(config: Config, name: str, code: str,
     m = _load_manifest(config)
     if name in m["skills"]:
         return {"success": False, "errors": [f"skill '{name}' already exists — use edit_skill"]}
+
+    _economy = getattr(config, "pillars_skill_economy_enabled", False)
     # Near-duplicate guard — the #1 source of wasted motion was authoring a 7th MQTT/OctoPrint
     # skill instead of calling the one already built. Block domain-duplicates; redirect to reuse.
     dup = _similar_skills(name, m["skills"])
+    warnings: list[str] = []
     if dup:
-        return {"success": False, "errors": [
+        dup_msg = (
             f"You ALREADY have skill(s) for this domain: {', '.join(sorted(dup)[:6])}. "
             f"CALL one as a tool (e.g. <tool>{sorted(dup)[0]}</tool>), or use edit_skill to improve "
-            f"it. Do NOT author a near-duplicate — reuse what you built."]}
+            f"it. Do NOT author a near-duplicate — reuse what you built.")
+        if not _economy:
+            # 3.2-OFF (historical): the domain-name overlap is a hard VETO.
+            return {"success": False, "errors": [dup_msg]}
+        # 3.2-ON: the veto becomes a WARNING — the ECONOMIC price (below) is now the dedup pressure,
+        # so a genuinely-distinct skill that merely shares a domain noun is no longer blocked outright.
+        warnings.append(dup_msg)
 
     errs = _validate_source(name, code, sandbox=getattr(config, "skill_sandbox_enabled", True))
     if errs:
         return {"success": False, "errors": errs}
+
+    # 3.2(a) Similarity-priced authoring: charge metabolic energy scaling with how close this new skill
+    # is to an existing one (embedding cosine). Novel ≈ base cost; near-duplicate ≈ base × up to _AUTHOR_
+    # DUP_MAX_MULTIPLIER. The PRICE is the dedup pressure. Charged only once the source validates (so a
+    # rejected skill isn't billed) and only under the economy flag. Similarity 0 when no embedder → base.
+    sim_to_existing = 0.0
+    author_cost = 0.0
+    if _economy:
+        sim_to_existing = _max_similarity_to_existing(config, description, name=name, skills=m["skills"])
+        author_cost = _author_energy_cost(config, sim_to_existing)
+        _charge_energy(config, author_cost)
 
     version = "1.0.0"
     _skill_file(config, name, version).write_text(code, encoding="utf-8")
@@ -760,9 +1070,19 @@ def create_skill(config: Config, name: str, code: str,
     if not act_ok:
         return {"success": False, "errors": [f"saved but activation failed: {act_msg}"],
                 "skill": name, "version": version}
-    return {"success": True, "skill": name, "version": version,
-            "status": "active", "note": note,
-            "message": f"Skill '{name}' v{version} is live — call it as <tool>{name}</tool>. ({note})"}
+    # 3.2(b): authoring grants _XP_CREATE — deliberately LESS than a reuse (_XP_REUSE), so farming XP by
+    # authoring is a poor strategy vs. calling what already exists. Only under the economy flag.
+    if _economy:
+        _award_persona_xp(config, _XP_CREATE, f"create:{name}")
+    out = {"success": True, "skill": name, "version": version,
+           "status": "active", "note": note,
+           "message": f"Skill '{name}' v{version} is live — call it as <tool>{name}</tool>. ({note})"}
+    if _economy:
+        out["author_energy_cost"] = round(author_cost, 5)
+        out["max_similarity"] = round(sim_to_existing, 4)
+        if warnings:
+            out["warnings"] = warnings
+    return out
 
 
 def edit_skill(config: Config, name: str, code: str,

@@ -933,6 +933,21 @@ def _assemble_briefing(
     if focus_block:
         situation.append(focus_block)
 
+    # Pillars 3.1 — skill affordances (dark behind `pillars_skill_affordances_enabled`): the top-K
+    # existing skills most relevant to the CURRENT situation (active objective + next plan step),
+    # ranked by similarity × trust, rendered as "tools at hand" right at the decision point — distinct
+    # from the full `skills_brief` alphabet up in the stable head. This is the ECONOMIC nudge toward
+    # reuse (make the fitting tool visible where the choice happens), not a prompt plea. Flag-off →
+    # this block is never built and behaviour is unchanged.
+    if getattr(config, "pillars_skill_affordances_enabled", False):
+        try:
+            from skills import skill_affordances, render_affordances
+            _aff = render_affordances(skill_affordances(config, _current_focus(config)))
+            if _aff:
+                situation.append(_aff)
+        except Exception:  # noqa: BLE001
+            pass
+
     # Episodic recall (phase 7b, BIBLE §2.4): state-triggered — if the agent has been in THIS
     # situation before, surface the actions that FAILED (don't repeat) and any that WORKED (reuse).
     # Injected unasked, near the decision point, so a known dead end is avoided before it's re-tried.
