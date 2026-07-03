@@ -20,6 +20,13 @@ services.
   v1 voice path, so two voice services never race the GPU).
 
 ## Run / restart discipline (IMPORTANT)
+> **⚠ HOST NOTE:** the live box is now **Sprinter (Linux/Pop!_OS, systemd)**, not the Windows/nssm
+> host this section describes. Real supervisors are systemd services `eidos-dashboard.service` and
+> `llama-swap.service` (both `Restart=always` — a bare `kill` just respawns; use `sudo systemctl
+> stop`). The mind is `gemma4-12b` (~6.5 GB, full offload), not ~15.7 GB; the :8088 tap / :8098 voice
+> are not running. The nssm / `Restart-Service` / `taskkill` / PowerShell commands below are
+> Windows-era. **`RUNTIME_SPRINTER.md` is the authoritative Sprinter runtime + operations cookbook.**
+
 - The dashboard and voice are **nssm services**: `EidosDashboard` (8099) and `EidosVoice` (8098),
   both running from this dir via the shared venv. (`EidosTap` = the :8088 monitor tap.) So **restart
   the dashboard with `Restart-Service EidosDashboard`** — a bare `taskkill` just makes nssm respawn it.
