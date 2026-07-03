@@ -307,6 +307,25 @@ body has (I8).
 > - **Context-scaled** (KV ∝ ctx): the cap moves with per-slot context — ~12–14 slots @4k, ~8 @8k,
 >   ~4–5 @16k. If the mind runs at its full 16k in a shared server, all slots inherit 16k and the
 >   general budget shrinks accordingly; a dedicated general-server at 8k keeps the higher count.
+>
+> **Scheduling generals — no global beat; overlap as an emergent equilibrium.** The `--parallel`
+> speedup comes from llama.cpp's **iteration-level continuous batching**: each decode step batches
+> every slot that has a token ready, sharing the (bandwidth-dominant) weight read — which is why
+> aggregate rose 77.8→323 tok/s. It therefore needs temporal **overlap of active generations, NOT
+> synchronized dispatch** — two generals starting seconds apart still batch on every step where
+> both are mid-generation; the server coalesces continuously, for free.
+> - **Do NOT enforce an on-beat tick for generals.** It isn't needed to get batching (the pool
+>   already coalesces), a fixed clock is delay-based scheduling (violates `ARCHITECTURE_PRINCIPLES`
+>   #1 event-driven), and generals have heterogeneous periods/durations a single beat can't fit.
+> - **Get overlap the right way, all event-driven:** (1) route all generals through **one shared
+>   `--parallel` server** — the "beat" is emergent from its decode loop; (2) **cohort-dispatch** work
+>   that's born together (a decomposed mission's sub-agents, the sleep cycle's maintenance generals,
+>   a daily-quest squad) so their generations overlap; (3) **price GPU-seconds honestly in
+>   metabolism** — overlapped delegation (~5 s batched vs ~13 s serial for 5 generals) is measurably
+>   cheaper, so the creature drifts toward clustering delegations on its own (pressure, not a scripted
+>   beat — §0); (4) the **arbiter gates general admission against the mind's state** (hold during a
+>   latency-critical mind burst, release into idle gaps), which is cheap because the mind usually
+>   delegates *then goes quiet waiting*, so mind↔general contention is naturally low.
 
 ```
 Mission {
