@@ -539,11 +539,11 @@ Each is measurable, adjudicated by glue or by Dean, and none may appear as a cod
    selfedit.apply). *(Leaning: glue computes, dashboard displays + holds the ban-hammer.)*
 4. **Self-tuning telemetry surface** — every derived constant visible on the dashboard with its
    history, so a runaway tuner is caught by eye before it's caught by a gate.
-5. **Recall bet-settlement** — proposed: small shared-outcome credit + strong mechanical credit
+5. **Recall bet-settlement** — small shared-outcome credit + strong mechanical credit
    when the action provably followed a recalled fix; LLM self-report stays out of the reward
-   path. *(Awaiting Dean's confirm.)*
+   path. **(CONFIRMED 2026-07-03 — proceed as designed; 2.3 unblocked.)**
 5b. **XP = learning-progress-weighted success (§6)** — the biggest single change to the live
-   leveling system. *(Designed in; awaiting Dean's explicit confirm.)*
+   leveling system. **(CONFIRMED 2026-07-03 — proceed as designed; 4.2 unblocked.)**
 6. **General substrate priority** — spike slot-sharing on :8081 first and let the measured
    numbers decide, vs committing to CPU-small-model first. *(Leaning: spike first.)*
 7. **Naming in code** — monarch/shadow/general vocabulary in code + dashboard, or docs-only

@@ -240,6 +240,7 @@ sleep_engine_enabled = false      # 2.4 job-list sleep: consolidation/decay/dist
 max_wake_hours = 18.0             # 2.4 adenosine cap: past this, sleep-pressure overrides all drive floors
 expectations_enabled = false      # 4.1 expectation ledger: typed predictions closed by glue → surprise
 max_open_predictions = 12         # 4.1 bound on simultaneously-open predictions
+salience_gate_enabled = false     # 1.3 salience-gate organ: admission bias = salience × relevance × neuromod gain
 
 [paths]
 # Relative paths anchor at the repo root (resolved in config.py), so this is portable across machines

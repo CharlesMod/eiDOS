@@ -365,6 +365,7 @@ class Config:
     pillars_max_wake_hours: float = 18.0               # declared: adenosine cap — past this, sleep-pressure overrides all drive floors (pitfall #2)
     pillars_expectations_enabled: bool = False         # 4.1 expectation ledger: typed open predictions closed by glue → surprise (expectations.py)
     pillars_max_open_predictions: int = 12             # declared: bound on simultaneously-open predictions (no unbounded growth)
+    pillars_salience_gate_enabled: bool = False        # 1.3 salience-gate organ: admission bias = salience × relevance × neuromod gain (nervous/salience.py)
     # Phase 3 — skill economy (from library to language)
     pillars_skill_affordances_enabled: bool = False    # 3.1 surface top-K situation-relevant skills at the decision point
     pillars_skill_affordance_k: int = 3                # declared: how many affordances to surface
@@ -731,6 +732,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.pillars_max_wake_hours = float(pillars.get("max_wake_hours", config.pillars_max_wake_hours))
         config.pillars_expectations_enabled = pillars.get("expectations_enabled", config.pillars_expectations_enabled)
         config.pillars_max_open_predictions = int(pillars.get("max_open_predictions", config.pillars_max_open_predictions))
+        config.pillars_salience_gate_enabled = pillars.get("salience_gate_enabled", config.pillars_salience_gate_enabled)
         config.pillars_skill_affordances_enabled = pillars.get("skill_affordances_enabled", config.pillars_skill_affordances_enabled)
         config.pillars_skill_affordance_k = int(pillars.get("skill_affordance_k", config.pillars_skill_affordance_k))
         config.pillars_skill_economy_enabled = pillars.get("skill_economy_enabled", config.pillars_skill_economy_enabled)

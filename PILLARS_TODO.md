@@ -22,11 +22,19 @@ Landed & gate-green, all **dark behind their flags** (running eiDOS unaffected u
 - ✅ **3.1/3.2** skill economy — affordance ranking (`similarity × trust × birth-episode`) + ε-exploration, similarity-priced authoring (novel≈0.02 → dup≈0.20 energy), reuse-XP(8) > create-XP(3), auto-retire unused → out of affordances (11 gate tests; flag-off byte-for-byte) (`b305be3`)
 - ✅ **5.1** quest engine — the System's mechanical core: typed glue-checkable `Criterion` (never self-report), one-active cadence gated on close+sleep+healthy, reward-sink seam, daily/hidden quests, Administrator propose/render seams (20 tests) (`325d7fd`)
 
+- ✅ **2.1** engram — the memory atom: full §2 schema (kind/provenance/confidence/strength/`encoded_at{tick,felt,arousal,valence}`/links/stats), three stores (hot trace, bounded episodic ring, long-term jsonl+npy+index), **single-writer Consolidator (I6)** enforced by API shape; pure library, dark (27 tests) (`d2f27d1`)
+- ✅ **2.2** memory manager — idempotent read-only-on-legacy importer (episodes/knowledge/nuggets→engrams, `inherited` strength floor), 4-layer recall cascade ranked relevance×strength under char budget, **anti-Matthew exploration slot**, emotional stamp at encode from neuromod (17 tests) (`21375de`)
+- ✅ **3.3** composition — the `call` atom (depth cap 2, shared energy budget, static cycle check at authoring), trusted-only sub-calls, promotion pipeline (candidate queue → `apply_promotion` dashboard seam → compiled into the atom vocabulary) (20 tests) (`c607694`)
+
 Full integrated regression after 1.1 + 3.1/3.2 + 5.1: **1027 passed** (3 pre-existing environmental failures unrelated to this work: `python`-alias-on-PATH, Windows `pi.cmd`).
 
 - ✅ **0.5** slot-sharing spike — DONE (2026-07-03). gemma4-12b `--parallel 2`: per-slot KV ≈ 454 MiB, concurrent throughput 70.8 tok/s each vs 77.8 solo (~9% hit). **Verdict: slot-sharing is the primary substrate for generals** (§5b). max_generals ceiling 8 / recommend 5; no global on-beat tick (overlap as emergent equilibrium). No small GGUF present for a CPU tier.
 
-In flight (agents, worktree-isolated, based on `a417ea2`): **2.1** engram core (memory keystone) · **3.3** skill composition (call atom + promotion). Next wave once 2.1 lands: **2.2** manager+migration, **2.4** sleep engine, **4.1** expectation ledger (all key off the engram). Note: 0.5 required stopping the live services — see `RUNTIME_SPRINTER.md` for the correct Sprinter procedure.
+**Decisions confirmed (2026-07-03, Dean — "address gaps… continue development"):** open decision **#5** (bet settlement: shared-outcome credit + strong mechanical credit on provable recalled-fix follow; self-report never settles) and **#5b** (XP = learning-progress-weighted adjudicated success) proceed as designed in the plan. 2.3 + 4.2 unblocked.
+
+**Gap-analysis amendments (2026-07-03):** added **1.3 salience gate** (was missing from this TODO despite being plan §4 N-2), **Phase 5.5 cutover** (flag-flip schedule + model-in-the-loop smokes + soak protocol — previously unplanned), and cross-cutting **simulated-days harness** + **pre-merge sweep**. Code-green ≠ soak-green: behavioral gates count from flag flips (Phase 5.5), not code-land.
+
+In flight (agents): **2.4** sleep engine + **4.1** expectation ledger (relaunched — the first wave died with a host process exit; partial work salvaged in their worktrees) · **1.3** salience gate. Note: 0.5 required stopping the live services — see `RUNTIME_SPRINTER.md` for the correct Sprinter procedure.
 
 ---
 
@@ -83,6 +91,19 @@ In flight (agents, worktree-isolated, based on `a417ea2`): **2.1** engram core (
 - [ ] Timeout derived: p95 × 3, floor 5 s, ceiling 60 s (declared knobs).
 - [ ] **Gate:** a deliberately-hanging skill is killed dead (no orphan thread, no tick freeze);
       a dict-returning skill is rejected at authoring time; telemetry visible via `list_skills`.
+
+**1.3 The salience gate** (`nervous/salience.py`) — plan §4 N-2, the present-pillar's core
+*(Restored: this fell out of the original TODO despite being the audit's sharpest gap — "the
+creature cannot focus" — and Phase 6 shadows explicitly route their output through it.)*
+- [ ] Salience-gate organ, registered via the 1.1 registry: admission bias = bottom-up salience ×
+      top-down relevance × neuromod gain. Focus is a **bias field over admission, never an
+      instruction** (§0).
+- [ ] `relevance_set`: the core publishes its current focus each tick (the designed-but-unpublished
+      topic from the V3 audit); the gate scores afferents against it.
+- [ ] Exploration floor: a small low-salience admit allocation so the gate never becomes a perfect
+      echo chamber (anti-Matthew at the senses, same doctrine as recall's slot).
+- [ ] **Gate (red-able):** on a recorded afferent stream, relevant events admit ahead of noise; a
+      `relevance_set` change measurably reorders admission; flag-off delivery is byte-identical.
 
 ---
 
@@ -223,6 +244,35 @@ In flight (agents, worktree-isolated, based on `a417ea2`): **2.1** engram core (
 
 ---
 
+## Phase 5.5 — Cutover: wiring the dark libraries into the living creature
+
+Everything above ships as dark, unwired libraries; **this phase is where the creature actually
+changes** — the highest-risk work in the roadmap. One flag at a time, soak between flips, git
+checkpoint + backup snapshot before each; rollback is always "flag off," never a revert.
+
+- [ ] **Wiring pass (code, still dark):** eidos.py/context.py call sites behind each flag — engram
+      encode path on the tick, manager recall replacing the legacy cascade, sleep-engine entrypoint
+      in the sleep window, expectations "awaiting" block + glue closure, affordances render at the
+      decision point, quest window render. Full suite green with all flags off (byte-for-byte).
+- [ ] **Model-in-the-loop smokes (GPU, eiDOS paused):** each new grammar surface — distillation,
+      `predict`, quest-window response — exercised against live gemma4-12b; malformed-output rate
+      measured and logged per surface. No flag flips until its surface's smoke passes.
+      *(Everything so far is mock-validated; the mind has never been in the loop.)*
+- [ ] **Simulated-days harness green** (cross-cutting item below) before the first flip.
+- [ ] **Flag-flip schedule** (dependency order, one at a time): causal_ledger + backup →
+      killable_skills → memory_engram + memory_manager → bet ledger (2.3) → sleep_engine →
+      expectations → salience_gate → skill_affordances + skill_economy → skill_composition →
+      quests → (later, post-4.x) learning-progress XP → administrator.
+- [ ] Per flip: pre-flip checkpoint; ≥ N sleep cycles' soak (declared knob); `/api/why`
+      causal-ledger review for pressure anomalies; watchdog quiet.
+- [ ] **Gate (per flip, red-able):** no tick-freeze, no crash-loop, watchdog silent; the
+      subsystem's own live gate holds on real data (e.g. post-sleep recall ≥ pre-sleep).
+- [ ] **Soak-gates start counting here, not at code-land:** 3.2's two-week reuse>authorship gate
+      and dream-tests D1–D10 run from their flag flips. Progress notes must distinguish
+      **code-green** (unit gate passed) from **soak-green** (behavioral gate held live).
+
+---
+
 ## Phase 6 — Shadows (scripted CPU workers)
 
 - [ ] `shadow.py`: schema per plan §5a — trusted-skill body, event-driven loop (bus_subscription |
@@ -269,6 +319,16 @@ In flight (agents, worktree-isolated, based on `a417ea2`): **2.1** engram core (
       justification (plan §0.4).
 - [ ] Tick-flow integration test: recorded-tick replay asserting bus events + context blocks stay
       byte-stable when flags are off (safe rollout: every phase ships dark behind its flag).
+- [ ] **Simulated-days harness** (`tools/simdays.py` + tests): mock-LLM creature-days — tick →
+      outcomes → sleep, repeated — running the coupled economies TOGETHER (strength decay ×
+      exploration slot × adenosine × quest cadence × metabolic prices). Asserts the dampers hold
+      in combination, not just alone: the exploration slot still surfaces after 50 decay cycles;
+      adenosine overrides pinned goal-tension; temperament springs recover a bad streak; quest
+      cadence and sleep pressure never deadlock. **Required green before any Phase 5.5 flag flip**
+      (pitfall #9 covers coupled tuners; this covers coupled *economies*).
+- [ ] **Pre-merge sweep** (before feat/pillars-m1 → main): `eidos_capabilities.md` + condensed
+      SYSTEM_PROMPT_BRIEFING lines + `preserved_nuggets.toml` updated for ALL landed subsystems in
+      one pass (engram, manager, sleep, expectations, quests, economy, composition, salience).
 
 ---
 
