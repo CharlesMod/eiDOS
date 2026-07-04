@@ -1,8 +1,8 @@
-# TOOL PROGRESSION — the growing body (design proposal, NOT yet implemented)
+# TOOL PROGRESSION — the growing body
 
-> Status: **awaiting Charlie's sign-off** on the decision list at the bottom. Nothing here is
-> wired; the only code that moved with this document is the `goals_completed` writer fix
-> (a live brick independent of the ladder — see "Pre-existing defects" below).
+> Status: **APPROVED 2026-07-04** — all six decisions made by Charlie (see the decided list at
+> the bottom). Implementation in progress behind `pillars_tool_unlocks_enabled` (dark until the
+> gate is green).
 >
 > Provenance: synthesized from three independent design passes (developmental lens,
 > System-economy lens, §0-purity lens). Where they disagreed, the recommendation and the
@@ -122,21 +122,17 @@ grammar legally contains ~40 names the prompt never taught): `http_request`, `as
 4. **Prompt/grammar drift today**: the creature grammar legally contains house tools and aliases
    the prompt never taught. The accessor closes this class permanently.
 
-## Decisions for Charlie
+## Decisions (made by Charlie, 2026-07-04)
 
-1. **Voice timing.** U4 milestone as designed (recommended), earlier if you want to hear it
-   sooner (e.g. with U1 at first sleep) — or held entirely until the voice service actually runs
-   on Sprinter. Note: today `speak` would 500; the I8 reachability hold ships either way.
-2. **Locked doors: invisible or silhouetted?** Fully invisible until granted (purest §0,
-   recommended by two of three lenses) vs named silhouettes in `check_tools` ("…and 4 words
-   still asleep in you" — feeds curiosity/orbiting, the System's mystique). Pure taste.
-3. **Day-one pacing knob.** The infant nap curve is a new declared constant (hatchling sleep
-   threshold). Accept it, and roughly how fast — ~5 naps day one? (Without it, at ~1 sleep/day
-   the ladder takes ~5 days.)
-4. **The workshop gate.** `delegate` at genesis-03 pass (day one, recommended) vs at the first
-   Lv.2 mastery crossing (may slip to day two; purer §6 "unlocks at level crossings" alignment).
-5. **The current creature.** Evidence-based migration (it keeps what its record earns:
-   today that's U0+U1+U2 — it has slept, and its `log_entry` skill is live) vs fresh-slate the
-   ladder's maiden run.
-6. **`bash` at tick 1** — all three lenses say yes (paws before fine motor; withholding it means
-   building sandbox machinery that doesn't exist). Veto here if you want a pre-bash stage.
+1. **Voice timing → U4 milestone** (≥1 quest pass + ≥2 sleeps), with the I8 hardware-reachability
+   hold — a grant of `speak`/`vision` stays PENDING until the organ actually answers (voice
+   :8098 is down on Sprinter today).
+2. **Locked doors → fully invisible.** A locked tool does not exist anywhere in the creature's
+   world; every grant is a genuine surprise.
+3. **Nap curve → ~5 naps day one.** Stage-scaled infant adenosine threshold (declared constant
+   pair), consolidating toward ~1/day by adult stage.
+4. **Workshop → genesis-03 pass reward.** `delegate` (capacity 1) is the System's payment for the
+   first finished self-chosen objective; the genesis arc closes with the deepest grant.
+5. **The current creature → fresh slate when the ladder lands.** The egg holding paused now (0
+   ticks) is reset once more so the maiden run walks the full progression from tick 1.
+6. **`bash` at tick 1 → yes.** Newborn kit as designed (~8 names).
