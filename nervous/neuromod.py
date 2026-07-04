@@ -41,16 +41,33 @@ ADENOSINE_OVERRIDE_AROUSAL = 0.05  # declared: the arousal the accumulator force
                                 # floor is 0.15) so should_sleep() fires regardless of any drive floor.
 
 
+def _wake_budget_gene(config) -> float:
+    """The genome's wake_budget multiplier (tempo — genome.py, congenital personality as pressure).
+    FAIL-OPEN 1.0, and defensively re-clamped to [0.9, 1.1] HERE too: adenosine is the damper
+    against the insomnia death-spiral, and a genome (even a hand-edited genome.json) must never
+    disable a damper — tempo flavors the rhythm ±10%, sovereignty stays with sleep."""
+    if config is None:
+        return 1.0
+    try:
+        from genome import gene
+        g = float(gene(config, "wake_budget", 1.0))
+    except Exception:  # noqa: BLE001 - a genome must never break the sleep damper
+        return 1.0
+    return max(0.9, min(1.1, g))
+
+
 class Adenosine:
     """The sleep-pressure accumulator (pitfall #2). Grows monotonically with wake time via
     `accumulate(dt_hours)`, is cleared to zero by `clear()` (which sleep calls), and reports its
     `pressure()` as a fraction in [0, 1] of the way to `max_wake_hours`. Past 1.0 it is SATURATED:
     `overrides()` is True and `override_arousal()` returns a value inside the sleep band, which the
-    neuromodulatory state clamps arousal to — beating any drive floor. Declared knob: max_wake_hours."""
+    neuromodulatory state clamps arousal to — beating any drive floor. Declared knob: max_wake_hours
+    (× the genome's TIGHT ±10% wake_budget gene when a genome exists — see _wake_budget_gene)."""
 
-    def __init__(self, *, max_wake_hours: float = 18.0):
+    def __init__(self, *, max_wake_hours: float = 18.0, config=None):
         # A zero/negative ceiling would mean "never allowed awake"; guard so pressure stays finite.
-        self.max_wake_hours = float(max_wake_hours) if max_wake_hours and max_wake_hours > 0 else 18.0
+        ceiling = float(max_wake_hours) if max_wake_hours and max_wake_hours > 0 else 18.0
+        self.max_wake_hours = ceiling * _wake_budget_gene(config)
         self.level_hours = 0.0          # accumulated wake time since the last sleep, in hours
 
     def accumulate(self, dt_hours: float) -> float:
@@ -79,7 +96,7 @@ class Adenosine:
 
 class NeuromodulatoryState:
     def __init__(self, bus, *, source="neuromod", baseline_arousal=0.3, decay=0.85,
-                 drive_floor_cap=0.55, exhaustion_energy=0.15, max_wake_hours=18.0):
+                 drive_floor_cap=0.55, exhaustion_energy=0.15, max_wake_hours=18.0, config=None):
         self.bus = bus
         self.source = source
         self.baseline = float(baseline_arousal)
@@ -103,7 +120,8 @@ class NeuromodulatoryState:
         self.drive_floor_cap = float(drive_floor_cap)
         # Adenosine (pitfall #2): sleep pressure that accumulates with wake time and, past the wake
         # ceiling, OVERRIDES every drive floor so a creature pinned at max goal-tension still sleeps.
-        self.adenosine = Adenosine(max_wake_hours=max_wake_hours)
+        # `config` (optional) lets the genome's ±10% wake_budget gene flavor the ceiling — fail-open.
+        self.adenosine = Adenosine(max_wake_hours=max_wake_hours, config=config)
         self.sub = bus.subscribe(topics={(Kind.interoceptive, Modality.intero)})
         self._lock = threading.Lock()
         self._stop = threading.Event()

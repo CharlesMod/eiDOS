@@ -1238,7 +1238,8 @@ def run_loop(config: Config, persona=None, wal=None):
             # speech-gate migration + escalated perception (P6); inert until a claimant acquires.
             nervous_gpu = nervous.GpuArbiter(bus=nervous_bus, log_path=str(config.nervous_gpu_leases_log_path))
             try:
-                nervous_neuromod = nervous.NeuromodulatoryState(nervous_bus)
+                # config threads the genome's ±10% wake_budget gene into adenosine (fail-open ×1.0).
+                nervous_neuromod = nervous.NeuromodulatoryState(nervous_bus, config=config)
                 nervous_neuromod.start(2.0)   # Pillar 6: arousal + affect (mood)
             except Exception:  # noqa: BLE001
                 nervous_neuromod = None

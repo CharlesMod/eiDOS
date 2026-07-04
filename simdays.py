@@ -314,7 +314,7 @@ class SimCreature:
         # --- the real organs/libraries under test -----------------------------------------------
         self.bus = NervousBus()
         self.nm = NeuromodulatoryState(
-            self.bus, max_wake_hours=self.config.pillars_max_wake_hours)
+            self.bus, max_wake_hours=self.config.pillars_max_wake_hours, config=self.config)
         self.cycle = SleepCycle(self.bus, neuromod=self.nm)          # the real sleep TRIGGER
         self.consolidator = Consolidator(self.config)                # the single writer (§I6)
         self.mm = MemoryManager(self.config, consolidator=self.consolidator, neuromod=self.nm)

@@ -353,9 +353,22 @@ class MemoryManager:
         # index ~n·(1−ratio) — any realistic char budget cut it long before that, and the sim-days
         # harness caught the slot silently vanishing under production-shaped recalls (promotions → 0
         # from day 2). The seat must be reserved within what the budget actually returns.
-        ratio = self.config.pillars_recall_explore_ratio if explore_ratio is None else explore_ratio
+        ratio = self.effective_explore_ratio() if explore_ratio is None else explore_ratio
         fitted = _fit_to_budget(ranked, budget_chars)
         return self._reserve_exploration_slot(ranked, fitted, budget_chars, ratio)
+
+    def effective_explore_ratio(self) -> float:
+        """The recall exploration ratio actually used: config.pillars_recall_explore_ratio × the
+        genome's explore_recall gene (openness — genome.py, congenital personality as pressure).
+        FAIL-OPEN: with no genome file / no module the gene is exactly 1.0, so the bare config
+        value stands byte-identically. Applied here — where the constant is READ — because the
+        genome shapes perception (what recall digs up), never the ledger."""
+        ratio = float(self.config.pillars_recall_explore_ratio)
+        try:
+            from genome import gene
+            return ratio * gene(self.config, "explore_recall")
+        except Exception:  # noqa: BLE001 - the genome must never break recall
+            return ratio
 
     def _reserve_exploration_slot(self, ranked: list[Engram], fitted: list[Engram],
                                   budget_chars: int, explore_ratio: float) -> list[Engram]:

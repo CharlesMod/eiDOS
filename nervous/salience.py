@@ -126,6 +126,7 @@ class SalienceGate:
                  pool_cap=FUNGIBLE_POOL_CAP, rng=None, source="salience_gate"):
         self.bus = bus
         self.source = source
+        self.config = config
         self.enabled = bool(getattr(config, "pillars_salience_gate_enabled", False))
         self.pool_cap = int(pool_cap)
         self._rng = rng or random.Random()
@@ -237,6 +238,16 @@ class SalienceGate:
         arousal = max(0.0, min(1.0, arousal))
         return GAIN_MIN + arousal * (GAIN_MAX - GAIN_MIN)
 
+    def _explore_gene(self):
+        """The genome's explore_salience multiplier (openness — genome.py, congenital personality
+        as pressure). FAIL-OPEN: no genome file / no module → exactly 1.0; genome.py owns the
+        clamps and this never raises."""
+        try:
+            from genome import gene
+            return gene(self.config, "explore_salience")
+        except Exception:  # noqa: BLE001 - a genome must never break the gate
+            return 1.0
+
     def _event_tokens(self, ev):
         bits = [ev.source_organ, ev.kind.value, ev.modality.value]
         payload = self.bus.payloads.get(ev.payload_ref) if ev.payload_ref else None
@@ -284,8 +295,10 @@ class SalienceGate:
                 if slots > 1:
                     # NE explore/exploit switch (plan §1 table): low arousal widens the sampled
                     # share (a drowsy field wanders), high arousal narrows it — bounded by the
-                    # hard floor below and never the whole budget.
-                    share = EXPLORATION_SHARE * (2.0 - self._neuromod_gain())
+                    # hard floor below and never the whole budget. The genome's explore_salience
+                    # gene (openness) scales the share where the constant is read: an open
+                    # creature literally notices more of the low-bias world — fail-open ×1.0.
+                    share = EXPLORATION_SHARE * self._explore_gene() * (2.0 - self._neuromod_gain())
                     n_explore = min(max(EXPLORATION_MIN_SLOTS, int(slots * share)), slots - 1)
                 top = ranked[:slots - n_explore]
                 rest = ranked[slots - n_explore:]

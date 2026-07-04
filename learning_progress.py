@@ -244,11 +244,24 @@ class ProgressTracker:
         per-tick surprise into its restlessness drive — exactly the noisy-TV-farmable input pitfall
         #1 forbids. The cutover points curiosity's per-domain input at THIS function, so
         restlessness follows learning progress rather than raw surprise. No nervous/ file is edited
-        this wave (other agents own that tree); this module deliberately does not import nervous/."""
+        this wave (other agents own that tree); this module deliberately does not import nervous/.
+
+        The genome's restlessness gene (openness up, tenacity down — dilettante vs deep-driller)
+        multiplies the shaped signal here, where it is read; the result is re-clamped to [0,1] so
+        the gene can never push restlessness outside the curiosity organ's contract. Fail-open ×1.0
+        — a genome shapes the DRIVE to move on, never the XP the ledger pays."""
         p = self._progress(domain)
-        if p is None:
+        base = 1.0 if p is None else p
+        return max(0.0, min(1.0, base * self._restlessness_gene()))
+
+    def _restlessness_gene(self) -> float:
+        """genome.py multiplier on the restlessness signal — FAIL-OPEN 1.0 (no genome file / no
+        module → byte-identical pre-genome behavior); never raises."""
+        try:
+            from genome import gene
+            return float(gene(self.config, "restlessness"))
+        except Exception:  # noqa: BLE001 - a genome must never break the curiosity input
             return 1.0
-        return max(0.0, min(1.0, p))
 
 
 # ============================================================================================

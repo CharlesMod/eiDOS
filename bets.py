@@ -188,17 +188,34 @@ def signature_match(fix_sig: str, action_sig: str) -> bool:
 # =================================================================================================
 # The emotional-stamp multiplier (§M-1: flashbulb — salience AT ENCODING amplifies earned credit)
 # =================================================================================================
-def emotional_multiplier(encoded_at) -> float:
-    """1 + EMO_GAIN × salience, salience = mean of |arousal| and |valence| at encoding, clamped to
-    [0,1]. Amplifies credit in BOTH directions (a high-arousal failure scars deeper too); a neutral
-    stamp multiplies by exactly 1. Affect never creates strength — it only scales evidence."""
+def emotional_multiplier(encoded_at, config=None) -> float:
+    """1 + EMO_GAIN × salience × emotional_stamp-gene, salience = mean of |arousal| and |valence| at
+    encoding, clamped to [0,1]. Amplifies credit in BOTH directions (a high-arousal failure scars
+    deeper too); a neutral stamp multiplies by exactly 1 — the genome's emotional_stamp gene
+    (sensitivity — genome.py, congenital personality as pressure) scales how strongly FEELINGS burn
+    (the gain), never unemotional credit, and fails open to ×1.0 with no genome. The existing clamps
+    all hold: salience stays [0,1], the strength target is still _clamp01'd at the caller. Affect
+    never creates strength — it only scales evidence (and a gene never touches the coin amounts:
+    drives and perception, not the ledger)."""
     try:
         arousal = abs(float(getattr(encoded_at, "arousal", 0.0)))
         valence = abs(float(getattr(encoded_at, "valence", 0.0)))
     except (TypeError, ValueError):
         arousal = valence = 0.0
     salience = _clamp01((arousal + valence) / 2.0)
-    return 1.0 + EMO_GAIN * salience
+    return 1.0 + EMO_GAIN * salience * _stamp_gene(config)
+
+
+def _stamp_gene(config) -> float:
+    """genome.py emotional_stamp multiplier — FAIL-OPEN 1.0 (no config / no genome file / no
+    module → byte-identical pre-genome math); never raises."""
+    if config is None:
+        return 1.0
+    try:
+        from genome import gene
+        return float(gene(config, "emotional_stamp"))
+    except Exception:  # noqa: BLE001 - a genome must never break settlement
+        return 1.0
 
 
 def _fresh_es() -> dict:
@@ -406,7 +423,8 @@ class BetLedger:
         decay = ERROR_CREDIT_DECAY if e.kind == "error" else CREDIT_DECAY
         old_sum = float(e.stats.get("credit_sum", 0.0))
         new_sum = old_sum * decay + credit
-        target = _clamp01(engram.STRENGTH_DEFAULT + new_sum * emotional_multiplier(e.encoded_at))
+        target = _clamp01(engram.STRENGTH_DEFAULT
+                          + new_sum * emotional_multiplier(e.encoded_at, self.config))
         contradicted = es.get("contradicted_tick") is not None or bool(e.stats.get("contradicted"))
         if e.provenance == "inherited" and not contradicted:
             target = max(target, engram.INHERITED_STRENGTH_FLOOR)

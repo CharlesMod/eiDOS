@@ -44,6 +44,17 @@ SPRING_STEP = 0.004          # declared: STEP/5 — experience outpulls the spri
                              # (the depression-spiral damper: bad streak → caution ↑ → stall → recover).
 
 
+def _gene(config, name):
+    """The genome's multiplier on one of this module's pressure constants (genome.py — congenital
+    personality as pressure). FAIL-OPEN: no genome file / no module → exactly 1.0, so pre-genome
+    behavior is byte-identical. genome.py owns the clamps; this never raises."""
+    try:
+        from genome import gene
+        return gene(config, name)
+    except Exception:  # noqa: BLE001 - a genome must never break temperament
+        return 1.0
+
+
 class Temperament:
     AXES = ("initiative", "persistence", "caution")
     genome_baseline = GENOME_BASELINE   # Pillars 4.3 seam: the setpoint the springs pull toward —
@@ -60,12 +71,27 @@ class Temperament:
         self.updates = 0
         born = not self.load()
         if born and config is not None:
-            # First birth: draw this creature's congenital baselines (see BIRTH_SPREAD) and start
-            # each axis AT its own nature. Persisted immediately so the draw happens exactly once.
-            import random
+            # First birth: this creature's congenital baselines, and each axis starts AT its own
+            # nature. When a genome exists (workspace/genome.json — genome.py) the baselines are
+            # its latent-derived stamp_baselines, clamped inside every disposition() band so no
+            # newborn starts pre-labeled; with no genome (fail-open) the original uniform draw in
+            # GENOME_BASELINE ± BIRTH_SPREAD stands. Persisted immediately — the draw happens once.
+            drawn = None
+            try:
+                from genome import stamp_baselines
+                drawn = stamp_baselines(config)
+            except Exception:  # noqa: BLE001 - a genome must never break a birth
+                drawn = None
+            if drawn:
+                for ax in self.AXES:
+                    self.baselines[ax] = round(
+                        max(0.0, min(1.0, float(drawn.get(ax, GENOME_BASELINE)))), 3)
+            else:
+                import random
+                for ax in self.AXES:
+                    b = GENOME_BASELINE + random.uniform(-BIRTH_SPREAD, BIRTH_SPREAD)
+                    self.baselines[ax] = round(max(0.0, min(1.0, b)), 3)
             for ax in self.AXES:
-                b = max(0.0, min(1.0, GENOME_BASELINE + random.uniform(-BIRTH_SPREAD, BIRTH_SPREAD)))
-                self.baselines[ax] = round(b, 3)
                 setattr(self, ax, self.baselines[ax])
             self.save()
 
@@ -104,7 +130,9 @@ class Temperament:
         """Nudge each axis a small step toward the target this tick's experience implies. An override
         (the gate forcibly parked the active objective) is the strongest teacher and takes precedence; a
         purely neutral tick (no progress, no failure, no override) leaves temperament where it is."""
-        s = self.step
+        # Genome drift_rate (sensitivity): impressionable vs stubborn — applied where STEP is read,
+        # fail-open ×1.0 so a genome-less creature drifts at exactly the declared constant.
+        s = self.step * _gene(self.config, "drift_rate")
         if overridden:
             self.initiative = self._toward(self.initiative, 0.0, s)
             self.persistence = self._toward(self.persistence, 0.0, s)   # learn to let go sooner
@@ -120,8 +148,11 @@ class Temperament:
             # Setpoint springs (pitfall #3): after the experience nudge, every axis relaxes one small
             # bounded step toward THIS creature's congenital baseline — including on neutral ticks,
             # which is exactly when a spiked caution gets to recover. Flag off = byte-identical.
+            # Genome spring_return (sensitivity down, tenacity up): sensitive = feelings linger
+            # (weaker spring), tenacious = steadier — fail-open ×1.0 on the declared SPRING_STEP.
+            spring = SPRING_STEP * _gene(self.config, "spring_return")
             for ax in self.AXES:
-                setattr(self, ax, self._toward(getattr(self, ax), self.baselines[ax], SPRING_STEP))
+                setattr(self, ax, self._toward(getattr(self, ax), self.baselines[ax], spring))
         self.updates += 1
         if self.updates % 10 == 0:        # persist periodically, not every tick (I/O frugality)
             self.save()
@@ -130,8 +161,11 @@ class Temperament:
         """The objectives gate's park threshold, scaled by persistence (DMN → Basal Ganglia). Neutral
         persistence (0.5) = base; dogged (1.0) ≈ base*1.25; quick-to-let-go (0.0) ≈ base*0.75. So a
         creature that has learned persistence pays will grind a little longer before the gate rotates
-        it, and one that keeps getting overridden gives up sooner — emergent, not configured."""
-        return max(3, int(round(base * (0.75 + 0.5 * self.persistence))))
+        it, and one that keeps getting overridden gives up sooner — emergent, not configured. The
+        genome's grip gene (tenacity) scales the persistence effect on top: a tenacious creature
+        grinds congenitally longer, a loose-gripped one lets go sooner — fail-open ×1.0."""
+        return max(3, int(round(base * (0.75 + 0.5 * self.persistence)
+                                * _gene(self.config, "grip"))))
 
     def disposition(self) -> str:
         """One human-readable disposition word from the axes — a label for context, never the floats."""
