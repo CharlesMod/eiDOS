@@ -499,19 +499,40 @@ def build_admin_grammar() -> str:
     f_more = MAX_FLAGS_PER_CHECKIN - 1
     return "\n".join([
         f'root ::= jws "{{" jws {key("quests")} questarr "," jws'
-        f' {key("weakness_report")} jstring "," jws'
-        f' {key("narrator")} jstring "," jws'
+        f' {key("weakness_report")} mstring "," jws'
+        f' {key("narrator")} mstring "," jws'
         f' {key("tuning_flags")} flagarr "}}" jws',
         f'questarr ::= "[" jws ( quest ( "," jws quest ){{0,{q_more}}} )? "]" jws',
-        f'quest ::= "{{" jws {key("id")} jstring "," jws'
-        f' {key("directive")} jstring "," jws'
+        f'quest ::= "{{" jws {key("id")} bstring "," jws'
+        f' {key("directive")} bstring "," jws'
         f' {key("tier")} jint "," jws'
         f' {key("reward_xp")} jint "," jws'
         f' {key("expiry_hours")} jnumber "," jws'
-        f' {key("criteria")} jobject "}}" jws',
+        f' {key("criteria")} crit "}}" jws',
         f'flagarr ::= "[" jws ( flag ( "," jws flag ){{0,{f_more}}} )? "]" jws',
-        f'flag ::= "{{" jws {key("knob")} jstring "," jws {key("evidence")} jstring "}}" jws',
+        f'flag ::= "{{" jws {key("knob")} bstring "," jws {key("evidence")} mstring "}}" jws',
         'jint ::= ( "0" | [1-9] [0-9]{0,4} ) jws',
+        # Bounded strings: the voice is TERSE by doctrine (§7) — enforced at the sampler, not the
+        # prompt. The first model-in-the-loop smoke showed the 12B rambling an unbounded jstring
+        # past any token budget (truncated mid-JSON = 100% malformed). bstring caps ids/directives/
+        # knob names at 200 chars; mstring caps reports/narrator/evidence at 500.
+        f'bstring ::= "\\"" schar{{0,200}} "\\"" jws',
+        f'mstring ::= "\\"" schar{{0,500}} "\\"" jws',
+        'schar ::= [^"\\\\\\x7F\\x00-\\x1F] | "\\\\" ( ["\\\\bfnrt/] | "u" jhex jhex jhex jhex )',
+        # The criteria object is constrained to the Criterion SHAPE, not free JSON — the second
+        # model-in-the-loop smoke showed the 12B filling an open jobject with gibberish keys that
+        # the semantic validator then (correctly) rejected 3/3. Form at the sampler (§0): a leaf is
+        # exactly {path, op, value} with op drawn from quests._OPS; a compound is all_of/any_of of
+        # ≤4 children. parse_admin_output's semantic pass (depth cap, path sanity) still runs.
+        'crit ::= leaf | comp',
+        f'leaf ::= "{{" jws {key("path")} bstring "," jws {key("op")} opstr "," jws'
+        f' {key("value")} sval "}}" jws',
+        'opstr ::= "\\"" ( ' + " | ".join(
+            f'"{op}"' for op in sorted(quests._OPS, key=len, reverse=True)) + ' ) "\\"" jws',
+        'sval ::= jstring | jnumber | ( "true" | "false" ) jws | sarr',
+        'sarr ::= "[" jws ( sval ( "," jws sval )* )? "]" jws',
+        f'comp ::= "{{" jws ( {key("all_of")} | {key("any_of")} )'
+        f' "[" jws crit ( "," jws crit ){{0,3}} "]" jws "}}" jws',
         grammar_mod._JSON_RULES.strip(),
     ])
 
