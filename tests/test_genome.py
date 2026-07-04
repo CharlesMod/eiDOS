@@ -165,8 +165,34 @@ class TestConsumers:
             assert getattr(t, ax) == t.baselines[ax]
         assert t.disposition() == "steady"                # never pre-labeled
 
-    def test_temperament_uniform_fallback_without_genome(self, tmp_path):
-        cfg = _cfg(tmp_path)                              # no genome.json
+    def test_first_birth_births_the_genome(self, tmp_path):
+        """The creature's first birth is the ONE place the congenital draw happens: constructing a
+        fresh Temperament with no genome.json must create it (the read-only gene() accessor never
+        births, so without this seam every gene would silently stay 1.0 forever)."""
+        cfg = _cfg(tmp_path)                              # no genome.json yet
+        from nervous.temperament import Temperament
+        t = Temperament(config=cfg)
+        assert (cfg.workspace / GENOME_FILENAME).is_file()
+        g = Genome(cfg)                                   # loads the same birth, no re-draw
+        for ax in Temperament.AXES:
+            assert t.baselines[ax] == pytest.approx(g.stamp_baselines[ax], abs=1e-3)
+        assert t.disposition() == "steady"                # still never pre-labeled
+
+    def test_existing_creature_never_retrofits_a_genome(self, tmp_path, monkeypatch):
+        """A creature that grew up genome-less (e.g. born on pre-genome code) must NOT acquire one
+        mid-life from a code upgrade — congenital means at birth only."""
+        cfg = _cfg(tmp_path)
+        from nervous.temperament import Temperament
+        monkeypatch.setitem(sys.modules, "genome", types.ModuleType("genome"))  # birth w/o genome
+        Temperament(config=cfg)                           # first birth: uniform fallback, state saved
+        monkeypatch.undo()                                # the upgrade: genome module is back
+        t2 = Temperament(config=cfg)                      # mid-life reload
+        assert not (cfg.workspace / GENOME_FILENAME).exists()
+        assert t2.updates == 0 and t2.baselines           # loaded, not re-born
+
+    def test_temperament_uniform_fallback_when_genome_unavailable(self, tmp_path, monkeypatch):
+        monkeypatch.setitem(sys.modules, "genome", types.ModuleType("genome"))  # no Genome symbol
+        cfg = _cfg(tmp_path)
         from nervous.temperament import BIRTH_SPREAD, Temperament
         t = Temperament(config=cfg)
         for ax in Temperament.AXES:

@@ -78,8 +78,13 @@ class Temperament:
             # GENOME_BASELINE ± BIRTH_SPREAD stands. Persisted immediately — the draw happens once.
             drawn = None
             try:
-                from genome import stamp_baselines
-                drawn = stamp_baselines(config)
+                from genome import Genome
+                # Load-OR-BIRTH: the creature's first birth is the one place the congenital draw
+                # happens — the read-only gene() accessor everywhere else never births, so without
+                # this call no genome would ever exist and every gene would silently stay 1.0.
+                # An existing creature (load() above succeeded) never reaches here, so a mid-life
+                # code upgrade can never retro-fit a genome onto a creature that grew up without one.
+                drawn = dict(Genome(config).stamp_baselines)
             except Exception:  # noqa: BLE001 - a genome must never break a birth
                 drawn = None
             if drawn:

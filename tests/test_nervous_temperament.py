@@ -4,6 +4,7 @@ Pins: the drift direction for success / failure / override, that it is SLOW (one
 it), that persistence scales the gate's park threshold (the teeth), the disposition labels, and the
 save/load round-trip so temperament survives a restart.
 """
+import json
 import sys
 import tempfile
 import unittest
@@ -12,24 +13,35 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import Config
+from genome import GENE_LOADINGS, GENOME_FILENAME, LATENTS
 from nervous.temperament import Temperament
 
 
 def _temp():
+    """A temperament born with a NEUTRAL genome (all genes 1.0, baselines 0.5), so this file's
+    exact-value pins on the drift/spring/park mechanics stay deterministic — the congenital draw
+    itself (and its consumer seams) is test_genome.py's job."""
     cfg = Config()
     cfg.workspace_dir = tempfile.mkdtemp()
+    doc = {"v": 1, "seed": 0, "born_ts": 0.0,
+           "latents": {n: 0.0 for n in LATENTS},
+           "genes": {name: 1.0 for name in GENE_LOADINGS},
+           "stamp_baselines": {"initiative": 0.5, "persistence": 0.5, "caution": 0.5}}
+    (cfg.workspace / GENOME_FILENAME).write_text(json.dumps(doc), encoding="utf-8")
     return Temperament(config=cfg)
 
 
 class TestDrift(unittest.TestCase):
 
     def test_starts_at_congenital_baseline(self):
-        # Birth draw (4.3 divergence): a fresh creature starts AT its own drawn baselines, each
-        # within GENOME_BASELINE ± BIRTH_SPREAD — near-neutral, never pre-labeled at birth.
+        # Birth draw (4.3 divergence): a fresh creature starts AT its own drawn baselines. The
+        # first birth births the genome (genome.py), whose stamp_baselines are clamped to
+        # [BASELINE_LO, BASELINE_HI] = [0.38, 0.62] — strictly inside every disposition() band,
+        # so a newborn is never pre-labeled at birth.
         t = _temp()
         for ax in ("initiative", "persistence", "caution"):
             self.assertEqual(getattr(t, ax), t.baselines[ax])
-            self.assertLessEqual(abs(t.baselines[ax] - 0.5), 0.081)
+            self.assertLessEqual(abs(t.baselines[ax] - 0.5), 0.121)
         self.assertEqual(t.disposition(), "steady")
 
     def test_sustained_success_raises_initiative_lowers_caution(self):
