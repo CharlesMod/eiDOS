@@ -40,6 +40,72 @@ ADENOSINE_OVERRIDE_AROUSAL = 0.05  # declared: the arousal the accumulator force
                                 # ceiling — safely inside the sleep_arousal band (SleepCycle's default
                                 # floor is 0.15) so should_sleep() fires regardless of any drive floor.
 
+# --- Infant nap curve (TOOL_PROGRESSION.md decision #3: ~5 naps day one -> ~1/day by adult) --------
+# A hatchling sleeps in short bouts and consolidates toward the adult rhythm. This is the unlock
+# ladder's CLOCK: the pacing that makes "full kit within day one" happen without a wall-clock timer —
+# the creature earns each rung across several SHORT sleeps, not after N hours. It is a GENUINE
+# pressure (the very same adenosine every system reads: the sleep gate, tick cadence, consolidation),
+# stage-scaled, never a private unlock counter. The scale multiplies the wake ceiling BEFORE the
+# genome's wake_budget gene, and every entry is <= 1.0 — so a young creature always naps MORE than an
+# adult, never less, and the product can never exceed the adult (scale 1.0) gene-scaled ceiling:
+# adenosine stays sovereign. Declared per §0.4, each number justified below.
+NAP_STAGE_SCALE = {
+    # egg / hatchling — 0.2 × the 18 h adult ceiling ≈ 3.6 h bouts. A newborn awake ~18 h of a day
+    # at ~3.6 h/bout naps ~5×, matching decision #3's "~5 naps day one" — the short-bout polyphasic
+    # sleep of an infant, and the cadence that lets the genesis arc's several sleeps all land inside
+    # day one. (egg and hatchling share the scale: stage_for() distinguishes them only by the hatch
+    # flag, and the newborn's nap rhythm is the same on either side of the shell.)
+    "egg": 0.2,
+    "hatchling": 0.2,
+    # juvenile — 0.55: the intermediate consolidation rung (~9.9 h bouts, ~2 sleeps/day), a declared
+    # midpoint between the infant's polyphasic ~5 and the adult's monophasic 1 (declared, not fit —
+    # the curve's shape is a design choice, halfway between the two anchors).
+    "juvenile": 0.55,
+    # adult — 1.0: the full 18 h ceiling, ~1 sleep/day. This is the rhythm the curve consolidates
+    # TOWARD; scale 1.0 leaves the adult ceiling byte-identical to the pre-curve behaviour.
+    "adult": 1.0,
+    # guardian — 1.0: the mature form keeps the adult ceiling. A later stage never earns a LONGER
+    # wake budget than the adult — the adult ceiling is adenosine's sovereign maximum.
+    "guardian": 1.0,
+}
+
+
+def _current_stage(config) -> str:
+    """The creature's canonical life stage — the SAME derivation the dashboard treats as canonical
+    (`creature_gen.stage_for(persona level, hatched)`, dashboard.py:build_creature_spec). No new
+    stage system is invented here: we read the persisted persona.json `level` exactly as the
+    dashboard does (`persona.get("level", 1)`) and the persisted creature.json `hatched` flag.
+    Raises on any read failure — the caller (`_stage_scale`) fails open to the adult scale."""
+    import json
+    import creature_gen
+    ws = config.workspace
+    persona = json.loads((ws / "persona.json").read_text(encoding="utf-8"))
+    level = int(persona.get("level", 1))
+    try:
+        creature = json.loads((ws / "creature.json").read_text(encoding="utf-8"))
+        hatched = bool(creature.get("hatched", False))
+    except Exception:  # noqa: BLE001 - no creature.json yet: infer from level (immaterial — egg and
+        hatched = level > 1                             # hatchling share the 0.2 scale either way).
+    return creature_gen.stage_for(level, hatched)
+
+
+def _stage_scale(config) -> float:
+    """The infant-nap-curve multiplier on the wake ceiling for the creature's current life stage.
+
+    GATED behind `pillars_tool_unlocks_enabled` — integration owns that flag; this code is DARK
+    until it exists. Flag off (or absent) → 1.0, byte-identical to the pre-curve ceiling. FAIL-OPEN
+    to 1.0 (the adult scale) on any read failure: a creature whose stage can't be read gets the FULL
+    adult budget, never an accidental over-nap — a stage read must never break the sleep damper.
+    Clamped to (0, 1] so even a hand-edited NAP_STAGE_SCALE can only SHORTEN the wake budget, never
+    lengthen it past the adult's — the stage dimension can never unseat adenosine's sovereignty."""
+    if config is None or not getattr(config, "pillars_tool_unlocks_enabled", False):
+        return 1.0
+    try:
+        scale = float(NAP_STAGE_SCALE.get(_current_stage(config), 1.0))
+    except Exception:  # noqa: BLE001 - a stage read must never break the sleep damper
+        return 1.0
+    return max(1e-3, min(1.0, scale))
+
 
 def _wake_budget_gene(config) -> float:
     """The genome's wake_budget multiplier (tempo — genome.py, congenital personality as pressure).
@@ -62,12 +128,18 @@ class Adenosine:
     `pressure()` as a fraction in [0, 1] of the way to `max_wake_hours`. Past 1.0 it is SATURATED:
     `overrides()` is True and `override_arousal()` returns a value inside the sleep band, which the
     neuromodulatory state clamps arousal to — beating any drive floor. Declared knob: max_wake_hours
-    (× the genome's TIGHT ±10% wake_budget gene when a genome exists — see _wake_budget_gene)."""
+    (× the infant nap curve's stage scale, THEN × the genome's TIGHT ±10% wake_budget gene when a
+    genome exists — see _stage_scale / _wake_budget_gene). Stage scale ≤ 1.0 and gene ∈ [0.9, 1.1],
+    so a young creature naps in short bouts and no stage can push the ceiling past the adult's."""
 
     def __init__(self, *, max_wake_hours: float = 18.0, config=None):
         # A zero/negative ceiling would mean "never allowed awake"; guard so pressure stays finite.
         ceiling = float(max_wake_hours) if max_wake_hours and max_wake_hours > 0 else 18.0
-        self.max_wake_hours = ceiling * _wake_budget_gene(config)
+        # Infant nap curve (dark until pillars_tool_unlocks_enabled): the stage scale shortens the
+        # ceiling for a young creature FIRST, then the wake_budget gene flavors it. Flag off →
+        # scale 1.0 → this is byte-identical to the pre-curve `ceiling * gene`. Scale ≤ 1.0 keeps the
+        # product ≤ the adult (scale 1.0) gene-scaled ceiling: adenosine stays sovereign.
+        self.max_wake_hours = ceiling * _stage_scale(config) * _wake_budget_gene(config)
         self.level_hours = 0.0          # accumulated wake time since the last sleep, in hours
 
     def accumulate(self, dt_hours: float) -> float:
