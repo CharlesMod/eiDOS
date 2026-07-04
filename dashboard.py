@@ -1056,6 +1056,11 @@ def _make_handler(config: Config):
                 pid = parse_qs(urlparse(self.path).query).get("id", [""])[0]
                 self._respond(200, "application/json", json.dumps(selfedit.get_diff(config, pid)))
 
+            elif self.path == "/api/admin/list":
+                # The System — proposals (Pillars 5.2): pending Administrator quest proposals
+                # + the per-tier graduated-autonomy books.
+                self._respond(200, "application/json", json.dumps(build_admin(config)))
+
             else:
                 self._respond(404, "text/plain", "not found")
 
@@ -1249,6 +1254,58 @@ def _make_handler(config: Config):
                     self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
                 pid, reason = payload.id, payload.reason
                 self._respond(200, "application/json", json.dumps(selfedit.reject(config, pid, reason)))
+            elif self.path == "/api/admin/approve":
+                # Administrator proposal approval (Pillars 5.2): routes the pending quest through
+                # System.propose — the ONLY channel into the creature's world. Optional `edit`
+                # overrides the editable quest-window fields before it crosses.
+                if not _token_ok(self.headers, self.path, config):
+                    self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
+                import administrator
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                if length > 8000:
+                    self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
+                try:
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
+                quest = administrator.approve_proposal(config, payload.id, payload.edit)
+                if quest is None:
+                    self._respond(200, "application/json",
+                                  json.dumps({"ok": False, "error": "not pending / invalid edit / administrator off"}))
+                else:
+                    self._respond(200, "application/json", json.dumps({"ok": True, "quest_id": quest.id}))
+            elif self.path == "/api/admin/reject":
+                if not _token_ok(self.headers, self.path, config):
+                    self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
+                import administrator
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                if length > 2000:
+                    self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
+                try:
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
+                ok = administrator.reject_proposal(config, payload.id, payload.reason)
+                self._respond(200, "application/json",
+                              json.dumps({"ok": bool(ok)} if ok else
+                                         {"ok": False, "error": "not pending / administrator off"}))
+            elif self.path == "/api/admin/revoke":
+                # The ban-hammer seam: revoke a tier's earned auto-issue; trust re-earned from zero.
+                if not _token_ok(self.headers, self.path, config):
+                    self._respond(401, "application/json", '{"ok":false,"error":"auth"}'); return
+                import administrator
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                if length > 2000:
+                    self._respond(413, "application/json", '{"ok":false,"error":"too large"}'); return
+                try:
+                    payload = validate_dashboard_post_payload(self.path, self.rfile.read(length))
+                except DashboardPayloadError as exc:
+                    self._respond(exc.status, "application/json", json.dumps({"ok": False, "error": str(exc)})); return
+                enabled = bool(getattr(config, "pillars_administrator_enabled", False))
+                administrator.revoke_autonomy(config, payload.tier)
+                self._respond(200, "application/json",
+                              json.dumps({"ok": enabled, "tier": payload.tier} if enabled else
+                                         {"ok": False, "error": "administrator off"}))
             else:
                 self._respond(404, "text/plain", "not found")
 
@@ -1295,6 +1352,32 @@ def build_self_guide(config) -> dict:
         "mtime": mtime,
         "max_bytes": config.self_guide_max_bytes,
     }
+
+
+def build_admin(config) -> dict:
+    """The System — proposals panel payload (Pillars 5.2): pending Administrator quest proposals
+    (oldest first) + the per-tier graduated-autonomy books. Flag off → enabled False, empty lists.
+    Read-only: the AdminState books are the Administrator's; this only renders them."""
+    out = {"enabled": bool(getattr(config, "pillars_administrator_enabled", False)),
+           "proposals": [], "autonomy": []}
+    if not out["enabled"]:
+        return out
+    import administrator
+    out["proposals"] = administrator.pending_proposals(config)
+    state = administrator.AdminState(config)
+    tiers = {int(t) for t in state.autonomy} | {int(p.get("tier", 1)) for p in out["proposals"]}
+    for tier in sorted(tiers):
+        a = state.autonomy.get(str(tier)) or {}
+        dec = list(a.get("decisions") or [])
+        out["autonomy"].append({
+            "tier": tier,
+            "decisions": len(dec),
+            "approvals": sum(1 for x in dec if x),
+            "approval_rate": round(sum(1 for x in dec if x) / len(dec), 3) if dec else None,
+            "revoked": bool(a.get("revoked")),
+            "auto_issue": state.tier_has_autonomy(tier),
+        })
+    return out
 
 
 def _write_chat_hold(config, held: bool) -> dict:

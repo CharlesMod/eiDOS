@@ -895,6 +895,73 @@
     }
   },
   "dashboard_posts": {
+    "/api/admin/approve": {
+      "additionalProperties": false,
+      "properties": {
+        "edit": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Edit"
+        },
+        "id": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "DashboardAdminApprovePost",
+      "type": "object"
+    },
+    "/api/admin/reject": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "maxLength": 200,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "DashboardAdminRejectPost",
+      "type": "object"
+    },
+    "/api/admin/revoke": {
+      "additionalProperties": false,
+      "properties": {
+        "tier": {
+          "maximum": 99,
+          "minimum": 1,
+          "title": "Tier",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tier"
+      ],
+      "title": "DashboardAdminRevokePost",
+      "type": "object"
+    },
     "/api/chat": {
       "additionalProperties": false,
       "properties": {

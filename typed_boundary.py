@@ -296,6 +296,34 @@ class DashboardSelfEditRejectPost(_StrictBoundaryModel):
     reason: str = Field(default="", max_length=200)
 
 
+# Administrator approval panel (Pillars 5.2). `edit` keys mirror administrator._EDITABLE —
+# the boundary rejects a field the approval seam would silently drop.
+_ADMIN_EDITABLE = frozenset({"directive", "tier", "reward_xp", "expiry_hours", "criteria"})
+
+
+class DashboardAdminApprovePost(_StrictBoundaryModel):
+    id: str = Field(min_length=1, max_length=80)
+    edit: dict[str, Any] | None = None
+
+    @field_validator("edit")
+    @classmethod
+    def _edit_keys_editable(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value:
+            unknown = sorted(set(value) - _ADMIN_EDITABLE)
+            if unknown:
+                raise ValueError(f"non-editable fields: {', '.join(unknown)}")
+        return value or None
+
+
+class DashboardAdminRejectPost(_StrictBoundaryModel):
+    id: str = Field(min_length=1, max_length=80)
+    reason: str = Field(default="", max_length=200)
+
+
+class DashboardAdminRevokePost(_StrictBoundaryModel):
+    tier: int = Field(ge=1, le=99)
+
+
 _DASHBOARD_POST_MODELS: dict[str, tuple[type[_StrictBoundaryModel], bool]] = {
     "/api/chat": (DashboardChatPost, False),
     "/api/control/reset": (DashboardResetPost, True),
@@ -307,6 +335,9 @@ _DASHBOARD_POST_MODELS: dict[str, tuple[type[_StrictBoundaryModel], bool]] = {
     "/api/git/restore": (DashboardGitRestorePost, True),
     "/api/selfedit/apply": (DashboardSelfEditApplyPost, False),
     "/api/selfedit/reject": (DashboardSelfEditRejectPost, False),
+    "/api/admin/approve": (DashboardAdminApprovePost, False),
+    "/api/admin/reject": (DashboardAdminRejectPost, False),
+    "/api/admin/revoke": (DashboardAdminRevokePost, False),
 }
 
 

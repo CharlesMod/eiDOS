@@ -1248,6 +1248,15 @@ function toggleVoice(){
         <pre id="selfedit-diff" style="display:none;white-space:pre-wrap;background:#0a0f0a;border:1px solid #1a3a1a;border-radius:6px;padding:8px;max-height:320px;overflow:auto;font-size:11px;color:#cfeccf;margin-top:8px;"></pre>
     </div>
 
+    <!-- The System — proposals: Administrator-proposed quests, you approve (Pillars 5.2) -->
+    <div class="panel" style="grid-column: 1 / -1;">
+        <div class="panel-title">The System — proposals (the Administrator proposes, you approve)
+            <span style="float:right;font-size:9px;color:#555;" id="admin-status"></span>
+        </div>
+        <div id="admin-proposals" style="font-size:11px;"></div>
+        <div id="admin-autonomy" style="font-size:11px;color:#9fc4a0;margin-top:8px;font-family:monospace;"></div>
+    </div>
+
     <!-- Knowledge Nuggets + Working Memory: side by side -->
     <div class="panel">
         <div class="panel-title">Knowledge Nuggets</div>
@@ -2227,6 +2236,64 @@ async function rejectSelfEdit(id) {
     loadSelfEdits();
 }
 setInterval(loadSelfEdits, 12000); loadSelfEdits();
+
+// --- The System — proposals (the Administrator proposes quests; you approve) ---
+function adminCritText(c) {
+    if (!c) return '(none)';
+    if (c.all_of) return 'ALL(' + c.all_of.map(adminCritText).join(' & ') + ')';
+    if (c.any_of) return 'ANY(' + c.any_of.map(adminCritText).join(' | ') + ')';
+    return (c.path||'?') + ' ' + (c.op||'>=') + ' ' + JSON.stringify(c.value);
+}
+async function loadAdmin() {
+    try {
+        let r = await fetch('/api/admin/list'); if (!r.ok) return;
+        let d = await r.json();
+        document.getElementById('admin-status').textContent = d.enabled ? 'enabled' : 'disabled (Administrator off)';
+        let props = d.proposals||[];
+        if (!props.length) { document.getElementById('admin-proposals').innerHTML = '<span style="color:#555;">no pending proposals</span>'; }
+        else {
+            document.getElementById('admin-proposals').innerHTML = props.map(function(p){
+                return '<div style="border:1px solid #1a3a1a;border-radius:6px;padding:6px;margin-bottom:6px;">'+
+                  '<b style="color:#9fd4ff;">tier '+p.tier+'</b> <span style="color:#7CFC9B;">+'+(p.reward_xp||0)+' xp</span> '+
+                  (p.expiry_hours ? '<span style="color:#ffcf6b;">expires '+p.expiry_hours+'h</span> ' : '')+
+                  '<span style="color:#888;font-size:10px;">'+escapeHtml(p.id||'')+' · '+escapeHtml(p.created_ts||'')+'</span><br>'+
+                  '<span style="color:#cfeccf;">'+escapeHtml(p.directive||'')+'</span><br>'+
+                  '<span style="color:#aaa;font-size:10px;">criteria: '+escapeHtml(adminCritText(p.criteria))+'</span>'+
+                  '<div style="margin-top:4px;">'+
+                  '<button onclick="approveAdmin(\''+p.id+'\')" style="background:#123a1e;color:#7CFC9B;border:1px solid #2a5a2a;'+_seBtn+'">Approve ▸</button>'+
+                  '<button onclick="rejectAdmin(\''+p.id+'\')" style="background:#3a1212;color:#ff9b9b;border:1px solid #5a2a2a;'+_seBtn+'">Reject</button>'+
+                  '</div></div>';
+            }).join('');
+        }
+        let auto = d.autonomy||[];
+        document.getElementById('admin-autonomy').innerHTML = !auto.length ? '<span style="color:#555;">no autonomy history</span>' :
+            'graduated autonomy:<br>' + auto.map(function(a){
+                let st = a.revoked ? '<span style="color:#ff9b9b;">REVOKED</span>'
+                       : (a.auto_issue ? '<span style="color:#7CFC9B;">AUTO-ISSUE</span>'
+                       : '<span style="color:#888;">manual</span>');
+                return 'tier '+a.tier+': '+a.approvals+'/'+a.decisions+' approved '+st+' '+
+                  '<button onclick="revokeAdmin('+a.tier+')" style="background:#3a2f12;color:#ffcf6b;border:1px solid #5a4a1a;'+_seBtn+'">Revoke</button>';
+            }).join('<br>');
+    } catch(e) {}
+}
+async function approveAdmin(id) {
+    if (!confirm('Approve proposal '+id+'?\n\nThe quest is issued to eiDOS through the System, and the tier\'s autonomy record is credited.')) return;
+    try {
+        let r = await fetch('/api/admin/approve', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
+        let d = await r.json(); if (!d.ok) alert('failed: '+(d.error||''));
+    } catch(e){}
+    loadAdmin();
+}
+async function rejectAdmin(id) {
+    try { await fetch('/api/admin/reject', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})}); } catch(e){}
+    loadAdmin();
+}
+async function revokeAdmin(tier) {
+    if (!confirm('Revoke tier '+tier+' autonomy?\n\nIts decision history is cleared — trust must be re-earned from zero through approvals.')) return;
+    try { await fetch('/api/admin/revoke', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tier:tier})}); } catch(e){}
+    loadAdmin();
+}
+setInterval(loadAdmin, 12000); loadAdmin();
 </script>
 
 <style>
