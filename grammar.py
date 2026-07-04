@@ -13,6 +13,12 @@ waiting, the tick's grammar can REQUIRE a reply and it streams first, so per-sen
 TTS starts before the tool call is even generated — reply-first enforced by the
 sampler, not begged for in the prompt.
 
+The thought is grammatically ONE line. The prompt already asks for one short plain
+sentence; the sampler enforces the form, because a multi-line thought let a second
+prose line impersonate a call ('bash {"cmd":...}') right before the real tags —
+dead tokens, double syntax, and a phantom call format the model then relearns from
+its own transcript.
+
 The grammar governs FORM only. CONTENT guidance (which tool fits, arg semantics)
 stays in the prompt; semantic arg validation is the phase-6 validate gate's job.
 
@@ -59,9 +65,11 @@ def build_tick_grammar(tool_names, *, require_reply: bool = False) -> str:
         root = "root ::= ( thought reply? ws toolcall? | reply ws toolcall? | toolcall ) ws"
     return "\n".join([
         root,
-        # Free-form thought: any run of text that never opens a tag ('<' would start
-        # a structured block; the model phrases around it).
-        "thought ::= [^<] [^<]*",
+        # Free-form thought, ONE LINE: text that never opens a tag ('<' would start
+        # a structured block; the model phrases around it) and never breaks the line.
+        # The trailing ws is the only place a newline fits — whitespace-only, so a
+        # second prose line mimicking a call can't exist before the tags.
+        "thought ::= [^<\\n\\r] [^<\\n\\r]* ws",
         # Reply text may contain "<x" but never "</" — the closing tag terminates it.
         'reply ::= "<reply>" rtext "</reply>"',
         'rtext ::= ( [^<] | "<" [^/<] )*',
