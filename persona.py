@@ -113,7 +113,7 @@ def award_xp(persona: dict, amount: int, reason: str = "",
     return persona["level"]
 
 
-def record_tick(persona: dict, tool_name: Optional[str], success: bool) -> None:
+def record_tick(persona: dict, tool_name: Optional[str], success: bool, *, config=None) -> None:
     """Update persona stats after a tick."""
     persona["total_ticks"] = persona.get("total_ticks", 0) + 1
 
@@ -123,7 +123,7 @@ def record_tick(persona: dict, tool_name: Optional[str], success: bool) -> None:
         persona["tools_used"] = tools
 
         if success:
-            award_xp(persona, 1)
+            award_xp(persona, 1, config=config)
             persona["current_streak"] = persona.get("current_streak", 0) + 1
             if persona["current_streak"] > persona.get("longest_streak", 0):
                 persona["longest_streak"] = persona["current_streak"]
@@ -131,23 +131,23 @@ def record_tick(persona: dict, tool_name: Optional[str], success: bool) -> None:
             persona["current_streak"] = 0
 
 
-def record_error_recovery(persona: dict) -> None:
+def record_error_recovery(persona: dict, *, config=None) -> None:
     """Call when a failed tick is followed by a successful one."""
     persona["total_errors_recovered"] = persona.get("total_errors_recovered", 0) + 1
-    award_xp(persona, 5)
+    award_xp(persona, 5, config=config)
 
 
-def record_compaction(persona: dict) -> None:
+def record_compaction(persona: dict, *, config=None) -> None:
     """Call after a successful compaction."""
     persona["total_compactions"] = persona.get("total_compactions", 0) + 1
-    award_xp(persona, 2)
+    award_xp(persona, 2, config=config)
 
 
-def record_goal_complete(persona: dict, summary: str) -> None:
+def record_goal_complete(persona: dict, summary: str, *, config=None) -> None:
     """Call when goal_complete tool succeeds."""
     persona["goals_completed"] = persona.get("goals_completed", 0) + 1
     persona["last_goal_summary"] = summary
-    award_xp(persona, 100)
+    award_xp(persona, 100, config=config)
 
 
 # --- Trait computation ---

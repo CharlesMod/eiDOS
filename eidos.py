@@ -1509,7 +1509,7 @@ def run_loop(config: Config, persona=None, wal=None):
                 ticks_since_compaction = 0
                 tick_compacted = True
                 if persona and config.persona_enabled:
-                    record_compaction(persona)
+                    record_compaction(persona, config=config)
                     pfx = _pfx(persona, config)
                 print(f"{pfx} Memories consolidated.")
             except LLMError as e:
@@ -1780,7 +1780,7 @@ def run_loop(config: Config, persona=None, wal=None):
                     compact_briefing(config, persona=persona)
                     ticks_since_compaction = 0
                     if persona and config.persona_enabled:
-                        record_compaction(persona)
+                        record_compaction(persona, config=config)
                         pfx = _pfx(persona, config)
                 except LLMError as ce:
                     logger.error("Forced compaction failed: %s", ce)
@@ -1864,7 +1864,7 @@ def run_loop(config: Config, persona=None, wal=None):
                 })
                 recent_hashes.append("__chat_reply__")
                 if persona and config.persona_enabled:
-                    record_tick(persona, "chat_reply", True)
+                    record_tick(persona, "chat_reply", True, config=config)
                     tick_tool_name = "chat_reply"
                     tick_tool_success = True
             elif thought and len(thought) > 8:
@@ -1878,7 +1878,7 @@ def run_loop(config: Config, persona=None, wal=None):
                 })
                 recent_hashes.append("th_" + hashlib.md5(thought[:120].encode("utf-8", "ignore")).hexdigest()[:8])
                 if persona and config.persona_enabled:
-                    record_tick(persona, "thought", True)
+                    record_tick(persona, "thought", True, config=config)
                     tick_tool_name = "thought"
                     tick_tool_success = True
                 print(f"{pfx} Tick {tick_number}: thought (no action)")
@@ -1907,7 +1907,7 @@ def run_loop(config: Config, persona=None, wal=None):
                 recent_hashes.append("__no_tool__")
                 tick_fail_kind = "parse"
                 if persona and config.persona_enabled:
-                    record_tick(persona, None, False)
+                    record_tick(persona, None, False, config=config)
                     last_tick_failed = True
                     tick_tool_name = "parse_error"
         else:
@@ -1939,9 +1939,9 @@ def run_loop(config: Config, persona=None, wal=None):
 
             # --- Persona update ---
             if persona and config.persona_enabled:
-                record_tick(persona, call.tool, result.success)
+                record_tick(persona, call.tool, result.success, config=config)
                 if result.success and last_tick_failed:
-                    record_error_recovery(persona)
+                    record_error_recovery(persona, config=config)
                 last_tick_failed = not result.success
                 pfx = _pfx(persona, config)
 
