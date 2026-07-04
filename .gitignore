@@ -12,6 +12,13 @@ venv/
 workspace/*
 !workspace/goal.md
 workspace.pi-backup/
+# sleep-cycle workspace backups + fresh-slate archives of a previous creature's workspace —
+# runtime data, never source
+workspace-backups/
+workspace-pre-*/
+
+# Claude Code local session settings
+.claude/
 
 # stray TTS test artifacts (repo root)
 say.wav
