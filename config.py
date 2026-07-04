@@ -372,6 +372,7 @@ class Config:
     pillars_news_max_items: int = 20                   # declared: bound on queued news items (expiry + eviction past this; no unbounded growth)
     pillars_mastery_gates_enabled: bool = False        # 4.3 levels = glue-checked mastery evidence (trusted skills/calibration/reuse/sleep cycles), XP just the progress bar (level_gates.py)
     pillars_min_sleeps_per_level: int = 3              # declared: mandatory digestion between levels (spacing effect as a hard floor; early levels take days by design)
+    pillars_administrator_enabled: bool = False        # 5.2 the System-LLM behind the voice: dossier → grammar-constrained quest/weakness proposals, event-driven check-ins (administrator.py)
     # Phase 3 — skill economy (from library to language)
     pillars_skill_affordances_enabled: bool = False    # 3.1 surface top-K situation-relevant skills at the decision point
     pillars_skill_affordance_k: int = 3                # declared: how many affordances to surface
@@ -745,6 +746,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.pillars_news_max_items = int(pillars.get("news_max_items", config.pillars_news_max_items))
         config.pillars_mastery_gates_enabled = pillars.get("mastery_gates_enabled", config.pillars_mastery_gates_enabled)
         config.pillars_min_sleeps_per_level = int(pillars.get("min_sleeps_per_level", config.pillars_min_sleeps_per_level))
+        config.pillars_administrator_enabled = pillars.get("administrator_enabled", config.pillars_administrator_enabled)
         config.pillars_skill_affordances_enabled = pillars.get("skill_affordances_enabled", config.pillars_skill_affordances_enabled)
         config.pillars_skill_affordance_k = int(pillars.get("skill_affordance_k", config.pillars_skill_affordance_k))
         config.pillars_skill_economy_enabled = pillars.get("skill_economy_enabled", config.pillars_skill_economy_enabled)
