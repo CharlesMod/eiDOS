@@ -102,7 +102,14 @@ def award_xp(persona: dict, amount: int, reason: str = "",
         except Exception:  # noqa: BLE001 — fail-open: pay the unweighted base rather than crash
             pass
     persona["xp"] = persona.get("xp", 0) + amount
-    persona["level"] = compute_level(persona["xp"])
+    if config is not None and getattr(config, "pillars_mastery_gates_enabled", False):
+        # Pillars 4.3 (flag-gated): levels are mastery gates, not XP thresholds — XP accrues (the
+        # within-level progress bar) but the level moves ONLY via level_gates.apply_level_up's
+        # glue-adjudicated evidence. Config-less call sites can't consult the flag and keep the
+        # legacy recompute; the cutover threads config through the award paths it gates.
+        persona["level"] = persona.get("level", compute_level(persona["xp"]))
+    else:
+        persona["level"] = compute_level(persona["xp"])
     return persona["level"]
 
 

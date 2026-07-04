@@ -28,6 +28,14 @@ import json
 STEP = 0.02          # per-update drift rate — slow (a target shift takes ~50 updates to close ~63%)
 _NEUTRAL = 0.5
 
+# Pillars 4.3 setpoint springs (pitfall #3, flag-gated by pillars_mastery_gates_enabled):
+GENOME_BASELINE = _NEUTRAL   # declared: the genome setpoint every axis is elastically pulled toward —
+                             # the "who it is underneath" that a streak bends but never rewrites.
+SPRING_STEP = 0.004          # declared: STEP/5 — experience outpulls the spring 5:1 (a real losing
+                             # streak still moves caution), but on neutral ticks the residue relaxes
+                             # ~63% back toward baseline in ~250 updates instead of ratcheting forever
+                             # (the depression-spiral damper: bad streak → caution ↑ → stall → recover).
+
 
 class Temperament:
     AXES = ("initiative", "persistence", "caution")
@@ -83,6 +91,12 @@ class Temperament:
         elif failed:
             self.caution = self._toward(self.caution, 1.0, s)
             self.initiative = self._toward(self.initiative, 0.3, s)
+        if self.config is not None and getattr(self.config, "pillars_mastery_gates_enabled", False):
+            # Setpoint springs (pitfall #3): after the experience nudge, every axis relaxes one small
+            # bounded step toward the genome baseline — including on neutral ticks, which is exactly
+            # when a spiked caution gets to recover. Flag off = byte-identical legacy drift.
+            for ax in self.AXES:
+                setattr(self, ax, self._toward(getattr(self, ax), GENOME_BASELINE, SPRING_STEP))
         self.updates += 1
         if self.updates % 10 == 0:        # persist periodically, not every tick (I/O frugality)
             self.save()
