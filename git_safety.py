@@ -24,9 +24,14 @@ from atomicio import replace_with_retry
 
 # Files self-editing may NEVER touch (the safety machinery + lifecycle owner). Also enforced
 # at the self-edit propose/apply layer; duplicated here as the git-side backstop.
+# The Pillars reward path is protected too: a creature whose XP/strength/levels originate in
+# these files must not hold a propose channel into its own reward function (wireheading-by-
+# proposal) — the operator gate exists, but the operator shouldn't need to spot it in a diff.
 PROTECT_PATHS = frozenset({
     "dashboard.py", "voice.py", "git_safety.py", "selfedit.py", "safety.py", "atomicio.py",
     "config.py", "config.toml", ".gitignore", "llm.py", "skills.py", "dashboard.html",
+    "bets.py", "learning_progress.py", "level_gates.py", "quests.py", "administrator.py",
+    "engram.py", "expectations.py", "glue.py", "persona.py",
 })
 
 _TAG_PREFIX = "eidos-good-"

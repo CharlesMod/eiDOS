@@ -981,11 +981,20 @@ class _Pillars:
         ep = r.get("episode")
         if ep:
             try:
-                import episodes as _ep
-                _ep.record_episode(self.config, tick=tick, tool=str(ep.get("tool", "quest")),
-                                   sig=str(ep.get("sig", "")), fail_kind=str(ep.get("fail_kind", "")),
-                                   success=bool(ep.get("success", False)),
-                                   summary=str(ep.get("summary", "")), key=ep.get("key"))
+                if self.manager is not None:
+                    # Engram path: the failure-lite quest episode lands in the same store every
+                    # other memory does — one economy, one lifecycle (no legacy double-write).
+                    outcome = "succeeded" if ep.get("success") else (
+                        f"failed ({ep.get('fail_kind')})" if ep.get("fail_kind") else "failed")
+                    body = f"quest `{ep.get('tool', 'quest')}` {outcome}. {ep.get('summary', '')}".strip()
+                    self.manager.encode("episode", body, tick=tick,
+                                        stats={"situation": str(ep.get("key") or "")})
+                else:
+                    import episodes as _ep
+                    _ep.record_episode(self.config, tick=tick, tool=str(ep.get("tool", "quest")),
+                                       sig=str(ep.get("sig", "")), fail_kind=str(ep.get("fail_kind", "")),
+                                       success=bool(ep.get("success", False)),
+                                       summary=str(ep.get("summary", "")), key=ep.get("key"))
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars quest episode record failed: %s", e)
         if self.news is not None and q is not None:
@@ -2067,14 +2076,19 @@ def run_loop(config: Config, persona=None, wal=None):
         # --- Episodic memory (phase 7b): file this acting tick as a typed (situation→action→
         #     outcome→fix) episode, so a future tick in the SAME situation recalls it BEFORE acting
         #     ("this is like last time"). The action signature is the loop detector's normalized sig
-        #     (bash v3/v4/v5 collapse to one), so repeated-approach failures aggregate correctly. ---
-        try:
-            import episodes as _ep
-            _ep.record_episode(config, tick=tick_number, tool=tick_tool_name, sig=str(_act_sig),
-                               fail_kind=tick_fail_kind, success=tick_tool_success,
-                               summary=tick_summary, key=tick_situation or None)
-        except Exception as _ee:  # noqa: BLE001 - episodic recording is best-effort
-            logger.warning("episode record failed: %s", _ee)
+        #     (bash v3/v4/v5 collapse to one), so repeated-approach failures aggregate correctly.
+        #     LEGACY PATH — runs only while the engram manager is OFF: with
+        #     pillars_memory_manager_enabled the hub's after_outcome encodes this same tick as an
+        #     engram (backtick-quoted tool, outcome, fail kind, summary, situation), and
+        #     double-writing two memory systems breeds divergence, not redundancy. ---
+        if not getattr(config, "pillars_memory_manager_enabled", False):
+            try:
+                import episodes as _ep
+                _ep.record_episode(config, tick=tick_number, tool=tick_tool_name, sig=str(_act_sig),
+                                   fail_kind=tick_fail_kind, success=tick_tool_success,
+                                   summary=tick_summary, key=tick_situation or None)
+            except Exception as _ee:  # noqa: BLE001 - episodic recording is best-effort
+                logger.warning("episode record failed: %s", _ee)
 
         # --- Action Gate: update the active objective's frustration from this tick's outcome (+ strain
         #     bump), and ROTATE focus deterministically if it has stalled/parked/finished. This is the
