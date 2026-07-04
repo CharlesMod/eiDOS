@@ -204,3 +204,31 @@ tags = ["http", "requests", "post", "api", "tts", "tool"]
 content = '''
 For ANY HTTP — GET, POST, PUT, JSON bodies, headers, or downloading binary (audio/images) — use the built-in `http_request` tool (aliases `fetch` / `http`), NOT the `requests` library. It is stdlib-based and always works; `import requests` inside a skill often fails because the skill runner lacks it (a trap you keep hitting). http_request returns JSON/text inline and auto-saves binary responses to a file. Example, downloading a camera snapshot in one call: http_request with method GET, url http://<device-ip>/snapshot.jpg, save=snap.jpg. (To talk, use the `speak` tool — NOT http_request to a TTS endpoint; speak also logs to the operator chat.) A plain GET is just url=...
 '''
+
+[[nugget]]
+category = "facts"
+tags = ["memory", "engrams", "sleep", "consolidation", "platform", "no-rebuild"]
+content = '''
+Your platform has a full MEMORY ECONOMY built in (Boss enables it via [pillars] config flags; until then it lies dormant — either way it EXISTS). Every memory is an ENGRAM flowing hot-trace → bounded episodic ring → long-term store, with exactly ONE Consolidator allowed to write long-term. A memory's strength is EARNED, never assigned: each recall into a decision is a bet on that tick's outcome, settled mechanically by the platform — never by what you say — so memories that help you act successfully strengthen and useless ones fade. SLEEP is when it all digests: replay, merge, decay and pruning, gist extraction (a dreamed fact is a hypothesis, confidence-capped), a workspace backup. Never build your own memory manager, consolidation job, strength score, or forgetting logic — the economy IS the platform's.
+'''
+
+[[nugget]]
+category = "facts"
+tags = ["skills", "economy", "reuse", "affordances", "xp", "platform"]
+content = '''
+Skills live in an ECONOMY (platform-provided, [pillars]-gated): authoring a new skill COSTS energy priced by its similarity to skills you already have — a near-duplicate is expensive on purpose — while successfully REUSING an existing skill pays more XP than creating one ever does. Skills unused for weeks auto-retire (archived and revivable, not deleted). The platform also surfaces AFFORDANCES: your existing skills ranked against the current situation, so the right move is usually in front of you. The settled incentive: reach for an existing skill first, compose rather than re-author, and only pay for genuinely novel abilities. Trusted skills can `call` each other (depth-capped, one shared budget, no cycles).
+'''
+
+[[nugget]]
+category = "facts"
+tags = ["predictions", "expectations", "calibration", "bets", "platform"]
+content = '''
+You can BET on the future: the `predict` tool (when its [pillars] flag is on) records a typed, deadline-bound prediction — e.g. "backup done by 02:30". The platform's deterministic glue settles it at the deadline or on a matching event; you saying "that came true" closes NOTHING — self-report never settles a bet. A confident-WRONG prediction is the most valuable outcome: maximally surprising, and kept as a memory worth having. Your calibration is scored over time, so predict honestly at honest confidence. Never build your own prediction log or scoring — the ledger exists.
+'''
+
+[[nugget]]
+category = "facts"
+tags = ["quests", "system", "levels", "xp", "mastery", "growth"]
+content = '''
+Challenges arrive from the System ([pillars]-gated): ONE active QUEST at a time, issued on its own cadence, judged by the platform against typed criteria — you never grade your own homework, and ignoring a quest is itself recorded as a failure. Growth is gated the same way: XP pays for LEARNING (prediction error falling in a domain), not volume — grinding a mastered task or staring at noise pays ~0 — and LEVELING requires evidence (trusted skills in tier, calibration, reuse, sleep cycles, a closed quest line), not just XP. Never build your own quest tracker, XP counter, or leveling logic; the System and the gates exist.
+'''
