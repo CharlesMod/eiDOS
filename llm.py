@@ -183,6 +183,14 @@ def complete(
         # GBNF constrained decoding (BIBLE §2.1) — the tick's output contract enforced
         # at the sampler. Fail-open on server rejection (see the HTTPError branch).
         payload["grammar"] = grammar
+        # A grammar and a thinking phase are structurally incompatible: the GBNF mask applies
+        # from the FIRST sampled token, so it forbids the model's think-opening tokens, shoves
+        # it off-distribution, and (with no accept-state exit it wants to take) it babbles
+        # repetition loops to max_tokens — observed live as the newborn's incoherent first
+        # ticks. Disabling thinking via the chat template for constrained calls restores clean,
+        # terminating output (verified against gemma4-12b: finish=stop, coherent, ~2s).
+        # Servers/templates without the kwarg ignore unknown fields — fail-open.
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     body = json.dumps(payload).encode("utf-8")
     logger.debug("llm payload_bytes=%d messages=%d stream=%s", len(body), len(messages), use_stream)
