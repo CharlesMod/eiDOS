@@ -1054,6 +1054,19 @@ def _make_handler(config: Config):
             elif self.path == "/api/self_guide":
                 self._respond(200, "application/json", json.dumps(build_self_guide(config)))
 
+            elif self.path == "/api/phenotype":
+                # The creature's genetics-derived visual description (CREATURE_GENETICS.md):
+                # workspace/phenotype.json, rewritten by the loop at each stage transition.
+                # creature-forge (the text→image→3D digivice pipeline) consumes the prompt from
+                # here — eiDOS owes the description; the forge owns everything after.
+                pheno = _read_json(config.workspace / "phenotype.json")
+                if pheno:
+                    self._respond(200, "application/json", json.dumps(pheno))
+                else:
+                    self._respond(404, "application/json",
+                                  json.dumps({"error": "no phenotype yet — the creature has "
+                                              "not crossed a stage on genetics v2"}))
+
             elif self.path == "/api/git/log":
                 import git_safety
                 self._respond(200, "application/json", json.dumps(git_safety.git_log_summary(config)))
