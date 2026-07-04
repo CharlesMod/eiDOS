@@ -1988,6 +1988,16 @@ def run_loop(config: Config, persona=None, wal=None):
                 record_tick(persona, call.tool, result.success, config=config)
                 if result.success and last_tick_failed:
                     record_error_recovery(persona, config=config)
+                if call.tool == "objective_done" and result.success:
+                    # goals_completed's ONLY production writer. Without this the counter is dead
+                    # and any quest keyed on it (genesis-03) can never pass — and an eternally
+                    # ACTIVE quest freezes the mastery gate's quest_line_closed check: a level
+                    # brick. A finished self-chosen objective IS the completed goal.
+                    from persona import record_goal_complete
+                    _summary = ""
+                    if isinstance(call.args, dict):
+                        _summary = str(call.args.get("key") or call.args.get("title") or "")
+                    record_goal_complete(persona, _summary, config=config)
                 last_tick_failed = not result.success
                 pfx = _pfx(persona, config)
 
