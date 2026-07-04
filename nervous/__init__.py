@@ -15,7 +15,8 @@ from .change import Novelty, ChangeDetector
 from .efferent import Effector, SelfModel, ReflexArc, Proprioceptor
 from .neuromod import NeuromodulatoryState, Adenosine
 from .exteroception import PreFilter, FrameDiffFilter, VadFilter, Exteroceptor
-from .sleep import SleepCycle, SleepEngine, SleepJob, SleepReport, run_sleep
+from .sleep import (SleepCycle, SleepEngine, SleepJob, SleepReport, SleepContext,
+                    default_sleep_engine, run_sleep)
 from .monitor import NervousMonitor
 from .reward import RewardLearner
 from .worldmodel import WorldModel
@@ -52,7 +53,8 @@ __all__ = [
     "Effector", "SelfModel", "ReflexArc", "Proprioceptor",
     "NeuromodulatoryState", "Adenosine",
     "PreFilter", "FrameDiffFilter", "VadFilter", "Exteroceptor",
-    "SleepCycle", "SleepEngine", "SleepJob", "SleepReport", "run_sleep",
+    "SleepCycle", "SleepEngine", "SleepJob", "SleepReport", "SleepContext",
+    "default_sleep_engine", "run_sleep",
     "NervousMonitor", "RewardLearner", "WorldModel", "CuriosityDrive",
     "GoalTensionDrive", "Temperament",
     "Metabolism", "hunger_to_bar", "solar_charge_in",

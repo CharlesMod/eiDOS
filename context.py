@@ -23,6 +23,10 @@ from prompts import SYSTEM_PROMPT_BRIEFING, SYSTEM_PROMPT_CREATURE, TICK_PROMPT,
 
 logger = logging.getLogger("eidos.context")
 
+# Pillars 4.1 (declared, §0.4): char budget for the "awaiting" open-predictions strip — a status
+# strip of ~6 one-line bets (the ledger's own render limit), not a report; sized to match.
+_AWAITING_MAX_CHARS = 700
+
 
 # ---------------------------------------------------------------------------
 # Chat reply reader
@@ -182,6 +186,7 @@ def assemble_context(
     max_ticks: int = 0,
     tension: int = 0,
     afferent_block: str = "",
+    pillars_recall_block: str = "",
 ) -> list[dict]:
     """Assemble the full messages list in fixed order for one tick.
 
@@ -191,10 +196,14 @@ def assemble_context(
     Briefing structure: Standing Orders → durable blob → history thread → situation → salience → tick prompt.
     `afferent_block` (V3 nervous system, P3): admitted sensory events for this tick, injected into the
     volatile situation tail — KV-safe (the stable prefix and history turns are untouched).
+    `pillars_recall_block` (Pillars 2.2, dark): the memory manager's rendered recall, consumed ONLY
+    when `pillars_memory_manager_enabled` is on (it then stands in for the legacy episode/knowledge
+    recall cascade); with the flag off (the default — the loop passes "") assembly is byte-identical.
     """
     return _assemble_briefing(config, tick_number, goal_start_time,
                               loop_detected, repeat_count, max_ticks, tension,
-                              afferent_block=afferent_block)
+                              afferent_block=afferent_block,
+                              pillars_recall_block=pillars_recall_block)
 
 
 # ---------------------------------------------------------------------------
@@ -841,6 +850,7 @@ def _assemble_briefing(
     max_ticks: int = 0,
     tension: int = 0,
     afferent_block: str = "",
+    pillars_recall_block: str = "",
 ) -> list[dict]:
     """Briefing model: Standing Orders → Mission → Intelligence → Situation → Tick.
 
@@ -889,9 +899,14 @@ def _assemble_briefing(
             "## What you've learned — your world model (devices, network, facts you discovered; "
             "this is your memory made visible — build on it, don't re-discover it)\n"
             + format_recalled(learned, max_chars=config.context_intelligence_max_chars))
-    relevant = _build_relevant_recall(config, {e.get("id") for e in learned})
-    if relevant:
-        durable.append("## Possibly relevant from memory\n" + relevant)
+    # Pillars 2.2 (dark): when the memory manager's flag is on, its 4-layer cascade (rendered in
+    # `pillars_recall_block`, injected in the situation section below) takes over BOTH halves of
+    # the legacy recall — this step-keyed knowledge slice and the episodic recall block. Flag off
+    # (the default): the legacy path renders byte-identically.
+    if not getattr(config, "pillars_memory_manager_enabled", False):
+        relevant = _build_relevant_recall(config, {e.get("id") for e in learned})
+        if relevant:
+            durable.append("## Possibly relevant from memory\n" + relevant)
 
     backlog = None if creature else _backlog_panel(config)
     if backlog:
@@ -951,11 +966,19 @@ def _assemble_briefing(
     # Episodic recall (phase 7b, BIBLE §2.4): state-triggered — if the agent has been in THIS
     # situation before, surface the actions that FAILED (don't repeat) and any that WORKED (reuse).
     # Injected unasked, near the decision point, so a known dead end is avoided before it's re-tried.
+    # Pillars 2.2 (dark): with `pillars_memory_manager_enabled` on, the manager's 4-layer cascade
+    # (computed in the loop, handed in as `pillars_recall_block`) takes over this recall; the legacy
+    # episodes.recall path renders byte-identically when the flag is off. The systemic-blocker
+    # analysis is not recall — it stays live on both paths.
     try:
         import episodes
-        _recall = episodes.render_recall(episodes.recall(config))
-        if _recall:
-            situation.append(_recall)
+        if getattr(config, "pillars_memory_manager_enabled", False):
+            if pillars_recall_block:
+                situation.append(pillars_recall_block)
+        else:
+            _recall = episodes.render_recall(episodes.recall(config))
+            if _recall:
+                situation.append(_recall)
         # Cross-objective pattern: the SAME failure recurring under different objectives is an
         # environmental blocker, not a task problem — rotating objectives won't route around it.
         _sys = episodes.render_systemic(episodes.systemic_blocker(config))
@@ -963,6 +986,28 @@ def _assemble_briefing(
             situation.append(_sys)
     except Exception:  # noqa: BLE001
         pass
+
+    # Pillars 5.1 (dark): the System's quest window — the distinct terse register, unmistakably
+    # external authority, rendered at the decision point. Flag off → never built.
+    if getattr(config, "pillars_quests_enabled", False):
+        try:
+            import quests as _quests
+            _qw = _quests.render_active(_quests.QuestStore(config).active())
+            if _qw:
+                situation.append(_qw)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Pillars 4.1 (dark): the "awaiting" strip — open predictions glue will score, budget-capped
+    # like every other block. Flag off → never built.
+    if getattr(config, "pillars_expectations_enabled", False):
+        try:
+            from expectations import ExpectationLedger
+            _aw = ExpectationLedger(config).render()
+            if _aw:
+                situation.append(_truncate(_aw, _AWAITING_MAX_CHARS, "awaiting"))
+        except Exception:  # noqa: BLE001
+            pass
 
     # Presence (time / tick / still-running jobs / alerts) — changes EVERY tick.
     situation.append(_build_presence(config, tick_number, goal_start_time))

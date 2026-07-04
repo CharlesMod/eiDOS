@@ -548,6 +548,567 @@ def _curiosity_post_tick(ctx):
         ctx.intrinsic = ctx.curiosity.observe(_progress)
 
 
+# ================================================================================================
+# Pillars 5.5 — the wiring pass: every dark organ's call sites, STILL DARK (PILLARS_TODO 5.5).
+#
+# The hub below is constructed ONLY when at least one pillars flag is on; with every flag off (the
+# default) run_loop keeps `pillars = None`, the tick body's new branches are all `if pillars is not
+# None`, and NO pillars module is even imported — the flags-off loop is byte-identical to the
+# unwired code. Every method is guarded per subsystem (I5): one organ's exception is logged and
+# swallowed, never breaking the tick. Flipping flags one at a time (the 5.5 schedule) is what
+# actually brings each organ online; this class only provides the call sites.
+#
+# Registry note (1.1): run_pre_tick is invoked here (behind the salience flag — the gate is its
+# only registrant, so single execution is preserved); run_on_sleep runs inside the sleep engine's
+# OrganSleepHooksJob (behind the sleep flag). run_post_tick stays UN-invoked: the goal-tension and
+# curiosity hooks 1.1 registered are verbatim copies of inline blocks that still run in the tick
+# body, so invoking the phase would double-run both organs — the inline dispatch stays
+# authoritative until a dedicated (behavior-touching) refactor retires it.
+# ================================================================================================
+_PILLARS_WIRED_FLAGS = (
+    "pillars_memory_engram_enabled",     # 2.1 engram economy (consolidator for the sleep jobs)
+    "pillars_memory_manager_enabled",    # 2.2 importer + 4-layer recall + encode-through-manager
+    "pillars_bet_ledger_enabled",        # 2.3 open_bets on recall injection + glue.settle_bets
+    "pillars_sleep_engine_enabled",      # 2.4 run_sleep at the sleep window + adenosine accounting
+    "pillars_expectations_enabled",      # 4.1 predict tool + glue.settle_predictions + awaiting block
+    "pillars_salience_gate_enabled",     # 1.3 gate organ registered + relevance_set published
+    "pillars_quests_enabled",            # 5.1 quest window + event-driven cadence + adjudication
+    "pillars_news_enabled",              # 4.4 three-source ingest + presence-gated surfacing
+    "pillars_mastery_gates_enabled",     # 4.3 tier outcomes + level candidacy through the gate
+    "pillars_learning_xp_enabled",       # 4.2 progress tracker fed from adjudicated wrongness
+    "pillars_administrator_enabled",     # 5.2 event-driven check-ins (lazy llm; never on a timer)
+)
+
+
+def _pillars_any_enabled(config) -> bool:
+    """True iff any wired pillars flag is on. False (the default) keeps the hub un-constructed —
+    the flags-off ground state adds zero work and zero imports to the tick."""
+    return any(getattr(config, f, False) for f in _PILLARS_WIRED_FLAGS)
+
+
+class _Pillars:
+    """The Pillars 5.5 wiring hub: owns the flag-on subsystem instances and exposes the loop's
+    call sites (pre_tick / recall_block / open_bets / after_outcome / sleep_window / on_presence).
+    Each subsystem is built and driven ONLY behind its own flag; each call is guarded (I5)."""
+
+    def __init__(self, config, *, bus=None, neuromod=None, organ_registry=None,
+                 curiosity=None, learner=None):
+        self.config = config
+        self.bus = bus
+        self.neuromod = neuromod
+        self.organ_registry = organ_registry
+        self.curiosity = curiosity
+        self.learner = learner
+        self.manager = None          # 2.2 MemoryManager
+        self.bets = None             # 2.3 BetLedger
+        self.news = None             # 4.4 NewsQueue
+        self.quests = None           # 5.1 quests.System
+        self.tracker = None          # 4.2 ProgressTracker
+        self.salience = None         # 1.3 SalienceGate
+        self.llm = None              # lazy (messages, grammar=None) -> str; TEST SEAM: inject a
+                                     # mock here — it is never constructed in mock mode, so tests
+                                     # can never reach a live model by accident.
+        self.injected = []           # engrams this tick's recall injected (the bet slate, 2.3)
+        self._persona = None         # the live persona dict, refreshed each after_outcome
+        self._level_snapshot = None  # 4.3: the gate-authoritative level (only apply_level_up moves it)
+        self._aden_mark = time.monotonic()   # wake-time accounting anchor for adenosine (2.4)
+        self._last_anomaly_sig = ""  # 4.4 anomaly source de-dup (report by exception, once per streak)
+        c = config
+
+        # 2.2 — the memory manager (+ the idempotent importer, run once at boot; read-only on legacy)
+        if getattr(c, "pillars_memory_manager_enabled", False):
+            try:
+                from memory_manager import MemoryManager
+                self.manager = MemoryManager(c, neuromod=neuromod)
+                counts = self.manager.import_all()
+                if any(counts.values()):
+                    logger.info("pillars memory import: %s", counts)
+            except Exception as e:  # noqa: BLE001 - one organ's fault never blocks the others (I5)
+                logger.warning("pillars memory manager init failed: %s", e)
+                self.manager = None
+
+        # 2.3 — the bet ledger (shares the manager's consolidator so strength writes stay single-writer)
+        if getattr(c, "pillars_bet_ledger_enabled", False):
+            try:
+                import bets as _bets
+                self.bets = (_bets.BetLedger(c, consolidator=self.manager.consolidator)
+                             if self.manager is not None else _bets.BetLedger(c))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars bet ledger init failed: %s", e)
+                self.bets = None
+
+        # 4.1 — the predict tool joins the registry (register_predict_tool is itself flag-gated)
+        if getattr(c, "pillars_expectations_enabled", False):
+            try:
+                from tools import register_predict_tool
+                register_predict_tool(c)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars predict tool registration failed: %s", e)
+
+        # 1.3 — the salience gate registers with the 1.1 organ registry (pre_tick intake)
+        if getattr(c, "pillars_salience_gate_enabled", False) and bus is not None:
+            try:
+                from nervous.salience import SalienceGate
+                self.salience = SalienceGate(bus, config=c)
+                if organ_registry is not None:
+                    self.salience.register(organ_registry)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars salience gate init failed: %s", e)
+                self.salience = None
+
+        # 4.4 — the news queue (engram writes ride the same single consolidator)
+        if getattr(c, "pillars_news_enabled", False):
+            try:
+                from news import NewsQueue
+                self.news = (NewsQueue(c, consolidator=self.manager.consolidator)
+                             if self.manager is not None else NewsQueue(c))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars news queue init failed: %s", e)
+                self.news = None
+
+        # 5.1 — the quest System (reward sink threads config through award_xp — 4.3's gate hold)
+        if getattr(c, "pillars_quests_enabled", False):
+            try:
+                import quests as _quests
+                self.quests = _quests.System(c, reward_sink=self._quest_reward_sink)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars quest system init failed: %s", e)
+                self.quests = None
+
+        # 4.2 — the learning-progress tracker
+        if getattr(c, "pillars_learning_xp_enabled", False):
+            try:
+                from learning_progress import ProgressTracker
+                self.tracker = ProgressTracker(c)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars progress tracker init failed: %s", e)
+                self.tracker = None
+
+    def describe(self) -> str:
+        """One line for the boot print: which organs this hub actually wired."""
+        parts = []
+        for name, obj in (("memory", self.manager), ("bets", self.bets), ("news", self.news),
+                          ("quests", self.quests), ("progress", self.tracker),
+                          ("salience", self.salience)):
+            if obj is not None:
+                parts.append(name)
+        c = self.config
+        for name, flag in (("sleep", "pillars_sleep_engine_enabled"),
+                           ("expectations", "pillars_expectations_enabled"),
+                           ("gates", "pillars_mastery_gates_enabled"),
+                           ("administrator", "pillars_administrator_enabled")):
+            if getattr(c, flag, False):
+                parts.append(name)
+        return ", ".join(parts) or "(none)"
+
+    # --- the lazy mind (5.2 administrator + 2.4 distillation) ------------------------------------
+    def _live_llm(self):
+        """The (messages, grammar=None) -> str callable over the EXISTING llm client (llm.py),
+        built lazily on first need. In mock mode / the isolated test env it stays None — the
+        distillation job no-ops cleanly and the administrator stays quiet, so no test can ever
+        reach a live model (the mock seam: tests inject `self.llm` directly)."""
+        if self.llm is not None:
+            return self.llm
+        if getattr(self.config, "mock_mode", False) or os.environ.get("EIDOS_NO_DASHBOARD"):
+            return None
+        cfg = self.config
+        try:
+            from llm import complete as _complete
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars llm client unavailable: %s", e)
+            return None
+
+        def _call(messages, grammar=None):
+            return _complete(messages, cfg, grammar=grammar)
+
+        self.llm = _call
+        return _call
+
+    # --- focus derivation (mechanical: objective title + plan step — never prose) ----------------
+    def _focus_terms(self) -> list:
+        terms = []
+        try:
+            import objectives as _obj
+            a = _obj.get_active(self.config)
+            if a:
+                terms += str(a.get("title", "")).split()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from context import _plan_next_step
+            terms += _plan_next_step(self.config).split()
+        except Exception:  # noqa: BLE001
+            pass
+        return [t for t in terms if t][:24]
+
+    def focus_query(self) -> str:
+        return " ".join(self._focus_terms())
+
+    # --- pre-deliberation call site ---------------------------------------------------------------
+    def pre_tick(self, tick_number: int) -> None:
+        """Before context assembly: adenosine wake-time accounting (2.4), relevance_set publication
+        + gate intake via the registry's pre_tick phase (1.3). Guarded per subsystem (I5)."""
+        c = self.config
+        if self.neuromod is not None and getattr(c, "pillars_sleep_engine_enabled", False):
+            try:
+                aden = getattr(self.neuromod, "adenosine", None)
+                now = time.monotonic()
+                if aden is not None:
+                    aden.accumulate((now - self._aden_mark) / 3600.0)
+                self._aden_mark = now
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars adenosine accounting failed: %s", e)
+        if self.salience is not None:
+            try:
+                terms = self._focus_terms()
+                if terms:
+                    from nervous.salience import publish_relevance_set
+                    publish_relevance_set(self.bus, terms)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars relevance publish failed: %s", e)
+            try:
+                if self.organ_registry is not None:
+                    # Only the gate registers a pre_tick hook today; the registry guards each hook.
+                    self.organ_registry.run_pre_tick(types.SimpleNamespace(tick=tick_number))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars gate pre-tick failed: %s", e)
+
+    # --- recall (2.2 takes over the legacy cascade when its flag is on) ---------------------------
+    def recall_block(self, *, situation: str, query: str) -> str:
+        """The manager's 4-layer recall, rendered for the situation section of context. Records the
+        injected engrams on `self.injected` so open_bets can wager on exactly what was injected.
+        Returns '' (and an empty slate) when the manager is off or recall faults."""
+        self.injected = []
+        if self.manager is None:
+            return ""
+        try:
+            got = self.manager.recall(query or "", situation=situation or None)
+            self.injected = list(got)
+            if not got:
+                return ""
+            lines = ["## Recalled from memory (ranked relevance × strength)"]
+            for e in got:
+                lines.append(f"- [{e.kind}] {e.body}")
+            return "\n".join(lines)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars recall failed: %s", e)
+            self.injected = []
+            return ""
+
+    def open_bets(self, tick_number: int) -> None:
+        """2.3: every engram injected into this tick's decision is an open wager on the outcome."""
+        if self.bets is None:
+            return
+        try:
+            self.bets.open_bets(tick_number, self.injected)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars open_bets failed: %s", e)
+
+    # --- post-adjudication call site --------------------------------------------------------------
+    def after_outcome(self, *, tick: int, tool: str, args, success: bool, fail_kind: str,
+                      situation: str, summary: str, event_text: str, persona) -> None:
+        """After glue.record_outcome for this tick: settle bets (2.3) + predictions (4.1), feed
+        learning progress (4.2), encode the experience (2.2), ingest news (4.4), adjudicate the
+        active quest (5.1), feed tier outcomes + level candidacy (4.3). Guarded per subsystem."""
+        c = self.config
+        self._persona = persona
+        import glue as _glue
+
+        # 2.3 — settle this tick's memory bets against the adjudicated outcome (glue-only settler)
+        if getattr(c, "pillars_bet_ledger_enabled", False):
+            try:
+                _glue.settle_bets(c, tick=tick, action_tool=tool or "", action_args=args,
+                                  ledger=self.bets)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars settle_bets failed: %s", e)
+
+        # 4.1 — the closure pass (deadline + matching-event grounds; glue is the only closer)
+        closures = []
+        if getattr(c, "pillars_expectations_enabled", False):
+            try:
+                closures = _glue.settle_predictions(c, event_text=event_text or "", tick=tick,
+                                                    reward=self.learner, curiosity=self.curiosity)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars settle_predictions failed: %s", e)
+                closures = []
+
+        # 4.2 — learning progress observes closure wrongness + this tick's adjudicated outcome
+        if self.tracker is not None:
+            try:
+                import learning_progress as _lp
+                for cl in closures:
+                    conf = float(getattr(cl.prediction, "confidence", 0.5) or 0.5)
+                    wrong = (1.0 - conf) if cl.outcome else conf
+                    self.tracker.observe(_lp.domain_key(getattr(cl.prediction, "domain", "")), wrong)
+                if tool and tool not in ("thought", "parse_error", "chat_reply"):
+                    obj_part = situation.split("|", 1)[0] if situation else ""
+                    dom = _lp.domain_key(obj_part, tool)
+                    self.tracker.observe(dom, 0.0 if success else 1.0)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars progress observe failed: %s", e)
+
+        # 2.2 — encode this tick as fresh experience (emotional stamp read live inside the manager)
+        if self.manager is not None and tool and tool not in ("parse_error",):
+            try:
+                outcome = "succeeded" if success else (
+                    f"failed ({fail_kind})" if fail_kind else "failed")
+                step = situation.split("|", 1)[1] if situation and "|" in situation else ""
+                parts = ([f"While {step},"] if step else []) + [f"`{tool}` {outcome}."]
+                if summary:
+                    parts.append(summary)
+                self.manager.encode("episode", " ".join(parts), tick=tick,
+                                    stats={"situation": situation or ""})
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars encode failed: %s", e)
+
+        # 4.4 — news sources: high-surprise closures + the repeated-dead-end anomaly
+        if self.news is not None:
+            try:
+                for cl in closures:
+                    self.news.ingest(cl.residue, "expectation", surprise=cl.surprise)
+                outs = _glue.recent_outcomes(c)
+                sig = _glue.repeated_failure_signature(outs)
+                if sig and sig != self._last_anomaly_sig:
+                    self._last_anomaly_sig = sig
+                    self.news.ingest({"summary": f"anomaly: the same action failed 3+ times in a "
+                                                 f"row (sig {sig})", "surprise": 3.0}, "anomaly")
+                elif not sig:
+                    self._last_anomaly_sig = ""
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars news ingest failed: %s", e)
+
+        # 5.1 — adjudicate the active quest against typed stats; 4.3 — feed its tier's standing
+        if self.quests is not None:
+            try:
+                active = self.quests.store.active()
+                if active is not None:
+                    if (getattr(c, "pillars_mastery_gates_enabled", False)
+                            and tool and tool not in ("thought", "parse_error", "chat_reply")):
+                        try:
+                            import level_gates as _lg
+                            remedial = _lg.record_tier_outcome(
+                                c, int(getattr(active, "tier", 1) or 1), bool(success))
+                            if remedial:
+                                self._event("suspension", persona)
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("pillars tier outcome failed: %s", e)
+                    r = self.quests.check(active, self._quest_stats(persona))
+                    if r.get("passed") or r.get("expired"):
+                        self._on_quest_closed(r, persona, tick=tick)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars quest adjudication failed: %s", e)
+
+        # 4.3 — the level moves ONLY through the gate; candidacy checked when the XP floor crosses
+        if getattr(c, "pillars_mastery_gates_enabled", False) and persona is not None:
+            try:
+                import level_gates as _lg
+                if (self._level_snapshot is not None
+                        and persona.get("level") != self._level_snapshot):
+                    # a config-less award path recomputed level-from-XP; the gate holds it still
+                    persona["level"] = self._level_snapshot
+                cur = int(persona.get("level", 1) or 1)
+                if int(persona.get("xp", 0) or 0) >= _lg.xp_for_level(cur + 1):
+                    ok, _report = _lg.can_level(persona, c)
+                    if ok:
+                        _lg.apply_level_up(persona, c)
+                        if self.news is not None:
+                            try:
+                                self.news.ingest({"summary": f"level up: {cur} → "
+                                                             f"{persona.get('level')}",
+                                                  "surprise": 2.0}, "quest")
+                            except Exception:  # noqa: BLE001
+                                pass
+                    self._event("level_candidacy", persona)
+                self._level_snapshot = int(persona.get("level", 1) or 1)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars level gate failed: %s", e)
+
+    # --- quests: stats surface, reward sink, closure bookkeeping, event-driven cadence ------------
+    def _quest_stats(self, persona) -> dict:
+        """The typed stats dict criteria are checked against (§0.5: glue judges — persona counters
+        plus the drill/remedial stat files their machinery writes). An absent stat never passes."""
+        stats = {"persona": dict(persona or {})}
+        for name in ("drills", "remedial"):
+            try:
+                p = self.config.state_dir / f"{name}.json"
+                stats[name] = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+                if not isinstance(stats[name], dict):
+                    stats[name] = {}
+            except Exception:  # noqa: BLE001
+                stats[name] = {}
+        return stats
+
+    def _quest_reward_sink(self, cfg, quest) -> None:
+        """Payout through the standard XP path WITH config threaded (4.3: the gate holds the level;
+        persona.award_xp only consults the mastery flag when it can see config)."""
+        try:
+            reward = quest.reward or {}
+            if reward.get("kind") != "xp" or self._persona is None:
+                return
+            import persona as _persona_mod
+            _persona_mod.award_xp(self._persona, int(reward.get("amount", 0)),
+                                  reason=f"quest:{quest.id}", config=cfg)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars quest reward failed: %s", e)
+
+    def _cadence_path(self):
+        return self.config.state_dir / "quest_cadence.json"
+
+    def sleeps_since_close(self) -> int:
+        """The digestion counter issue_next feeds on. A newborn (no file) has digested — 1 — so the
+        very first quest can issue instead of being gated forever by a close that never happened."""
+        try:
+            return int(json.loads(self._cadence_path().read_text(encoding="utf-8"))
+                       .get("sleeps_since_close", 1))
+        except Exception:  # noqa: BLE001
+            return 1
+
+    def _set_sleeps_since_close(self, n: int) -> None:
+        try:
+            self.config.state_dir.mkdir(parents=True, exist_ok=True)
+            tmp = self._cadence_path().with_suffix(".tmp")
+            tmp.write_text(json.dumps({"sleeps_since_close": int(n)}), encoding="utf-8")
+            tmp.replace(self._cadence_path())
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars cadence persist failed: %s", e)
+
+    def _on_quest_closed(self, r: dict, persona, *, tick: int = 0) -> None:
+        """A quest closed (passed or expired): reset the digestion counter, record the failure-lite
+        episode, ingest the news event, restore a remedial'd tier, wake the trainer, and make the
+        event-driven issue attempt (cadence itself still demands a sleep first)."""
+        q = r.get("quest")
+        self._set_sleeps_since_close(0)
+        ep = r.get("episode")
+        if ep:
+            try:
+                import episodes as _ep
+                _ep.record_episode(self.config, tick=tick, tool=str(ep.get("tool", "quest")),
+                                   sig=str(ep.get("sig", "")), fail_kind=str(ep.get("fail_kind", "")),
+                                   success=bool(ep.get("success", False)),
+                                   summary=str(ep.get("summary", "")), key=ep.get("key"))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars quest episode record failed: %s", e)
+        if self.news is not None and q is not None:
+            try:
+                self.news.ingest(q, "quest")
+            except Exception:  # noqa: BLE001
+                pass
+        if (r.get("passed") and q is not None
+                and getattr(self.config, "pillars_mastery_gates_enabled", False)
+                and str(getattr(q, "id", "")).startswith("remedial-tier")):
+            try:
+                import level_gates as _lg
+                tier = int(str(q.id).split("-")[1].replace("tier", "") or 0)
+                _lg.record_remedial_completion(self.config, tier)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars remedial restore failed: %s", e)
+        self._event("quest_closed", persona)
+        self._issue_next(persona)
+
+    def _issue_next(self, persona) -> None:
+        """Event-driven issue attempt (after sleep completion / quest closure — never a timer)."""
+        if self.quests is None:
+            return
+        try:
+            import glue as _glue
+            cond = _glue.compute_condition(_glue.recent_outcomes(self.config))
+            self.quests.issue_next(sleeps_since_close=self.sleeps_since_close(), condition=cond)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars issue_next failed: %s", e)
+
+    # --- the sleep window (2.4 cutover entrypoint + the sleep-completion events) ------------------
+    def sleep_window(self, *, tick: int, persona, observations) -> object:
+        """At the loop's sleep window: expire an ignored quest (5.1), run the real sleep engine
+        (2.4 — run_sleep clears adenosine itself: the creature wakes rested), then on a COMPLETED
+        sleep advance the digestion counters (4.3 record_sleep_cycle + 5.1 sleeps_since_close),
+        make the event-driven issue attempt, and wake the trainer (5.2). Guarded throughout."""
+        c = self.config
+        if not getattr(c, "pillars_sleep_engine_enabled", False):
+            return None
+        if self.quests is not None:
+            try:
+                active = self.quests.store.active()
+                ep = self.quests.expire_if_due(self._quest_stats(persona))
+                if ep is not None:
+                    self._on_quest_closed({"expired": True, "episode": ep, "quest": active},
+                                          persona, tick=tick)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars quest expiry failed: %s", e)
+        report = None
+        try:
+            from nervous.sleep import SleepContext, run_sleep
+            cons = self.manager.consolidator if self.manager is not None else self._consolidator()
+            ctx = SleepContext(config=c, consolidator=cons, neuromod=self.neuromod,
+                               organ_registry=self.organ_registry, llm=self._live_llm(),
+                               observations=list(observations or []))
+            report = run_sleep(ctx)      # clears the adenosine accumulator after the jobs (2.4)
+            self._aden_mark = time.monotonic()   # wake-time accounting restarts at the boundary
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars sleep engine failed: %s", e)
+            return None
+        if report is None or not getattr(report, "results", None):
+            return report
+        try:
+            import level_gates as _lg
+            _lg.record_sleep_cycle(c)            # flag-gated internally (4.3)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars record_sleep_cycle failed: %s", e)
+        if self.quests is not None:
+            try:
+                self._set_sleeps_since_close(self.sleeps_since_close() + 1)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars cadence advance failed: %s", e)
+            self._issue_next(persona)
+        self._event("sleep_complete", persona)
+        return report
+
+    def _consolidator(self):
+        """The single long-term writer for the sleep jobs when the manager is off but the engram
+        economy is on. None otherwise — the jobs no-op cleanly without one."""
+        if not getattr(self.config, "pillars_memory_engram_enabled", False):
+            return None
+        try:
+            from engram import Consolidator
+            return Consolidator(self.config)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars consolidator init failed: %s", e)
+            return None
+
+    # --- presence (4.4: the listening hold IS the presence signal) --------------------------------
+    def on_presence(self) -> list:
+        """Dean is present (chat focus / listening hold): surface the ranked news digest and
+        snapshot it to state so the dashboard can fetch it (glue.surfaced_news — the accessor)."""
+        if self.news is None:
+            return []
+        try:
+            items = self.news.surface(True)
+            snap = [it.to_dict() for it in items]
+            self.config.state_dir.mkdir(parents=True, exist_ok=True)
+            p = self.config.state_dir / "news_surfaced.json"
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(p)
+            return items
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars news surface failed: %s", e)
+            return []
+
+    # --- the Administrator (5.2): event-driven check-ins only (ARCH #1 — never a timer) -----------
+    def _event(self, kind: str, persona) -> None:
+        if not getattr(self.config, "pillars_administrator_enabled", False):
+            return
+        try:
+            import administrator as _adm
+            if not _adm.should_check_in(self.config, kind):
+                return
+            llm = self._live_llm()
+            if llm is None:
+                return        # no mind available (mock/test env) — the trainer stays quiet
+            _adm.check_in(self.config, llm, kind, persona=persona)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars administrator check-in failed: %s", e)
+
+
 def run_loop(config: Config, persona=None, wal=None):
     """Main tick loop with compaction."""
     global _shutdown_requested
@@ -839,6 +1400,21 @@ def run_loop(config: Config, persona=None, wal=None):
         except Exception as _e:  # noqa: BLE001 - the ledger must never break boot (I5)
             print(f"{pfx} causal ledger start failed (continuing without it): {_e}")
 
+    # --- Pillars 5.5: the wiring hub — every dark organ's call sites, still dark. Constructed
+    #     ONLY when at least one pillars flag is on; `pillars = None` is the flags-off ground
+    #     state, so the tick body's new branches add ZERO work (and zero imports) to today's
+    #     loop. Guarded (I5): a wiring fault at boot degrades to the unwired loop, never a crash. ---
+    pillars = None
+    if _pillars_any_enabled(config):
+        try:
+            pillars = _Pillars(config, bus=nervous_bus, neuromod=nervous_neuromod,
+                               organ_registry=organ_registry, curiosity=nervous_curiosity,
+                               learner=nervous_learner)
+            print(f"{pfx} pillars wiring up — {pillars.describe()}")
+        except Exception as _e:  # noqa: BLE001 - the hub must never break boot (I5)
+            print(f"{pfx} pillars wiring init failed (continuing dark): {_e}")
+            pillars = None
+
     while not _shutdown_requested:
         # --- Operator pause check ---
         pause_path = config.workspace / "paused"
@@ -874,6 +1450,10 @@ def run_loop(config: Config, persona=None, wal=None):
             if listening_since is None:
                 listening_since = time.time()
                 logger.info("Listening hold engaged (Dean focused chat) — quieting the loop")
+                # Pillars 4.4: the hold IS the presence signal — surface the news digest once per
+                # engagement (dark: no-op unless the news flag is on). Guarded inside (I5).
+                if pillars is not None:
+                    pillars.on_presence()
             held_s = int(time.time() - listening_since)
             write_activity(config, "listening", detail=f"listening to Dean ({held_s}s)")
             # Event-driven: wakes the instant the hold releases (blur/send) or chat arrives;
@@ -931,6 +1511,21 @@ def run_loop(config: Config, persona=None, wal=None):
                     "success": False,
                     "output": f"Compaction failed: {e}",
                 })
+            # Pillars 2.4 (dark): the real sleep engine runs ALONGSIDE the legacy compaction at the
+            # same sleep window — the legacy path above is untouched; run_sleep is a logged no-op
+            # unless pillars_sleep_engine_enabled is on. Guarded (I5): a sleep fault never wounds
+            # the tick. Sleep completion also drives 4.3/5.1/5.2's sleep-boundary events inside.
+            if pillars is not None:
+                try:
+                    from memory import read_recent_observations as _rro
+                    _sleep_obs = _rro(config, max_chars=8000, max_count=60)
+                except Exception:  # noqa: BLE001
+                    _sleep_obs = []
+                try:
+                    pillars.sleep_window(tick=tick_number, persona=persona,
+                                         observations=_sleep_obs)
+                except Exception as _pse:  # noqa: BLE001 - the window is guarded end-to-end (I5)
+                    logger.warning("pillars sleep window failed: %s", _pse)
 
         # --- RAM check (observation only; the model is the big consumer and it's a
         # service we don't own — there are no expendable children worth killing) ---
@@ -1023,6 +1618,23 @@ def run_loop(config: Config, persona=None, wal=None):
                 _tick_admitted_events = int(_aff_n or 0)
             except Exception:  # noqa: BLE001 - a sensory bug must never break the tick (I5)
                 afferent_block = ""
+        # Pillars 5.5 (dark): pre-deliberation wiring — adenosine accounting (2.4), relevance_set
+        # publication + gate intake (1.3), and the manager's recall (2.2, which context.py swaps in
+        # for the legacy cascade ONLY when its flag is on). All no-ops with flags off (pillars=None).
+        pillars_recall_block = ""
+        if pillars is not None:
+            try:
+                pillars.pre_tick(tick_number)
+                try:
+                    import episodes as _ep_sit
+                    _p_sit = _ep_sit.situation_key(config)
+                except Exception:  # noqa: BLE001
+                    _p_sit = ""
+                pillars_recall_block = pillars.recall_block(situation=_p_sit,
+                                                            query=pillars.focus_query())
+            except Exception as _ppe:  # noqa: BLE001 - wiring faults never break the tick (I5)
+                logger.warning("pillars pre-tick wiring failed: %s", _ppe)
+                pillars_recall_block = ""
         messages = assemble_context(
             config,
             tick_number=tick_number,
@@ -1031,7 +1643,11 @@ def run_loop(config: Config, persona=None, wal=None):
             repeat_count=repeat_count,
             tension=tension,
             afferent_block=afferent_block,
+            pillars_recall_block=pillars_recall_block,
         )
+        # Pillars 2.3 (dark): every engram the recall injected is an open wager on this tick.
+        if pillars is not None:
+            pillars.open_bets(tick_number)
 
         # Log context size for monitoring
         ctx_chars = sum(len(m["content"]) for m in messages)
@@ -1057,6 +1673,7 @@ def run_loop(config: Config, persona=None, wal=None):
         tick_tool_duration = 0.0
         tick_fail_kind = ""
         tick_summary = ""
+        tick_output = ""      # the full tool output (Pillars 4.1's event-closure text; unused dark)
         tick_situation = ""   # the SITUATION digest for this tick's episode (captured pre-action)
         write_activity(config, "thinking", detail=f"tick {tick_number}")
 
@@ -1293,6 +1910,7 @@ def run_loop(config: Config, persona=None, wal=None):
             tick_tool_duration = result.duration_s
             tick_fail_kind = result.fail_kind
             tick_summary = (result.output or "")[:160].replace("\n", " ")
+            tick_output = (result.output or "")[:2000]
 
             # --- Log observation ---
             append_observation(config, {
@@ -1430,6 +2048,21 @@ def run_loop(config: Config, persona=None, wal=None):
             _strain_bump += _rum_bump
         except Exception as _ge:  # noqa: BLE001 - glue is best-effort
             logger.warning("strain glue failed: %s", _ge)
+
+        # --- Pillars 5.5 (dark): the post-adjudication wiring — settle bets (2.3) + predictions
+        #     (4.1) against the outcome glue just recorded, feed learning progress (4.2), encode
+        #     the experience through the manager (2.2), ingest news (4.4), adjudicate the active
+        #     quest (5.1), feed tier standing + level candidacy (4.3). Every subsystem is guarded
+        #     inside; this outer guard is the I5 backstop. No-op with flags off (pillars=None). ---
+        if pillars is not None:
+            try:
+                pillars.after_outcome(
+                    tick=tick_number, tool=tick_tool_name,
+                    args=(call.args if call else None), success=tick_tool_success,
+                    fail_kind=tick_fail_kind, situation=tick_situation,
+                    summary=tick_summary, event_text=tick_output, persona=persona)
+            except Exception as _pae:  # noqa: BLE001 - wiring faults never break the tick (I5)
+                logger.warning("pillars post-tick wiring failed: %s", _pae)
 
         # --- Episodic memory (phase 7b): file this acting tick as a typed (situation→action→
         #     outcome→fix) episode, so a future tick in the SAME situation recalls it BEFORE acting

@@ -278,3 +278,25 @@ def settle_bets(config, *, tick: int = 0, action_tool: str = "", action_args=Non
         return led.settle(tick=tick, success=success, action_sig=sig)
     except Exception:  # noqa: BLE001 - glue is best-effort
         return []
+
+
+# ============================================================================================
+# Pillars 4.4: the surfaced-news accessor — where the dashboard fetches the digest
+# ============================================================================================
+def surfaced_news(config) -> list:
+    """The most recently SURFACED news items (Pillars 4.4 cutover seam). The loop's presence
+    handler (the listening hold) surfaces the ranked digest through NewsQueue.surface and
+    snapshots it to `state/news_surfaced.json`; this read-only accessor is where the dashboard
+    (a separate process — it reads files, never the loop's objects) fetches that digest without
+    touching dashboard.py in this pass.
+
+    DARK behind `config.pillars_news_enabled` — returns [] untouched when off. Best-effort:
+    a missing/corrupt snapshot is an empty digest, never a raise (glue convention)."""
+    if not getattr(config, "pillars_news_enabled", False):
+        return []
+    try:
+        raw = (config.state_dir / "news_surfaced.json").read_text(encoding="utf-8")
+        items = json.loads(raw)
+        return items if isinstance(items, list) else []
+    except Exception:  # noqa: BLE001 - glue is best-effort
+        return []
