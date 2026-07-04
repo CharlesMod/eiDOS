@@ -248,6 +248,10 @@ news_max_items = 20               # 4.4 bound on queued news (eviction/expiry pa
 mastery_gates_enabled = false     # 4.3 levels = glue-checked mastery evidence; XP is just the progress bar
 min_sleeps_per_level = 3          # 4.3 mandatory digestion between levels (spacing effect as a hard floor)
 administrator_enabled = false     # 5.2 the System-LLM: dossier → grammar-constrained proposals, event-driven check-ins
+shadows_enabled = false           # 6 scripted CPU workers: trusted skill + event loop + budget + dead-man lease
+shadow_capacity = 1               # 6 concurrent shadow slots at unlock; grows on demonstrated stewardship
+generals_enabled = false          # 7 delegated LLM minds on mission contracts (slot-sharing substrate)
+max_generals = 5                  # DERIVED (0.5 spike): empirical 8-slot ceiling @8k − 2 headroom − the mind's slot
 
 [paths]
 # Relative paths anchor at the repo root (resolved in config.py), so this is portable across machines

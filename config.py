@@ -373,6 +373,11 @@ class Config:
     pillars_mastery_gates_enabled: bool = False        # 4.3 levels = glue-checked mastery evidence (trusted skills/calibration/reuse/sleep cycles), XP just the progress bar (level_gates.py)
     pillars_min_sleeps_per_level: int = 3              # declared: mandatory digestion between levels (spacing effect as a hard floor; early levels take days by design)
     pillars_administrator_enabled: bool = False        # 5.2 the System-LLM behind the voice: dossier → grammar-constrained quest/weakness proposals, event-driven check-ins (administrator.py)
+    # Phase 6/7 — the capability extensions (NOT biomimetic): shadows & generals
+    pillars_shadows_enabled: bool = False              # 6 scripted CPU workers: trusted skill + event loop + budget + dead-man lease (shadow.py)
+    pillars_shadow_capacity: int = 1                   # declared: concurrent shadow slots at unlock — capacity grows on demonstrated stewardship, not level alone (§6)
+    pillars_generals_enabled: bool = False             # 7 delegated LLM minds on mission contracts (missions.py)
+    pillars_max_generals: int = 5                      # DERIVED (0.5 spike, 2026-07-03): empirical ceiling 8 slots @8k on 16GB − 2 headroom − the mind's slot; ~45 tok/s/slot at 6-way
     # Phase 3 — skill economy (from library to language)
     pillars_skill_affordances_enabled: bool = False    # 3.1 surface top-K situation-relevant skills at the decision point
     pillars_skill_affordance_k: int = 3                # declared: how many affordances to surface
@@ -747,6 +752,10 @@ def load_config(path: str = "config.toml") -> Config:
         config.pillars_mastery_gates_enabled = pillars.get("mastery_gates_enabled", config.pillars_mastery_gates_enabled)
         config.pillars_min_sleeps_per_level = int(pillars.get("min_sleeps_per_level", config.pillars_min_sleeps_per_level))
         config.pillars_administrator_enabled = pillars.get("administrator_enabled", config.pillars_administrator_enabled)
+        config.pillars_shadows_enabled = pillars.get("shadows_enabled", config.pillars_shadows_enabled)
+        config.pillars_shadow_capacity = int(pillars.get("shadow_capacity", config.pillars_shadow_capacity))
+        config.pillars_generals_enabled = pillars.get("generals_enabled", config.pillars_generals_enabled)
+        config.pillars_max_generals = int(pillars.get("max_generals", config.pillars_max_generals))
         config.pillars_skill_affordances_enabled = pillars.get("skill_affordances_enabled", config.pillars_skill_affordances_enabled)
         config.pillars_skill_affordance_k = int(pillars.get("skill_affordance_k", config.pillars_skill_affordance_k))
         config.pillars_skill_economy_enabled = pillars.get("skill_economy_enabled", config.pillars_skill_economy_enabled)
