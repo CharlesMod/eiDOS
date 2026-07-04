@@ -356,3 +356,15 @@ checkpoint + backup snapshot before each; rollback is always "flag off," never a
 Milestone 1 of `PILLARS_PLAN.md` §9 = Phases 0–3 complete + 2.4's sleep gate green.
 A "new working version" = Phases 0–5: the creature remembers with an economy, reuses its hands,
 predicts and is paid for growth, levels through mastery, and answers to the voice.
+
+---
+
+## Cutover status (2026-07-04)
+
+- ✅ **5.5 wiring pass** — the `_Pillars` hub + every call site, flags-off byte-identical (asserted 3 ways: render comparison vs pre-wiring context.py, subprocess import-graph check, dark-gate tests); 39 wiring tests (`ab1ca25`)
+- ✅ **5.5 model-in-the-loop smokes** — distillation PASS 3/3, Administrator PASS 3/3 on live gemma4-12b with the production sampler; two grammar defects found & fixed (unbounded strings, open criteria object → Criterion-shaped GBNF) (`5991e14`)
+- ✅ **Phase 6 shadows** — full §5a: trusted-body spawn, 3 event-driven loop types, dead-man lease, stipend/strike economics, report-by-exception, spawn-nothing (structural + AST) (36 tests) (`b7e9b68`)
+- ✅ **Phase 7 generals** — full §5b: one-objective missions, ⊆-monarch spawn-free grants, slot-share adapter @ derived cap 5 with arbiter gate, cohort dispatch at measured pricing, bounded report grammar both directions, told-engrams @ 0.8 discount, delegation episodes (19 tests) (`206a377`)
+
+**Full combined regression: 1319 passed.** Pre-cutover workspace snapshot taken + restore-verified.
+**AWAITING DEAN'S GO:** the flag flips (staged: observability → memory core → economies/System; shadows+generals stay dark as level-gated unlocks) and the paused boot. Known deferred seams: persona.record_* config threading (hub compensates), run_post_tick invocation (would double-run 2 organs), dashboard panels for roster/missions/Administrator.
