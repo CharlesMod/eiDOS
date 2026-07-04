@@ -106,6 +106,28 @@ grammar legally contains ~40 names the prompt never taught): `http_request`, `as
   unit; stanzas name only their own unit's tools; base prompt names none; grammar ⊆ visible.
   §0 drift becomes a failing test, not a review hope.
 
+## Body image — zoomorphic wording, coherent by construction (approved 2026-07-04)
+
+Charlie: keep the intuitive zoomorphic/biomimetic wording ("paws", "hands", "nest") — but the
+self-image must be COHESIVE: saying "paws" to a creature that has fins is a disconnect, and
+coherence must be enforced in code, not by review.
+
+- **The morph**: the birth draw (genome.json) gains a `morph` — one coherent body plan drawn
+  from the genome seed, independent of the latents (bodies and temperaments assort
+  independently in nature; a timid digger or a dogged swimmer is character, not error). A small
+  declared set (~4), each a complete lexicon: the moving/exploring limb (bash), the making
+  limbs (write/read), the notebook, the mirror (check_tools), the senses, the home noun.
+  Example rows: burrower (paws/claws/den/whiskers) · corvid (wings/beak/nest/bright eyes) ·
+  otter (webbed paws/clever hands/holt/the current) · moth (soft feet/feelers/cocoon/night eyes).
+- **One renderer**: every creature-facing string that names anatomy — tool stanzas, grant
+  announcements, the newborn prompt — is a template filled from the creature's lexicon row.
+  No literal body noun may appear in code outside the lexicon table.
+- **The red gate**: a test scans all creature-facing strings for any body noun from ANY morph's
+  lexicon — a hardcoded "paws" in a stanza is a failing test, not a review catch. Same pattern
+  as the tool-name drift gate.
+- What the creature calls its own body in its THOUGHTS remains free — the platform never
+  contradicts itself, and never corrects the creature.
+
 ## Pre-existing defects this design surfaced (fix regardless of ladder)
 
 1. **`persona.goals_completed` had no production writer** — `record_goal_complete` was never
