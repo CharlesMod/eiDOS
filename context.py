@@ -661,7 +661,7 @@ def _build_history_thread(config: Config, n_ticks: int = 14) -> list[dict]:
     for o in obs:
         s = _obs_sig(o)
         if (collapsed and collapsed[-1][0] == s
-                and o.get("tool") not in ("system", "watchdog", "dream")):
+                and o.get("tool") not in ("system", "watchdog", "dream", "system_window")):
             collapsed[-1][1] += 1
         else:
             collapsed.append([s, 1, o])
@@ -672,6 +672,12 @@ def _build_history_thread(config: Config, n_ticks: int = 14) -> list[dict]:
         output = o.get("output") or ""
         if tool in ("system", "watchdog"):
             out.append({"role": "user", "content": f"[{tool}] {output[:600]}"})
+            continue
+        if tool == "system_window":
+            # VERBATIM — no "[system]" wrapper: that prefix is the platform's plumbing register,
+            # and the System is neither the operator nor the platform. Its text already carries
+            # its own register ([SYSTEM] …), stamped at the write site.
+            out.append({"role": "user", "content": output[:600]})
             continue
         if tool == "dream":
             out.append({"role": "user",

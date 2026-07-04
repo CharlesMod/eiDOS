@@ -320,6 +320,76 @@ def test_quest_issue_render_adjudicate_and_reward(tmp_path):
     assert hub.sleeps_since_close() == 0                  # closure reset the digestion counter
 
 
+def _system_window_obs(cfg):
+    from memory import read_recent_observations
+    return [o for o in reversed(read_recent_observations(cfg, max_chars=100000, max_count=100))
+            if o.get("tool") == "system_window"]     # oldest → newest
+
+
+def test_quest_issuance_and_settlement_are_lived_turns(tmp_path):
+    """5.1 experienced, not silent bookkeeping: an ACTUAL issuance writes exactly ONE
+    system_window observation carrying the full directive; the close writes exactly ONE carrying
+    the real paid amount; the history thread renders each as a VERBATIM user turn (no '[system]'
+    wrapper — the System is neither the operator nor the platform). A no-op issue attempt and a
+    hidden quest's issuance stay silent."""
+    cfg = _mk_config(tmp_path, pillars_quests_enabled=True)
+    hub = eidos._Pillars(cfg)
+    import quests
+    directive = "[SYSTEM] Log one adjudicated success."
+    hub.quests.propose(quests.Quest(
+        id="wq-lived", directive=directive,
+        success_criteria=quests.Criterion(path="persona.xp", op=">=", value=1),
+        reward={"kind": quests.REWARD_XP, "amount": 25}))
+    hub._issue_next({"level": 1, "xp": 0}, tick=3)
+    wins = _system_window_obs(cfg)
+    assert len(wins) == 1                                 # exactly one issuance notice
+    assert directive in wins[0]["output"]                 # the FULL directive rides in it
+    hub._issue_next({"level": 1, "xp": 0}, tick=4)        # already active → silence, no repeat
+    assert len(_system_window_obs(cfg)) == 1
+    persona = {"level": 1, "xp": 1}
+    _drive_tick(hub, cfg, tick=5, persona=persona)        # criteria met → glue closes + pays
+    settles = [o for o in _system_window_obs(cfg) if "PASSED" in o.get("output", "")]
+    assert len(settles) == 1                              # exactly one settlement notice
+    assert "PAID 25 XP" in settles[0]["output"]           # the REAL amount award_xp paid
+    assert persona["xp"] == 1 + 25
+    thread = context_mod._build_history_thread(cfg)
+    issue = [m for m in thread if "QUEST ISSUED" in m["content"]]
+    settle = [m for m in thread if "QUEST PASSED" in m["content"]]
+    assert len(issue) == 1 and len(settle) == 1
+    assert issue[0]["role"] == "user" and settle[0]["role"] == "user"
+    assert issue[0]["content"] == wins[0]["output"]       # verbatim — no wrapper prefix
+    assert settle[0]["content"] == "[SYSTEM] QUEST PASSED — PAID 25 XP."
+    # A HIDDEN quest issues in silence — achievements announce only on completion (§7).
+    hub.quests.propose(quests.Quest(
+        id="wq-hidden", directive="Unseen.", hidden=True,
+        success_criteria=quests.Criterion(path="persona.xp", op=">=", value=10**9),
+        reward={"kind": quests.REWARD_XP, "amount": 5}))
+    hub._set_sleeps_since_close(1)
+    hub._issue_next(persona, tick=6)
+    assert hub.quests.store.active() is not None          # it DID issue…
+    assert len(_system_window_obs(cfg)) == 2              # …but wrote no issuance notice
+
+
+def test_quest_expiry_settles_on_screen_nothing_paid(tmp_path):
+    """The not-coddled close is ALSO lived: an expired quest writes ONE system_window settlement
+    stating nothing was paid — and no XP moves."""
+    cfg = _mk_config(tmp_path, pillars_quests_enabled=True)
+    hub = eidos._Pillars(cfg)
+    import quests
+    hub.quests.propose(quests.Quest(
+        id="wq-exp", directive="Unreachable.",
+        success_criteria=quests.Criterion(path="persona.xp", op=">=", value=10**9),
+        reward={"kind": quests.REWARD_XP, "amount": 9},
+        expiry_ts=time.time() - 1))
+    hub._issue_next({"level": 1, "xp": 0}, tick=2)
+    persona = {"level": 1, "xp": 0}
+    _drive_tick(hub, cfg, tick=3, persona=persona)        # past expiry, unmet → glue expires it
+    settles = [o for o in _system_window_obs(cfg) if "EXPIRED" in o.get("output", "")]
+    assert len(settles) == 1
+    assert "NOTHING PAID" in settles[0]["output"]
+    assert persona["xp"] == 0
+
+
 def test_sleep_window_advances_gates_and_cadence(tmp_path):
     """2.4 + 4.3 + 5.1 at the boundary: a completed sleep clears adenosine, advances the mastery
     gate's sleep counter, and advances the quest digestion counter."""

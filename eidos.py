@@ -973,11 +973,32 @@ class _Pillars:
             logger.warning("pillars cadence persist failed: %s", e)
 
     def _on_quest_closed(self, r: dict, persona, *, tick: int = 0) -> None:
-        """A quest closed (passed or expired): reset the digestion counter, record the failure-lite
-        episode, ingest the news event, restore a remedial'd tier, wake the trainer, and make the
-        event-driven issue attempt (cadence itself still demands a sleep first)."""
+        """A quest closed (passed or expired): reset the digestion counter, write the settlement
+        into the observation stream (the System pays ON-SCREEN — a lived turn, not bookkeeping),
+        record the failure-lite episode, ingest the news event, restore a remedial'd tier, wake the
+        trainer, and make the event-driven issue attempt (cadence still demands a sleep first)."""
         q = r.get("quest")
         self._set_sleeps_since_close(0)
+        # Settlement notice: ONE system_window observation in the System's own register. The paid
+        # amount is read from the quest's reward — exactly what the sink pays through award_xp
+        # (glue settled it; this only reports the settlement). Non-XP rewards are the level-gate
+        # phase's job, so the notice states the reward without claiming a payout.
+        if q is not None:
+            try:
+                import quests as _quests
+                if r.get("passed"):
+                    reward = getattr(q, "reward", None) or {}
+                    paid = (f"PAID {int(reward.get('amount', 0))} XP"
+                            if reward.get("kind") == _quests.REWARD_XP
+                            else f"REWARD {_quests._reward_str(reward)}")
+                    text = f"[SYSTEM] QUEST PASSED — {paid}."
+                else:
+                    text = "[SYSTEM] QUEST EXPIRED — NOTHING PAID."
+                append_observation(self.config, {"tick": tick, "tool": "system_window",
+                                                 "success": bool(r.get("passed")),
+                                                 "output": text})
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars quest settlement notice failed: %s", e)
         ep = r.get("episode")
         if ep:
             try:
@@ -1012,18 +1033,32 @@ class _Pillars:
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars remedial restore failed: %s", e)
         self._event("quest_closed", persona)
-        self._issue_next(persona)
+        self._issue_next(persona, tick=tick)
 
-    def _issue_next(self, persona) -> None:
-        """Event-driven issue attempt (after sleep completion / quest closure — never a timer)."""
+    def _issue_next(self, persona, *, tick: int = 0) -> None:
+        """Event-driven issue attempt (after sleep completion / quest closure — never a timer).
+        An ACTUAL issuance also lands in the observation stream as ONE system_window turn — the
+        System speaks when it issues, not just as standing furniture in the focus block."""
         if self.quests is None:
             return
         try:
             import glue as _glue
             cond = _glue.compute_condition(_glue.recent_outcomes(self.config))
-            self.quests.issue_next(sleeps_since_close=self.sleeps_since_close(), condition=cond)
+            issued = self.quests.issue_next(sleeps_since_close=self.sleeps_since_close(),
+                                            condition=cond)
         except Exception as e:  # noqa: BLE001
             logger.warning("pillars issue_next failed: %s", e)
+            return
+        if issued is None or getattr(issued, "hidden", False):
+            return    # silence, or hidden — achievements announce only on completion (§7)
+        try:
+            import quests as _quests
+            text = (f"[SYSTEM] QUEST ISSUED [T{issued.tier}] — REWARD "
+                    f"{_quests._reward_str(issued.reward)}.\n{issued.directive}")
+            append_observation(self.config, {"tick": tick, "tool": "system_window",
+                                             "success": True, "output": text})
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars quest issuance notice failed: %s", e)
 
     # --- the sleep window (2.4 cutover entrypoint + the sleep-completion events) ------------------
     def sleep_window(self, *, tick: int, persona, observations) -> object:
@@ -1067,7 +1102,7 @@ class _Pillars:
                 self._set_sleeps_since_close(self.sleeps_since_close() + 1)
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars cadence advance failed: %s", e)
-            self._issue_next(persona)
+            self._issue_next(persona, tick=tick)
         self._event("sleep_complete", persona)
         return report
 
