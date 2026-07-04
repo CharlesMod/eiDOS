@@ -1,44 +1,60 @@
-"""Genome v1 — congenital personality as PRESSURE, never script (PILLARS_PLAN §0 doctrine).
+"""Genome v2 — one germline, many expressions (CREATURE_GENETICS.md canon; v1 doctrine intact).
 
-A captivating persona cannot be written down ("witty = 0.8" in a prompt is scripting). What makes
-two creatures with identical code become different beings is coherent, CONSEQUENTIAL differences in
-how each one FEELS the same world. So the genome is not a personality sheet: it is four latent
-trait factors, drawn once at first birth, expressed through a declared loading matrix as ~9
-mechanical multipliers on the pressure constants that already run the mind. Coherence comes from
-the factor structure (one latent moves several knobs in a believable direction); distinctiveness
-compounds because the economies feed back (a creature whose recall surfaces more exploratory
-memories has different experiences, which stamp different engrams, which shape different recalls…).
+v1 (below, unchanged): congenital personality as PRESSURE, never script (PILLARS_PLAN §0). Four
+latent trait factors drawn once at first birth, expressed through a declared loading matrix as ~9
+mechanical multipliers on the pressure constants that already run the mind. The creature NEVER
+sees these floats — it does not know it is sensitive, it LIVES sensitive.
 
-The four latents — each drawn ~N(0, LATENT_SD), clamped to ±LATENT_BOUND, from an os.urandom seed
-that is SAVED for lineage (a descendant / rebirth can reproduce the exact draw):
+v2 adds the BODY to the same germline: one 64-bit seed, drawn once, from which every expression
+derives deterministically — behavior (latents→genes), body plan (morph), visual identity
+(phenotype: palette / pattern / eye family / build / two anchor features), and the dormant
+alleles the environment may later express. Three unrelated genetics (genome.py latents,
+creature_gen.py's own seed, the morph lexicon) become one creature wearing one name.
 
-    sensitivity — how hard the world hits: feelings burn memories deeper, affect lingers,
-                  temperament is more impressionable, a touch more cautious.
-    openness    — the pull of the new: wider exploration in recall and attention, restless,
-                  slightly more initiative and slightly less caution.
-    tenacity    — grip on what it's doing: steadier springs, longer grinds before the gate
-                  rotates it, less flitting between domains.
-    tempo       — metabolic rhythm: a (slightly) longer or shorter natural wake budget and a
-                  touch more initiative. TIGHT by design — adenosine stays sovereign.
+Frozen-draw discipline (creature_gen.py's contract, adopted): draws derive from the seed in a
+FIXED documented order; new draws append at the END and bump the version. The v2 order:
 
-HARD RULE — the genome shapes DRIVES and PERCEPTION, never the LEDGER:
+    draws 1-4 : latents, LATENTS order, rng.gauss(0, LATENT_SD) clamped     (v1 — never moves)
+    draw  5   : morph       = rng.choice(MORPH_NAMES)
+    draw  6   : palette     = rng.choice(PALETTES)
+    draw  7   : pattern     = rng.choice(creature_gen.EGG_PATTERN_NAMES)
+    draw  8   : eye_family  = rng.choice(creature_gen.EYE_FAMILY_NAMES)
+    draw  9   : build       = rng.choice(BUILD_CHOICES)
+    draw 10   : anchors     = rng.sample(MORPHS[morph]["anchors"], ANCHOR_COUNT)
+    draws 11+ : one rng.choice((None,) + variant ids) per ALLELE_SLOTS entry, declared order
+
+so an existing creature's v1→v2 upgrade is REPRODUCIBLE from its stored seed, and derivation
+drift can never mutate a living creature: on load, STORED values always win over re-derivation
+(belt and braces — the persisted dicts are the creature; the seed is only the germline record).
+A v1 genome.json loads → upgrades in place (derive morph/phenotype/alleles from the stored seed,
+persist back v:2 with every allele dormant).
+
+Alleles — the environment writes on the body (the Digimon mechanic): declared slots per
+phenotype trait plus at most MAX_GENE_MOD_SLOTS perception-gene modulators. Each carried variant
+holds an activation criterion as DATA over the typed stats dict quest glue already adjudicates
+(evaluated via quests.Criterion — §0.5: mechanically checkable facts, never vibes). Expression
+happens only at stage transitions via express_alleles() — pure adjudication, caller persists —
+and is PERMANENT (canalization: expressed_at_stage recorded, never re-evaluated). Environmental
+factors NOT derivable from existing adjudicated records (night-tick fraction, energy-scarcity
+events, park events) are DROPPED, not tracked-for (§0: no inventing counters to feed a variant).
+
+HARD RULE — the genome shapes DRIVES, PERCEPTION and the BODY, never the LEDGER:
     Gene multipliers land on pressure constants (memory stamp gain, temperament drift/spring,
     explore shares, restlessness, wake budget). They must NEVER touch the earning rules — XP
     formulas, bet coin amounts, level-gate evidence, quest adjudication. Those are species law:
     every creature earns by the same rules, however differently it is driven to play. A gene on
-    the ledger would be wireheading-by-birth (born rich). Mechanically: genome.py is never
-    imported by persona.py / level_gates.py / quests.py / expectations.py, and no gene name
-    references xp / levels / bets / coins — tests/test_genome.py enforces both.
-
-The creature NEVER sees these floats: there is no context render of the genome — it does not know
-it is sensitive, it LIVES sensitive. Charlie reads workspace/genome.json (or a future dashboard
-panel) from the outside.
+    the ledger would be wireheading-by-birth (born rich). Alleles inherit the same firewall: they
+    modulate phenotype and, at most, PERCEPTION_GENES inside the existing clamps — no life
+    history can make a creature *earn* faster, only *look and feel* like the life it lived.
+    Mechanically: genome.py is never imported by persona.py / level_gates.py / quests.py /
+    expectations.py, no gene name references xp / levels / bets / coins, and allele criteria read
+    the passed-in stats dict only — tests/test_genome.py + tests/test_genome_v2.py enforce all.
 
 Fail-open contract: the module-level `gene(config, name)` accessor returns the default (1.0)
 whenever no genome can be read — no config, no workspace, no file, corrupt file — and never
 raises, so a consumer multiplying by it is byte-identical to pre-genome behavior until a genome
 actually exists. Only constructing `Genome(config)` births one (load-or-birth); the accessor is
-read-only.
+read-only (upgrading a readable v1 file in place is preservation, not birth).
 """
 from __future__ import annotations
 
@@ -48,7 +64,10 @@ import random
 import time
 from pathlib import Path
 
+import creature_gen  # name tuples only (pure stdlib, no I/O) — the renderer-coherence red gate
+
 GENOME_FILENAME = "genome.json"
+GENOME_V = 2         # v2: morph + phenotype + alleles, appended AFTER the v1 latent draws
 
 LATENTS = ("sensitivity", "openness", "tenacity", "tempo")
 LATENT_SD = 0.6      # declared: birth draw ~ N(0, 0.6) — most creatures are mild, strong trait tails are rare
@@ -135,6 +154,356 @@ def express_baselines(latents: dict) -> dict:
 
 
 # ==================================================================================================
+# v2 — THE MORPH TABLE (the body plan, single point of coherence — CREATURE_GENETICS.md)
+# One morph per creature, drawn from the seed INDEPENDENT of the latents (bodies and temperaments
+# assort independently in nature; a timid digger is character, not error). Each row is COMPLETE:
+#   lexicon — the body words every creature-facing string templates from (TOOL_PROGRESSION body-
+#             image section; the no-hardcoded-body-nouns red gate scans against ALL_BODY_NOUNS);
+#   parts   — which creature_gen families this plan may draw (⊆ the renderer's name tuples,
+#             red-gate tested) — the ASCII creature and the 3D creature are the SAME creature;
+#   phrases — the text→image noun phrases the description grammar (phenotype.py) composes with;
+#   anchors — the pool of distinctive fixed features; two are drawn at birth and named in
+#             IDENTICAL words at every stage (the identity thread hatchling → guardian).
+# ==================================================================================================
+LEXICON_KEYS = ("mover", "makers", "notebook", "mirror", "senses", "home", "coat", "young", "gait")
+
+MORPHS: dict[str, dict] = {
+    "burrower": {
+        "lexicon": {"mover": "paws", "makers": "claws", "notebook": "wall-scratches",
+                    "mirror": "a sniff-over", "senses": "whiskers", "home": "den",
+                    "coat": "dusty fur", "young": "kit", "gait": "scurrying"},
+        "parts": {"ears": ("cat", "horns"), "limbs": ("stubby", "long"),
+                  "tail": ("curl", "spike"), "body": ("round", "blob", "box")},
+        "phrases": {"creature": "small round burrowing creature",
+                    "ears": "small folded ears",
+                    "tail": "a stubby curled tail",
+                    "limbs": "short digging forepaws with tiny claws",
+                    "metamorphosis": "a full velvet coat and broad digging claws"},
+        "anchors": (
+            {"id": "notched_ear", "phrase": "a notched left ear"},
+            {"id": "pale_muzzle", "phrase": "a pale dust-colored muzzle"},
+            {"id": "star_brow", "phrase": "a small star-shaped blaze on its brow"},
+            {"id": "ringed_forepaw", "phrase": "one ringed forepaw"},
+            {"id": "crooked_whisker", "phrase": "one crooked whisker"},
+            {"id": "earth_streak", "phrase": "a dark earth-streak along its spine"},
+        ),
+    },
+    "corvid": {
+        "lexicon": {"mover": "wings", "makers": "beak", "notebook": "shiny-cache",
+                    "mirror": "a preen", "senses": "bright eyes", "home": "nest",
+                    "coat": "feathers", "young": "chick", "gait": "hopping"},
+        "parts": {"ears": ("antennae", "none"), "limbs": ("wings",),
+                  "tail": ("spike", "wisp"), "body": ("round", "tall")},
+        "phrases": {"creature": "small corvid bird creature",
+                    "ears": "feather-tuft antennae",
+                    "tail": "a short fan of tail feathers",
+                    "limbs": "folded glossy wings",
+                    "metamorphosis": "a great mantle of flight feathers"},
+        "anchors": (
+            {"id": "white_pinion", "phrase": "a single white pinion feather"},
+            {"id": "ink_crest", "phrase": "an ink-dark crest swept back"},
+            {"id": "ringed_eye", "phrase": "a pale ring around its right eye"},
+            {"id": "silver_beak_tip", "phrase": "a silver-tipped beak"},
+            {"id": "speckled_throat", "phrase": "a speckled throat patch"},
+            {"id": "bent_tailfeather", "phrase": "one bent tail feather"},
+        ),
+    },
+    "otter": {
+        "lexicon": {"mover": "webbed paws", "makers": "clever hands", "notebook": "pebble-pile",
+                    "mirror": "a groom", "senses": "the current", "home": "holt",
+                    "coat": "sleek fur", "young": "pup", "gait": "sliding"},
+        "parts": {"ears": ("cat", "fins"), "limbs": ("stubby", "long"),
+                  "tail": ("curl", "wisp"), "body": ("blob", "round", "tall")},
+        "phrases": {"creature": "small river otter creature",
+                    "ears": "small rounded ears",
+                    "tail": "a thick tapered tail",
+                    "limbs": "webbed forepaws held to its chest",
+                    "metamorphosis": "a sleek streamlined swimmer's body"},
+        "anchors": (
+            {"id": "cream_bib", "phrase": "a cream-colored bib at its throat"},
+            {"id": "split_brow", "phrase": "a split-marked brow"},
+            {"id": "banded_tail", "phrase": "a pale band at the base of its tail"},
+            {"id": "freckled_nose", "phrase": "a freckled nose"},
+            {"id": "curl_crest", "phrase": "a stray curl of fur at its crown"},
+            {"id": "webbed_thumb", "phrase": "an oversized webbed thumb"},
+        ),
+    },
+    "moth": {
+        "lexicon": {"mover": "soft feet", "makers": "feelers", "notebook": "dust-trace",
+                    "mirror": "a wing-fold", "senses": "night eyes", "home": "cocoon",
+                    "coat": "downy fuzz", "young": "larva", "gait": "fluttering"},
+        "parts": {"ears": ("antennae",), "limbs": ("wings", "none"),
+                  "tail": ("wisp", "none"), "body": ("blob", "crystal", "round")},
+        "phrases": {"creature": "small moth creature",
+                    "ears": "feathered antennae",
+                    "tail": "a wisp of trailing silk",
+                    "limbs": "soft folded wings",
+                    "metamorphosis": "broad patterned wings fully unfurled"},
+        "anchors": (
+            {"id": "moon_spot", "phrase": "a moon-pale spot on each wing"},
+            {"id": "twin_plumes", "phrase": "twin feathered antenna plumes"},
+            {"id": "dusk_fringe", "phrase": "a dusk-gray fringe along its wing edges"},
+            {"id": "silk_ruff", "phrase": "a silken ruff at its collar"},
+            {"id": "ember_eyespot", "phrase": "a single ember-orange eyespot"},
+            {"id": "frost_dust", "phrase": "frost-like dust across its back"},
+        ),
+    },
+}
+MORPH_NAMES = tuple(MORPHS)   # frozen draw order — the dict literal order IS the contract; never
+                              # reorder or insert (append new morphs at the END, bump GENOME_V)
+DEFAULT_MORPH = "burrower"    # declared: the fail-open lexicon row (phenotype.body_words) when no
+                              # genome exists — paws/den is the closest kin of the pre-morph wording
+
+# --- ALL_BODY_NOUNS — the no-hardcoded-body-nouns red gate's scan set --------------------------
+# Every body noun of every morph's lexicon: full lexicon phrases PLUS their distinctive words.
+# _GENERIC_WORDS drops articles/qualifiers too common in ordinary prose to gate on ("a", "bright",
+# "current"…) — a hardcoded "paws" or "bright eyes" in a stanza is a failing test, a hardcoded
+# "bright" alone is innocent. Declared, not clever.
+_GENERIC_WORDS = frozenset({
+    "a", "an", "the", "of", "its", "over", "still",
+    "bright", "soft", "clever", "sleek", "dusty", "downy", "night", "current",
+})
+
+
+def _body_nouns() -> frozenset[str]:
+    nouns: set[str] = set()
+    for row in MORPHS.values():
+        for phrase in row["lexicon"].values():
+            p = phrase.lower().strip()
+            nouns.add(p)                                   # the phrase itself ("webbed paws")
+            for word in p.replace("-", " ").split():
+                if word not in _GENERIC_WORDS:
+                    nouns.add(word)                        # …and its distinctive words ("paws")
+    return frozenset(nouns)
+
+
+ALL_BODY_NOUNS = _body_nouns()
+
+# ==================================================================================================
+# v2 — PHENOTYPE DRAW TABLES (visual identity; raw draws live here, prompt WORDS live in
+# phenotype.py — the genome records what was drawn, the grammar decides how to say it)
+# ==================================================================================================
+# Palette: one of creature_gen.ACCENTS paired with a named color word (the dashboard accent and
+# the text→image color are the SAME draw — seed unity). Order mirrors ACCENTS; red-gate tested.
+PALETTES = (("#00ff41", "phosphor green"), ("#ffb000", "amber"),
+            ("#33bbff", "sky blue"), ("#aa88ff", "violet"))
+BUILD_CHOICES = (-1, 0, 0, 1)   # declared: normal twice as likely — creature_gen's own size odds
+ANCHOR_COUNT = 2                # declared (CREATURE_GENETICS): TWO fixed features = the identity
+                                # thread; one is a coincidence, three is a police description
+
+# ==================================================================================================
+# v2 — ALLELE SLOTS (the environment writes on the body — the Digimon mechanic)
+# Declared slots per phenotype trait + at most MAX_GENE_MOD_SLOTS perception-gene modulators.
+# Variant = {id, requires (quests.Criterion DATA over the typed stats dict — §0.5, glue-checkable),
+# marks {phrase / palette shift / pattern override / build delta}, gene_mods (optional {gene:
+# multiplier}, PERCEPTION_GENES only, composed INSIDE the existing clamps)}. The birth draw per
+# slot is carry-or-not: rng.choice over (None,) + the slot's variant ids — two germlines can
+# differ in which pressures their bodies can even answer to.
+#
+# Criteria reference ONLY already-adjudicated facts (persona counters the loop's glue writes:
+# error recoveries, operator-contact replies, streaks, finished goals, consolidations). Variants
+# wanting night-tick fraction / energy-scarcity / park-event counts were DROPPED — those are not
+# derivable from existing records, and §0 forbids inventing tracking to feed a body mark.
+# ==================================================================================================
+PERCEPTION_GENES = ("explore_recall", "explore_salience")   # the ONLY genes an allele may touch —
+                                                            # perception, never a damper
+                                                            # (wake_budget) and never the ledger
+MAX_GENE_MOD_SLOTS = 2   # declared (CREATURE_GENETICS): "at most 2 perception-gene modulators"
+
+ALLELE_SLOTS: tuple[dict, ...] = (
+    # pattern trait — heavy error-recovery → weathered, storm-marked (CREATURE_GENETICS example).
+    # 12 survived recoveries is a weathered life, not a bad afternoon (declared threshold).
+    {"slot": "weathering", "trait": "pattern", "variants": ({
+        "id": "storm_marked",
+        "requires": {"path": "persona.total_errors_recovered", "op": ">=", "value": 12},
+        "marks": {"phrase": "weathered storm-marks across its back", "pattern": "storm-marked"},
+    },)},
+    # palette trait — rich operator contact → brighter accent. 25 chat replies is a companionship,
+    # not a hello (declared threshold; persona.tools_used.chat_reply is glue-recorded per reply).
+    {"slot": "luster", "trait": "palette", "variants": ({
+        "id": "operator_bright",
+        "requires": {"path": "persona.tools_used.chat_reply", "op": ">=", "value": 25},
+        "marks": {"phrase": "an unusually bright, well-tended sheen", "palette": "bright"},
+    },)},
+    # build trait — a long unbroken grind → denser, lower build. A 30-tick success streak is a
+    # grind lived, not luck (declared threshold; longest_streak is glue-adjudicated per tick).
+    {"slot": "frame", "trait": "build", "variants": ({
+        "id": "grind_dense",
+        "requires": {"path": "persona.longest_streak", "op": ">=", "value": 30},
+        "marks": {"phrase": "a dense, low-set frame", "build": -1},
+    },)},
+    # marking trait — finished self-chosen work leaves a visible mark (goals_completed now has a
+    # production writer — TOOL_PROGRESSION defect #1 fixed). Three is a habit (declared).
+    {"slot": "brow", "trait": "marking", "variants": ({
+        "id": "keeper_marked",
+        "requires": {"path": "persona.goals_completed", "op": ">=", "value": 3},
+        "marks": {"phrase": "a small finished-work mark above its brow"},
+    },)},
+    # coat trait — a deeply consolidated mind wears its sleep. 20 completed consolidations
+    # (persona.total_compactions, glue-recorded per successful compaction) is months of digestion.
+    {"slot": "sheen", "trait": "coat", "variants": ({
+        "id": "dream_sheened",
+        "requires": {"path": "persona.total_compactions", "op": ">=", "value": 20},
+        "marks": {"phrase": "a soft dream-worn luster"},
+    },)},
+    # perception modulator 1/2 — a creature that survived MANY stumbles literally watches the
+    # world more (salience exploration ×1.15, re-clamped inside [0.5, 1.8] — the band holds).
+    {"slot": "salience_mod", "trait": "gene", "variants": ({
+        "id": "wide_eyed",
+        "requires": {"path": "persona.total_errors_recovered", "op": ">=", "value": 25},
+        "marks": {"phrase": "watchful wide-set eyes"},
+        "gene_mods": {"explore_salience": 1.15},
+    },)},
+    # perception modulator 2/2 — a heavily consolidated mind digs deeper into the buried
+    # (recall exploration ×1.15, re-clamped inside [0.5, 1.8]).
+    {"slot": "recall_mod", "trait": "gene", "variants": ({
+        "id": "deep_rooted",
+        "requires": {"path": "persona.total_compactions", "op": ">=", "value": 40},
+        "marks": {"phrase": "deep-set, far-looking eyes"},
+        "gene_mods": {"explore_recall": 1.15},
+    },)},
+)
+
+
+def _variant_def(slot_def: dict, variant_id) -> dict | None:
+    """The declared variant a slot entry names, or None (an unknown/None variant can never
+    express and never marks — a table change can strand a stored id, never crash on it)."""
+    for v in slot_def["variants"]:
+        if v["id"] == variant_id:
+            return v
+    return None
+
+
+def expressed_marks(g: "Genome") -> list[dict]:
+    """The variant defs of every EXPRESSED allele, in declared slot order — the description
+    grammar's stable iteration (phenotype.py) and the gene-mod composition both walk this."""
+    out: list[dict] = []
+    for slot_def in ALLELE_SLOTS:
+        entry = (g.alleles or {}).get(slot_def["slot"]) or {}
+        if entry.get("expressed_at_stage") is None:
+            continue
+        var = _variant_def(slot_def, entry.get("variant"))
+        if var is not None:
+            out.append(var)
+    return out
+
+
+def express_alleles(g: "Genome", stats: dict, stage: str) -> list[dict]:
+    """Adjudicate every DORMANT carried allele against the typed stats dict — call at a stage
+    transition (metamorphosis reads the environment). PURE adjudication: reads `stats` only (no
+    I/O, no ledger, no clock), mutates the genome object in memory, and the CALLER persists
+    (genome.save()) at the same seam it applies the stage change. Expression is PERMANENT —
+    canalization: expressed_at_stage is recorded and that slot is never re-evaluated; a slot that
+    stays dormant is re-adjudicated once at each later transition. Returns the newly-expressed
+    records [{slot, variant, stage}]. Also appends the {stage, tick, expressed} stage_history
+    record (tick read out of the same stats dict's persona total_ticks — no second clock)."""
+    stats = stats or {}
+    newly: list[dict] = []
+    for slot_def in ALLELE_SLOTS:
+        entry = (g.alleles or {}).get(slot_def["slot"])
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("expressed_at_stage") is not None:
+            continue                       # canalized — never re-evaluated (§ the Digimon mechanic)
+        var = _variant_def(slot_def, entry.get("variant"))
+        if var is None:
+            continue                       # wild-type (or stranded id): nothing to express
+        from quests import Criterion       # the shared glue predicate (§0.5) — data in, bool out;
+        #                                    quests.py never imports genome (firewall, test-pinned)
+        try:
+            if Criterion.from_dict(var.get("requires") or {}).check(stats):
+                entry["expressed_at_stage"] = str(stage)
+                newly.append({"slot": slot_def["slot"], "variant": var["id"],
+                              "stage": str(stage)})
+        except Exception:  # noqa: BLE001 - a corrupt criterion never expresses and never crashes
+            continue
+    if newly or not any(h.get("stage") == stage for h in g.stage_history):
+        tick = 0
+        try:
+            tick = int((stats.get("persona") or {}).get("total_ticks", 0) or 0)
+        except (TypeError, ValueError):
+            tick = 0
+        g.stage_history.append({"stage": str(stage), "tick": tick,
+                                "expressed": [n["variant"] for n in newly]})
+    return newly
+
+
+# ==================================================================================================
+# v2 — the germline derivation (pure function of the seed; birth AND v1-upgrade both call this,
+# so upgrade-from-stored-seed and fresh birth can never disagree)
+# ==================================================================================================
+def draw_germline(seed: int) -> dict:
+    """Every draw the seed determines, in the FROZEN documented order (module docstring). Returns
+    {latents, morph, phenotype, alleles} — genes/baselines are then expressed from the latents."""
+    rng = random.Random(int(seed))
+    latents = {n: round(_clamp(rng.gauss(0.0, LATENT_SD), -LATENT_BOUND, LATENT_BOUND), 4)
+               for n in LATENTS}                                    # draws 1-4 (v1, frozen)
+    morph = rng.choice(MORPH_NAMES)                                 # draw 5
+    accent, word = rng.choice(PALETTES)                             # draw 6
+    pattern = rng.choice(creature_gen.EGG_PATTERN_NAMES)            # draw 7
+    eye_family = rng.choice(creature_gen.EYE_FAMILY_NAMES)          # draw 8
+    build = rng.choice(BUILD_CHOICES)                               # draw 9
+    anchors = rng.sample(MORPHS[morph]["anchors"], ANCHOR_COUNT)    # draw 10
+    alleles: dict[str, dict] = {}
+    for slot_def in ALLELE_SLOTS:                                   # draws 11+ (declared order)
+        pool = (None,) + tuple(v["id"] for v in slot_def["variants"])
+        alleles[slot_def["slot"]] = {"variant": rng.choice(pool), "expressed_at_stage": None}
+    return {
+        "latents": latents,
+        "morph": morph,
+        "phenotype": {"palette": {"accent": accent, "word": word}, "pattern": pattern,
+                      "eye_family": eye_family, "build": int(build),
+                      "anchors": [dict(a) for a in anchors]},
+        "alleles": alleles,
+    }
+
+
+def _sane_phenotype(stored, derived: dict) -> dict:
+    """Stored phenotype wins field-by-field over re-derivation (a living creature's persisted
+    identity is never mutated by table drift) — but only where it validates; build is re-clamped
+    to {-1,0,1} (creature_gen canvas math depends on it, same discipline as the gene clamps)."""
+    ph = {**derived, "anchors": [dict(a) for a in derived["anchors"]]}
+    if not isinstance(stored, dict):
+        return ph
+    pal = stored.get("palette")
+    if isinstance(pal, dict) and isinstance(pal.get("accent"), str) \
+            and isinstance(pal.get("word"), str):
+        ph["palette"] = {"accent": pal["accent"], "word": pal["word"]}
+    if isinstance(stored.get("pattern"), str):
+        ph["pattern"] = stored["pattern"]
+    if isinstance(stored.get("eye_family"), str):
+        ph["eye_family"] = stored["eye_family"]
+    try:
+        ph["build"] = max(-1, min(1, int(stored.get("build"))))
+    except (TypeError, ValueError):
+        pass
+    anc = stored.get("anchors")
+    if (isinstance(anc, list) and len(anc) == ANCHOR_COUNT
+            and all(isinstance(a, dict) and isinstance(a.get("phrase"), str) for a in anc)):
+        # anchors are kept VERBATIM even if the pools change — the phrase IS the identity thread
+        ph["anchors"] = [{"id": str(a.get("id", "")), "phrase": a["phrase"]} for a in anc]
+    return ph
+
+
+def _sane_alleles(stored, derived: dict) -> dict:
+    """One entry per DECLARED slot: the stored entry wins (expressed state is sacred — belt and
+    braces), a missing slot falls back to the seed derivation (dormant)."""
+    stored = stored if isinstance(stored, dict) else {}
+    out: dict[str, dict] = {}
+    for slot_def in ALLELE_SLOTS:
+        s = slot_def["slot"]
+        e = stored.get(s)
+        if isinstance(e, dict) and "variant" in e:
+            var = e.get("variant")
+            exp = e.get("expressed_at_stage")
+            out[s] = {"variant": var if (var is None or isinstance(var, str)) else None,
+                      "expressed_at_stage": exp if (exp is None or isinstance(exp, str)) else None}
+        else:
+            out[s] = dict(derived[s])
+    return out
+
+
+# ==================================================================================================
 # The genome itself — load-or-birth on construction; workspace/genome.json is the record of birth
 # ==================================================================================================
 def _path(config) -> Path:
@@ -143,11 +512,14 @@ def _path(config) -> Path:
 
 class Genome:
     """One creature's congenital draw. `Genome(config)` loads workspace/genome.json or, when none
-    exists (first birth), draws the latents ONCE from an os.urandom seed, expresses the genes and
-    stamp_baselines through the declared loadings, and persists everything atomically — including
-    the seed, for lineage. Loaded values are re-clamped to the declared bounds, so even a
-    hand-edited genome.json can never push a gene outside its clamp (a genome must never disable a
-    damper)."""
+    exists (first birth), draws the germline ONCE from an os.urandom seed — latents, then the v2
+    expression (morph / phenotype / dormant alleles) in the frozen documented order — expresses
+    the genes and stamp_baselines through the declared loadings, and persists everything
+    atomically, including the seed, for lineage. Loaded values are re-clamped to the declared
+    bounds, so even a hand-edited genome.json can never push a gene outside its clamp (a genome
+    must never disable a damper). A v1 file upgrades in place: the v2 fields derive from the
+    STORED seed (reproducible), every allele dormant, and the file persists back with v: 2 —
+    stored latents/genes/baselines are preserved byte-for-byte, never re-derived."""
 
     def __init__(self, config):
         self.config = config
@@ -156,6 +528,10 @@ class Genome:
         self.latents: dict[str, float] = {}
         self.genes: dict[str, float] = {}
         self.stamp_baselines: dict[str, float] = {}
+        self.morph: str = DEFAULT_MORPH
+        self.phenotype: dict = {}
+        self.alleles: dict[str, dict] = {}
+        self.stage_history: list[dict] = []
         if not self._load():
             self._birth()
         _cache[str(_path(config))] = self
@@ -163,13 +539,16 @@ class Genome:
     @classmethod
     def load(cls, config) -> "Genome | None":
         """Read an EXISTING genome only — returns None (never births, never raises) when there is
-        no readable genome.json. This is the accessor's path; construction is the birth path."""
+        no readable genome.json. This is the accessor's path; construction is the birth path. A
+        readable v1 file IS loaded (and upgraded in place) — preservation, not birth."""
         try:
             self = cls.__new__(cls)
             self.config = config
             self.seed = None
             self.born_ts = None
             self.latents, self.genes, self.stamp_baselines = {}, {}, {}
+            self.morph = DEFAULT_MORPH
+            self.phenotype, self.alleles, self.stage_history = {}, {}, []
             return self if self._load() else None
         except Exception:  # noqa: BLE001 - fail-open by contract
             return None
@@ -188,19 +567,36 @@ class Genome:
                                     for ax in BASELINE_LOADINGS}
             self.seed = d.get("seed")
             self.born_ts = d.get("born_ts")
+            # v2 expression: derive from the STORED seed, then stored values win field-by-field
+            # (belt and braces — derivation drift can never mutate a living creature).
+            try:
+                seed_i = int(self.seed)
+            except (TypeError, ValueError):
+                seed_i = 0                 # declared: a seedless hand-edit derives from 0, stably
+            derived = draw_germline(seed_i)
+            self.morph = d.get("morph") if d.get("morph") in MORPHS else derived["morph"]
+            self.phenotype = _sane_phenotype(d.get("phenotype"), derived["phenotype"])
+            self.alleles = _sane_alleles(d.get("alleles"), derived["alleles"])
+            self.stage_history = [h for h in (d.get("stage_history") or [])
+                                  if isinstance(h, dict)]
+            if int(d.get("v", 1) or 1) < GENOME_V:
+                self.save()                # the v1→v2 upgrade persists in place (best-effort)
             return True
         except Exception:  # noqa: BLE001 - missing/corrupt file => not loaded
             return False
 
     def _birth(self) -> None:
-        """The once-only draw. RNG seeded from os.urandom; the seed is persisted for lineage."""
+        """The once-only draw. RNG seeded from os.urandom; the seed is persisted for lineage. All
+        draws run through draw_germline — birth and v1-upgrade share one derivation, one order."""
         self.seed = int.from_bytes(os.urandom(8), "big")
-        rng = random.Random(self.seed)
-        # Fixed LATENTS order so the same seed always reproduces the same creature.
-        self.latents = {n: round(_clamp(rng.gauss(0.0, LATENT_SD), -LATENT_BOUND, LATENT_BOUND), 4)
-                        for n in LATENTS}
+        germ = draw_germline(self.seed)
+        self.latents = germ["latents"]
         self.genes = express_genes(self.latents)
         self.stamp_baselines = express_baselines(self.latents)
+        self.morph = germ["morph"]
+        self.phenotype = germ["phenotype"]
+        self.alleles = germ["alleles"]
+        self.stage_history = []
         self.born_ts = time.time()
         self.save()
 
@@ -219,9 +615,30 @@ class Genome:
             return False
 
     def snapshot(self) -> dict:
-        return {"v": 1, "seed": self.seed, "born_ts": self.born_ts,
+        return {"v": GENOME_V, "seed": self.seed, "born_ts": self.born_ts,
                 "latents": dict(self.latents), "genes": dict(self.genes),
-                "stamp_baselines": dict(self.stamp_baselines)}
+                "stamp_baselines": dict(self.stamp_baselines),
+                "morph": self.morph,
+                "phenotype": {**self.phenotype,
+                              "anchors": [dict(a) for a in self.phenotype.get("anchors", [])]},
+                "alleles": {s: dict(e) for s, e in self.alleles.items()},
+                "stage_history": [dict(h) for h in self.stage_history]}
+
+    # --- expressed-allele composition ---------------------------------------------------------
+    def effective_genes(self) -> dict:
+        """The genes with every EXPRESSED allele's gene_mods composed INSIDE the declared clamps:
+        value = clamp(gene × multiplier, lo, hi), re-clamped per mod in declared slot order — a
+        modulated gene can never escape its band (the same law as a hand-edited file). Only
+        PERCEPTION_GENES are modulatable; anything else in a gene_mods dict is ignored, so no
+        table edit can ever reach wake_budget (the damper) through an allele."""
+        genes = dict(self.genes)
+        for var in expressed_marks(self):
+            for gname, mult in (var.get("gene_mods") or {}).items():
+                if gname not in GENE_LOADINGS or gname not in PERCEPTION_GENES:
+                    continue
+                _l, lo, hi = GENE_LOADINGS[gname]
+                genes[gname] = round(_clamp(genes.get(gname, 1.0) * float(mult), lo, hi), 4)
+        return genes
 
 
 # ==================================================================================================
@@ -254,12 +671,14 @@ def _read_existing(config) -> Genome | None:
 def gene(config, name: str, default: float = 1.0) -> float:
     """The multiplier consumers apply where a pressure constant is READ. FAIL-OPEN: with no genome
     readable (no config / no workspace / no file / corrupt file) it returns `default` (1.0) and
-    never raises — pre-genome behavior is byte-identical until a genome exists."""
+    never raises — pre-genome behavior is byte-identical until a genome exists. Reads the
+    EFFECTIVE genes: expressed-allele gene_mods composed inside the declared clamps (identical to
+    the raw genes until an allele actually expresses)."""
     try:
         g = _read_existing(config)
         if g is None:
             return float(default)
-        return float(g.genes.get(name, default))
+        return float(g.effective_genes().get(name, default))
     except Exception:  # noqa: BLE001 - fail-open by contract
         return float(default)
 
