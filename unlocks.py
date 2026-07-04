@@ -43,9 +43,10 @@ never what anything is worth — it is never imported by persona.py / level_gate
 level evidence), and no grant path touches XP, levels, bets, or quest adjudication.
 tests/test_unlocks.py enforces the import direction, same pattern as test_genome's ledger firewall.
 
-DARK (Pillars): a pure library. Nothing imports it from the tick loop yet; the cutover wires
-`grant()` to the quest seams, `adjudicate()` to the milestone call sites, `granted_tools()` under
-`tools.visible_tools`, and `pop_unannounced()` to the context renderer.
+WIRED (Pillars W2a, flag-gated `pillars_tool_unlocks_enabled`): `grant()` fires from the quest
+issuance/reward seams in eidos.py, `adjudicate()` from after_outcome + sleep_window (with the I8
+voice probe), `granted_tools()` feeds `tools.visible_tools`, and `pop_unannounced()` drains into
+the observation stream (system_window / body-fact turns).
 """
 from __future__ import annotations
 
