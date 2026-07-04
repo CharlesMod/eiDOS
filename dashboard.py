@@ -371,13 +371,27 @@ def _save_creature(config: Config, doc: dict) -> None:
 
 
 def _load_or_create_creature(config: Config) -> dict:
-    """Read creature.json, or lay a brand-new egg (fresh incarnation = new genome)."""
+    """Read creature.json, or lay a brand-new egg (fresh incarnation = new genome).
+
+    Seed unity (CREATURE_GENETICS.md red gate #5): the germline authority is
+    workspace/genome.json — drawn once at the creature's first breath. When laying a NEW egg,
+    adopt that seed so the dashboard creature, the behavioral genome, and the phenotype
+    descriptions are ONE individual. Only when no genome exists yet (dashboard polled before
+    eidos ever booted) does the egg fall back to its own draw — the pre-unification behavior."""
     with _CREATURE_LOCK:
         doc = _read_json(_creature_path(config))
         genome = doc.get("genome") or {}
         if doc.get("seed") and genome.get("v") == creature_gen.GENOME_VERSION:
             return doc
-        seed = int.from_bytes(os.urandom(8), "big")
+        seed = None
+        try:
+            germ = _read_json(config.workspace / "genome.json")
+            if germ.get("seed"):
+                seed = int(germ["seed"])
+        except Exception:  # noqa: BLE001 - a missing/corrupt germline never blocks the egg
+            seed = None
+        if seed is None:
+            seed = int.from_bytes(os.urandom(8), "big")
         doc = {
             "v": 1,
             "seed": seed,
