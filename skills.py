@@ -31,6 +31,7 @@ from typing import Optional
 
 from config import Config
 from tools import ToolResult, TOOLS, _kill_pid_tree  # _kill_pid_tree: hard-kill a subprocess tree
+from tools import _creature_root                     # the world skill code runs in (same cwd rule as bash)
 from skill_atoms import build_atoms, ATOM_NAMES  # M2: the in-scope vocabulary skills compose
 from skill_atoms import (                          # 3.3 composition: authoring-time cycle check + graph
     check_composition_cycle, static_calls_in_source, COMPOSITION_MAX_DEPTH,
@@ -284,6 +285,13 @@ def _dry_run(config: Config, name: str, version: str,
     skill_file = _skill_file(config, name, version)
     harness = HARNESS_TEMPLATE.format(
         kairos=repr(str(KAIROS_DIR)),
+        # The dry-run CALLS the skill, so it runs where the skill will LIVE: the creature's world
+        # (_creature_root — its home burrow, or the full workspace for the house-AI), the same cwd
+        # tool_bash stands on. Running here instead of the repo root is what makes the smoke call
+        # honest: a relative path that works now works live, and its droppings land in the world,
+        # not the source tree (the repo used to collect boss_habits.log / snapshot_*.jpg). Threaded
+        # from the caller's config for the same reason as `compose` below.
+        home=repr(str(_creature_root(config))),
         skill_file=repr(str(skill_file)),
         func=f"tool_{name}",
         sample_args=repr(json.dumps(_sample_args(args_schema) if strict_contract else {})),
@@ -297,7 +305,7 @@ def _dry_run(config: Config, name: str, version: str,
     try:
         proc = subprocess.run(
             [sys.executable, str(harness_path)],
-            cwd=str(KAIROS_DIR), capture_output=True, text=True, timeout=25,
+            cwd=str(_creature_root(config)), capture_output=True, text=True, timeout=25,
         )
     except subprocess.TimeoutExpired:
         return False, "dry-run timed out (>25s) — possible hang"
@@ -338,12 +346,15 @@ def _dry_run(config: Config, name: str, version: str,
 
 HARNESS_TEMPLATE = '''\
 import sys, os, json as _json
-os.chdir({kairos})
-sys.path.insert(0, {kairos})
+sys.path.insert(0, {kairos})   # repo modules import from here — inserted BEFORE any chdir moves the world
 from config import load_config, Config
 from tools import ToolResult
-cfg = load_config("config.toml")
+cfg = load_config(os.path.join({kairos}, "config.toml"))
 cfg.pillars_skill_composition_enabled = {compose}   # 3.3: match the authoring context's atom namespace
+if not os.path.isabs(cfg.embedding_model_dir):
+    # the embedding model is repo skeleton, not world — pin it before the chdir un-anchors it
+    cfg.embedding_model_dir = os.path.join({kairos}, cfg.embedding_model_dir)
+os.chdir({home})   # the creature's world: a skill's relative paths resolve in its home, never the repo
 code = open({skill_file}, encoding="utf-8").read()
 ns = {{"Config": Config, "ToolResult": ToolResult}}
 try:
@@ -381,18 +392,25 @@ except Exception as e:
 # JSON line on a sentinel-prefixed stdout line. Any load/exec failure prints a typed marker. The parent
 # HARD-KILLS this process on overrun, so a hang (while True / timeout-less socket) dies with the process
 # — no orphan thread, no tick freeze (the tick-342 fix done right).
+# It runs in the creature's world (cwd = _creature_root, the same ground tool_bash stands on): a skill's
+# './journal.md' is the very file its bash and write_file see. It used to run at the repo root, so the
+# creature was gaslit by its own body — write_file put the file in its home, the skill then opened the
+# same relative path against the repo and FileNotFoundError'd on a file it had just made.
 EXEC_HARNESS_TEMPLATE = '''\
 import sys, os, json as _json
-os.chdir({kairos})
-sys.path.insert(0, {kairos})
+sys.path.insert(0, {kairos})   # repo modules import from here — inserted BEFORE any chdir moves the world
 from config import load_config, Config
 from tools import ToolResult
 _SENT = "__EIDOS_SKILL_RESULT__"
 def _emit(obj):
     sys.stdout.write(_SENT + _json.dumps(obj) + "\\n"); sys.stdout.flush()
 try:
-    cfg = load_config("config.toml")
+    cfg = load_config(os.path.join({kairos}, "config.toml"))
     cfg.pillars_skill_composition_enabled = {compose}   # 3.3: match the live atom namespace (call in scope)
+    if not os.path.isabs(cfg.embedding_model_dir):
+        # the embedding model is repo skeleton, not world — pin it before the chdir un-anchors it
+        cfg.embedding_model_dir = os.path.join({kairos}, cfg.embedding_model_dir)
+    os.chdir({home})   # the creature's world: a skill's relative paths resolve in its home, never the repo
     args = _json.loads(sys.argv[1]) if len(sys.argv) > 1 else {{}}
     code = open({skill_file}, encoding="utf-8").read()
     ns = {{"Config": Config, "ToolResult": ToolResult}}
@@ -447,6 +465,7 @@ def run_skill_killable(config: Config, name: str, args: dict, timeout_s: float) 
     skill_file = _skill_file(config, name, _active_version(config, name))
     harness = EXEC_HARNESS_TEMPLATE.format(
         kairos=repr(str(KAIROS_DIR)),
+        home=repr(str(_creature_root(config))),   # the skill's world — the same cwd rule as tool_bash
         skill_file=repr(str(skill_file)),
         func=f"tool_{name}",
         compose=repr(bool(getattr(config, "pillars_skill_composition_enabled", False))),
@@ -469,7 +488,7 @@ def run_skill_killable(config: Config, name: str, args: dict, timeout_s: float) 
     try:
         proc = subprocess.Popen(
             [sys.executable, str(harness_path), args_json],
-            cwd=str(KAIROS_DIR), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cwd=str(_creature_root(config)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             **({"start_new_session": True} if os.name != "nt"
                else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}),
         )

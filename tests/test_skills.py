@@ -4,6 +4,11 @@ quarantine, and brief visibility.
 The manifest data these enforce came from a live run: bigprinter_status 0/8, query_klipper
 0/6, camera_snapshot 0/4 — all still 'active' and offered to the model every tick, because
 nothing ever culled a dead skill and stats were lifetime (so trust survived broken rewrites).
+
+Plus the skill WORLD: skill code executes in the creature's home (the same cwd tool_bash
+stands on), never the repo root. From a live run too: the 'log_entry' skill opened
+'nest/journal.md' relative to the repo and FileNotFoundError'd while the file sat in its
+home — and the repo root collected skill droppings (boss_habits.log, snapshot_*.jpg).
 """
 
 import sys
@@ -109,6 +114,67 @@ class TestSkillLifecycle(unittest.TestCase):
         self.assertEqual(info["active_version_uses"], 4)
         self.assertEqual(info["active_version_success_rate"], 0.5)
         self.assertEqual(info["uses"], 10)
+
+
+# A minimal skill whose only act is a RELATIVE write — where './probe.txt' lands IS the world
+# the skill executes in. It must be the same ground write_file/bash stand on.
+_DROPPER = """def tool_dropper(args, config):
+    open('./probe.txt', 'w', encoding='utf-8').write('here')
+    return ToolResult(output='dropped', full_output_path=None, success=True, duration_s=0.0)
+"""
+
+
+class TestSkillWorld(unittest.TestCase):
+    """Skill code (the create-time smoke call AND every runtime invoke) executes in the
+    creature's world — tools._creature_root, the same cwd tool_bash uses — never the repo."""
+
+    def setUp(self):
+        self.config = Config()
+        self.config.workspace_dir = tempfile.mkdtemp()
+        self.config.creature_mode = True
+        self.config.pillars_killable_skills_enabled = True   # the subprocess execution path
+
+    def tearDown(self):
+        TOOLS.pop("dropper", None)
+
+    def _repo_probe(self):
+        return Path(skills.KAIROS_DIR) / "probe.txt"
+
+    def test_skill_relative_write_lands_in_home_not_repo(self):
+        self.assertFalse(self._repo_probe().exists(),
+                         "stale probe.txt at the repo root — clean it before this test can pin anything")
+        r = skills.create_skill(self.config, "dropper", _DROPPER)
+        self.assertTrue(r.get("success"), r.get("errors"))
+        home = Path(self.config.workspace_dir) / "home"
+        # The create-time smoke call already ran the skill once — in the world, not the repo.
+        self.assertTrue((home / "probe.txt").exists(),
+                        "dry-run smoke call did not execute in the creature home")
+        self.assertFalse(self._repo_probe().exists(),
+                         "dry-run smoke call wrote into the repo root — the wrong world")
+        (home / "probe.txt").unlink()
+        # A runtime invoke through the live registry, exactly as the tick loop dispatches it.
+        res = TOOLS["dropper"]({}, self.config)
+        self.assertTrue(res.success, res.output)
+        self.assertTrue((home / "probe.txt").exists(),
+                        "skill invoke did not execute in the creature home")
+        self.assertFalse(self._repo_probe().exists(),
+                         "skill invoke wrote into the repo root — the wrong world")
+
+    def test_house_ai_skill_runs_in_the_workspace(self):
+        # creature_mode OFF: bash's world is the full workspace (no home burrow) — skills follow
+        # the very same decision (_creature_root), so the house-AI path mirrors bash exactly too.
+        self.config.creature_mode = False
+        self.assertFalse(self._repo_probe().exists())
+        r = skills.create_skill(self.config, "dropper", _DROPPER)
+        self.assertTrue(r.get("success"), r.get("errors"))
+        res = TOOLS["dropper"]({}, self.config)
+        self.assertTrue(res.success, res.output)
+        ws = Path(self.config.workspace_dir)
+        self.assertTrue((ws / "probe.txt").exists(),
+                        "house-AI skill did not execute in the workspace")
+        self.assertFalse((ws / "home" / "probe.txt").exists())   # home is a creature-mode concept
+        self.assertFalse(self._repo_probe().exists(),
+                         "house-AI skill wrote into the repo root — the wrong world")
 
 
 if __name__ == "__main__":

@@ -32,6 +32,8 @@ check here and with `check_tools` to confirm it doesn't already exist. It almost
   or hit the TTS endpoint, ONE `http_request` call does it — no skill, no requests.
 - `create_skill(skill_name, skill_code)` validates, saves, and hot-loads a skill — callable next tick as
   `<tool>name</tool>` (NOT via bash). `edit_skill` improves one; `rollback_skill` reverts.
+- → Skills run IN YOUR HOME: a relative path in skill code (`nest/journal.md`, `./data.txt`) is the
+  SAME file your bash and write_file see. All your hands stand on the same ground — no path juggling.
 - → Skill LIFECYCLE is automatic and judged on the RUNNING version: 5+ successful uses ⇒ `trusted`;
   5+ uses with ZERO successes ⇒ **quarantined** (auto-disabled, removed from your tools — it stops
   appearing because it never worked, not because it was deleted). Revive one by FIXING it with
