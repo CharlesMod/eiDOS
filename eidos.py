@@ -577,6 +577,9 @@ _PILLARS_WIRED_FLAGS = (
     "pillars_mastery_gates_enabled",     # 4.3 tier outcomes + level candidacy through the gate
     "pillars_learning_xp_enabled",       # 4.2 progress tracker fed from adjudicated wrongness
     "pillars_administrator_enabled",     # 5.2 event-driven check-ins (lazy llm; never on a timer)
+    "pillars_tool_unlocks_enabled",      # 5.x TOOL_PROGRESSION ladder: unit grants at the quest
+                                         #     seams, milestone adjudication + I8 probe, the felt
+                                         #     moment, stage-expressed alleles + phenotype artifact
 )
 
 
@@ -584,6 +587,47 @@ def _pillars_any_enabled(config) -> bool:
     """True iff any wired pillars flag is on. False (the default) keeps the hub un-constructed —
     the flags-off ground state adds zero work and zero imports to the tick."""
     return any(getattr(config, f, False) for f in _PILLARS_WIRED_FLAGS)
+
+
+# --- TOOL_PROGRESSION I8: the organ-reachability probe (decision #1) -----------------------------
+# A granted limb that 500s is a felt lie: a service-gated unit (senses) holds PENDING until the
+# organ actually answers. The probe is a bounded HTTP round-trip, memoized per process so per-tick
+# adjudication never hammers a dead port (voice :8098 is down on Sprinter today — the hold is the
+# expected steady state there). Tests inject their own probe through the hub's `unlock_probe` seam.
+_UNLOCK_PROBE_TIMEOUT_S = 1.0    # declared: the reachability check costs the adjudicator at most
+                                 # ~1s per TTL window — bounded, never a stalled tick
+_UNLOCK_PROBE_TTL_S = 60.0       # declared: memoize the answer ~60s; a just-started organ lands
+                                 # its held grant within a minute, a dead one costs ~1s/minute
+_unlock_probe_cache: dict = {}   # service -> (monotonic_ts, answered)
+
+
+def _probe_service(config, service: str) -> bool:
+    """Does the named organ actually answer (I8)? `voice` = an HTTP round-trip to the voice
+    service (config.voice_port, default 8098). ANY HTTP status counts as an answer — a 404 is
+    still a live socket — while refusal/timeout is silence. Unknown service names never answer
+    (an organ is never guessed back). Never raises."""
+    now = time.monotonic()
+    hit = _unlock_probe_cache.get(service)
+    if hit is not None and (now - hit[0]) < _UNLOCK_PROBE_TTL_S:
+        return bool(hit[1])
+    answered = False
+    if service == "voice":
+        try:
+            import urllib.error
+            import urllib.request
+            port = int(getattr(config, "voice_port", 8098) or 8098)
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/",
+                                            timeout=_UNLOCK_PROBE_TIMEOUT_S):
+                    answered = True
+            except urllib.error.HTTPError:
+                answered = True    # an HTTP error IS an answer — the organ is alive
+            except Exception:  # noqa: BLE001 - refused / timed out / unreachable: no answer
+                answered = False
+        except Exception:  # noqa: BLE001 - probing must never wound the adjudicator
+            answered = False
+    _unlock_probe_cache[service] = (now, answered)
+    return answered
 
 
 class _Pillars:
@@ -611,6 +655,10 @@ class _Pillars:
         self.injected = []           # engrams this tick's recall injected (the bet slate, 2.3)
         self._persona = None         # the live persona dict, refreshed each after_outcome
         self._level_snapshot = None  # 4.3: the gate-authoritative level (only apply_level_up moves it)
+        self.unlock_probe = None     # I8 TEST SEAM: inject a callable(service)->bool; None = the
+                                     # process-memoized voice probe (_probe_service)
+        self._stage_seen = None      # stage-transition memo: skip the genome read while the
+                                     # derived stage hasn't moved (ground truth stays the genome)
         self._aden_mark = time.monotonic()   # wake-time accounting anchor for adenosine (2.4)
         self._last_anomaly_sig = ""  # 4.4 anomaly source de-dup (report by exception, once per streak)
         c = config
@@ -696,7 +744,8 @@ class _Pillars:
         for name, flag in (("sleep", "pillars_sleep_engine_enabled"),
                            ("expectations", "pillars_expectations_enabled"),
                            ("gates", "pillars_mastery_gates_enabled"),
-                           ("administrator", "pillars_administrator_enabled")):
+                           ("administrator", "pillars_administrator_enabled"),
+                           ("unlocks", "pillars_tool_unlocks_enabled")):
             if getattr(c, flag, False):
                 parts.append(name)
         return ", ".join(parts) or "(none)"
@@ -930,6 +979,21 @@ class _Pillars:
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars level gate failed: %s", e)
 
+        # TOOL_PROGRESSION milestones + the felt moment: glue adjudicates the growing body over
+        # the SAME typed stats dict quest criteria read (a quest pass THIS tick already counts),
+        # and any granted-but-unrendered unit lands in the observation stream this tick. Then the
+        # CREATURE_GENETICS stage seam: metamorphosis reads the environment at a stage crossing.
+        # Both fail-open (I5), both dark unless the ladder flag is on.
+        if getattr(c, "pillars_tool_unlocks_enabled", False):
+            try:
+                self._unlock_milestones(persona, tick=tick)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars unlock milestones failed: %s", e)
+            try:
+                self._stage_transition(persona)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars stage transition failed: %s", e)
+
     # --- quests: stats surface, reward sink, closure bookkeeping, event-driven cadence ------------
     def _quest_stats(self, persona) -> dict:
         """The typed stats dict criteria are checked against (§0.5: glue judges — persona counters,
@@ -981,14 +1045,37 @@ class _Pillars:
 
     def _quest_reward_sink(self, cfg, quest) -> None:
         """Payout through the standard XP path WITH config threaded (4.3: the gate holds the level;
-        persona.award_xp only consults the mastery flag when it can see config)."""
+        persona.award_xp only consults the mastery flag when it can see config).
+
+        With the ladder on, "it pays" pays LIMBS, not just XP (TOOL_PROGRESSION): an
+        unlock-kind reward grants its unit through unlocks.grant — the REWARD_UNLOCK seam
+        quests.py reserves (U6 workshop = genesis-03's pass reward) — and its riding XP leg
+        (quests.reward_xp_amount) still pays through the standard path. Ladder off keeps the
+        pre-ladder behavior byte-identical: only plain XP rewards pay, non-XP kinds are recorded
+        on the quest and nothing else moves."""
         try:
             reward = quest.reward or {}
-            if reward.get("kind") != "xp" or self._persona is None:
+            import quests as _quests
+            if reward.get("kind") == _quests.REWARD_XP:
+                if self._persona is None:
+                    return
+                import persona as _persona_mod
+                _persona_mod.award_xp(self._persona, int(reward.get("amount", 0)),
+                                      reason=f"quest:{quest.id}", config=cfg)
                 return
-            import persona as _persona_mod
-            _persona_mod.award_xp(self._persona, int(reward.get("amount", 0)),
-                                  reason=f"quest:{quest.id}", config=cfg)
+            if not getattr(self.config, "pillars_tool_unlocks_enabled", False):
+                return                      # dark: non-XP legs are a later phase's job (as before)
+            xp_leg = _quests.reward_xp_amount(reward)   # the XP riding alongside an unlock reward
+            if xp_leg > 0 and self._persona is not None:
+                import persona as _persona_mod
+                _persona_mod.award_xp(self._persona, xp_leg,
+                                      reason=f"quest:{quest.id}", config=cfg)
+            if reward.get("kind") == _quests.REWARD_UNLOCK:
+                what = str(reward.get("what") or "")
+                if what:
+                    import unlocks as _unlocks
+                    _unlocks.grant(cfg if cfg is not None else self.config, what,
+                                   f"quest_reward:{quest.id}")
         except Exception as e:  # noqa: BLE001
             logger.warning("pillars quest reward failed: %s", e)
 
@@ -1090,8 +1177,23 @@ class _Pillars:
         except Exception as e:  # noqa: BLE001
             logger.warning("pillars issue_next failed: %s", e)
             return
-        if issued is None or getattr(issued, "hidden", False):
-            return    # silence, or hidden — achievements announce only on completion (§7)
+        if issued is None:
+            return    # silence — the correct default (§7)
+        # TOOL_PROGRESSION issuance-grant (U2/U3/U5): the unit this quest carries starts existing
+        # BEFORE the window that names it is written — the System's window IS the moment the tool
+        # exists; a window naming a not-yet-real name would be a felt lie (§0). The grant's own
+        # felt moment ([SYSTEM] GRANTED: …) renders first, then the quest window that trains it.
+        if getattr(self.config, "pillars_tool_unlocks_enabled", False):
+            unit_id = str(getattr(issued, "grants_unit", "") or "")
+            if unit_id:
+                try:
+                    import unlocks as _unlocks
+                    _unlocks.grant(self.config, unit_id, f"quest_issue:{issued.id}")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("pillars issuance grant failed: %s", e)
+            self._announce_unlocks(tick)
+        if getattr(issued, "hidden", False):
+            return    # hidden — achievements announce only on completion (§7)
         try:
             import quests as _quests
             text = (f"[SYSTEM] QUEST ISSUED [T{issued.tier}] — REWARD "
@@ -1100,6 +1202,85 @@ class _Pillars:
                                              "success": True, "output": text})
         except Exception as e:  # noqa: BLE001
             logger.warning("pillars quest issuance notice failed: %s", e)
+
+    # --- TOOL_PROGRESSION: the growing body (milestones, the felt moment, stage expression) ------
+    def _unlock_probe_fn(self):
+        """The I8 organ-reachability probe handed to unlocks.adjudicate: the injected test seam
+        (self.unlock_probe) when present, else the process-memoized voice probe — bounded ~1s,
+        cached ~60s, so adjudication never hammers a dead port (voice is down on Sprinter today)."""
+        if self.unlock_probe is not None:
+            return self.unlock_probe
+        cfg = self.config
+        return lambda service: _probe_service(cfg, service)
+
+    def _unlock_milestones(self, persona, *, tick: int) -> None:
+        """Milestone adjudication (§0.5: glue judges over the SAME typed stats dict quest criteria
+        read — never the model's word), then render any waiting felt moments. A service-gated unit
+        whose organ doesn't answer the probe holds PENDING and is retried here every call (I8)."""
+        if not getattr(self.config, "pillars_tool_unlocks_enabled", False):
+            return
+        try:
+            import unlocks as _unlocks
+            _unlocks.adjudicate(self.config, self._quest_stats(persona),
+                                probe=self._unlock_probe_fn())
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars unlock adjudication failed: %s", e)
+        self._announce_unlocks(tick)
+
+    def _announce_unlocks(self, tick: int) -> None:
+        """Drain the one-shot announcement queue into the observation stream — the felt moment.
+        Register "system" → ONE system_window observation (VERBATIM in the history thread, the
+        same mechanism as quest issuance/settlement: the System pays capability on-screen).
+        Register "body" → the plain-notice kind ("dream"), which the history thread renders as a
+        bracketed body-fact user turn exactly like the sleep notice — a maturation, felt, never a
+        payment. The unit's bracketed text is unwrapped so it reads as the notice's own clause.
+        The queue's rendered-flags persist in the books, so a crash never replays or eats one."""
+        if not getattr(self.config, "pillars_tool_unlocks_enabled", False):
+            return
+        try:
+            import unlocks as _unlocks
+            for note in _unlocks.pop_unannounced(self.config):
+                text = str(note.get("text") or "")
+                if not text:
+                    continue
+                if note.get("register") == _unlocks.REGISTER_SYSTEM:
+                    append_observation(self.config, {"tick": tick, "tool": "system_window",
+                                                     "success": True, "output": text})
+                else:
+                    append_observation(self.config, {"tick": tick, "tool": "dream",
+                                                     "success": True,
+                                                     "output": text.strip("[]")})
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars unlock announcement failed: %s", e)
+
+    def _stage_transition(self, persona) -> None:
+        """CREATURE_GENETICS phase D at the loop seam: derive the life stage EXACTLY the way the
+        nap curve does (creature_gen.stage_for over the live persona level + creature.json's
+        hatched flag — read-only, no new stage system), and on a crossing — once — adjudicate the
+        dormant alleles over the typed stats dict (metamorphosis reads the environment), persist
+        the genome, and rewrite workspace/phenotype.json. The single writer stays this loop; a
+        creature with no genome on record is skipped (this seam never births one)."""
+        import creature_gen
+        level = int((persona or {}).get("level", 1) or 1)
+        try:
+            cj = json.loads((self.config.workspace / "creature.json").read_text(encoding="utf-8"))
+            hatched = bool(cj.get("hatched", False))
+        except Exception:  # noqa: BLE001 - no creature.json yet: infer from level (neuromod's
+            hatched = level > 1              # rule — egg and hatchling behave the same here)
+        stage = creature_gen.stage_for(level, hatched)
+        if stage == self._stage_seen:
+            return                           # cheap per-tick path: the stage hasn't moved
+        import genome as _genome
+        g = _genome.Genome.load(self.config)
+        if g is None:
+            return                           # no genome on record — nothing to express, retry later
+        last = g.stage_history[-1].get("stage") if g.stage_history else None
+        if last != stage:
+            _genome.express_alleles(g, self._quest_stats(persona), stage)
+            g.save()                         # the caller persists at the seam (express_alleles' contract)
+            import phenotype as _phenotype
+            _phenotype.write_phenotype(self.config, g, stage)
+        self._stage_seen = stage
 
     # --- the sleep window (2.4 cutover entrypoint + the sleep-completion events) ------------------
     def sleep_window(self, *, tick: int, persona, observations) -> object:
@@ -1144,6 +1325,14 @@ class _Pillars:
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars cadence advance failed: %s", e)
             self._issue_next(persona, tick=tick)
+        # TOOL_PROGRESSION milestones at the boundary (same guarded pattern as the organ hooks):
+        # sleeps.total just advanced, so U1 lands on the first wake and the senses hold retries —
+        # the first felt moment arrives WITH the waking, not a tick later.
+        if getattr(c, "pillars_tool_unlocks_enabled", False):
+            try:
+                self._unlock_milestones(persona, tick=tick)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars unlock milestones failed: %s", e)
         self._event("sleep_complete", persona)
         return report
 
@@ -1796,7 +1985,12 @@ def run_loop(config: Config, persona=None, wal=None):
         if getattr(config, "llm_grammar_enabled", True) and not config.mock_mode:
             try:
                 from grammar import tick_grammar_cached
-                from tools import TOOLS as _live_tools
+                from tools import visible_tools
+                # The grammar is built from the ONE accessor every surface reads (TOOL_PROGRESSION):
+                # a locked name is UNREPRESENTABLE at the sampler. Ladder off → visible_tools IS
+                # the registry object, so the cached grammar is byte-identical to the pre-ladder
+                # build (tick_grammar_cached keys on the sorted name tuple).
+                _live_tools = visible_tools(config)
                 # Boss waiting → require_reply so the reply is generated FIRST and streams to
                 # TTS while the rest of the tick (tool call) is still decoding.
                 tick_grammar = tick_grammar_cached(_live_tools.keys(), require_reply=boss_waiting)

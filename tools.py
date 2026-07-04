@@ -1004,11 +1004,14 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                                      daemon=True, name=f"job-waiter-{jobname}").start()
                 except Exception:  # noqa: BLE001
                     pass
+                # §0: the check-hint names bg_check only where bg_check exists (house mode).
+                _check_hint = (f", or check it with bg_check {{\"name\":\"{jobname}\"}}"
+                               if not _ladder_active(config) else "")
                 return ToolResult(
                     output=(f"AUTO-BACKGROUNDED after {config.cmd_timeout_s}s: still running, so it "
                             f"was moved to the background as job '{jobname}' (PID {proc.pid}). The "
                             f"loop is NOT blocked — go do other work now; the result will arrive "
-                            f"tagged [↩ job {jobname}], or check it with bg_check {{\"name\":\"{jobname}\"}}."),
+                            f"tagged [↩ job {jobname}]{_check_hint}."),
                     full_output_path=str(out_path),
                     success=True,
                     duration_s=time.monotonic() - start,
@@ -1815,7 +1818,12 @@ def tool_list_skills(args: dict, config: Config) -> ToolResult:
             lines.append(f"  - {name} v{info['version']} [{info['status']}]{rate_s} "
                          f"— {info['description'][:80]}")
     else:
-        lines.append("\nYOUR SKILLS: (none yet — author one with create_skill)")
+        # §0: the authoring hint may only name create_skill where create_skill exists. With the
+        # ladder off, visible_tools IS the registry and the line stays byte-identical.
+        if "create_skill" in visible_tools(config):
+            lines.append("\nYOUR SKILLS: (none yet — author one with create_skill)")
+        else:
+            lines.append("\nYOUR SKILLS: (none yet)")
     return ToolResult(output="\n".join(lines), full_output_path=None, success=True, duration_s=0)
 
 
@@ -2212,6 +2220,31 @@ def tool_speak(args: dict, config: Config) -> ToolResult:
                       full_output_path=None, success=True, duration_s=0)
 
 
+# Each manual topic page, gated by the ONE tool it teaches (§0: the manual has no page for a tool
+# that does not exist in the creature's world; house mode shows everything). Declared order = the
+# manual's own. `cpu` rides on bg_run and `devices` on http_probe — pages built on primitives the
+# creature universe excludes entirely, so in creature mode those pages never render.
+_MANUAL_TOPIC_GATES: dict[str, str] = {
+    "tts": "speak", "vision": "vision", "ask_ai": "ask_ai", "network": "net_scan",
+    "devices": "http_probe", "cpu": "bg_run", "delegate": "delegate",
+}
+
+
+def _visible_manual_topics(config):
+    """The topic pages that exist in this world — None means NO filtering (house mode / ladder
+    off), keeping every render byte-identical to the pre-ladder behavior."""
+    if not _ladder_active(config):
+        return None
+    vis = visible_tools(config)
+    return {t for t, gate in _MANUAL_TOPIC_GATES.items() if gate in vis}
+
+
+def _manual_section_topic(s: str) -> str:
+    """The topic word of a '## <topic> — ...' manual section ('' for the preamble)."""
+    first = s.strip().splitlines()[0] if s.strip() else ""
+    return first[3:].split()[0].strip().lower() if first.startswith("## ") and first[3:].split() else ""
+
+
 def tool_manual(args: dict, config: Config) -> ToolResult:
     """Read your OPERATING MANUAL — tested how-to (exact endpoints, payloads, working examples) for your
     big-lift features. Pass 'topic' (tts/vision/ask_ai/network/devices/cpu/delegate) for one section, or nothing
@@ -2226,8 +2259,17 @@ def tool_manual(args: dict, config: Config) -> ToolResult:
         text = path.read_text(encoding="utf-8")
     except Exception as e:  # noqa: BLE001
         return ToolResult(output=f"manual unavailable: {e}", full_output_path=None, success=False, duration_s=0)
+    allowed = _visible_manual_topics(config)   # None = house mode / ladder off: no filtering
+    if allowed is not None:
+        # The footer coaches a self-edit workflow that is not part of the creature universe (§0).
+        text = re.sub(r"\n---\n\n_When something here.*$", "", text, flags=re.S)
+    sections = re.split(r"\n(?=## )", text)
     if not topic:
-        return ToolResult(output=text, full_output_path=None, success=True, duration_s=0)
+        if allowed is None:
+            return ToolResult(output=text, full_output_path=None, success=True, duration_s=0)
+        parts = [s.strip() for s in sections if _manual_section_topic(s) in allowed]
+        return ToolResult(output=("\n\n".join(parts) if parts else "The manual has no pages yet."),
+                          full_output_path=None, success=True, duration_s=0)
     syn = {"speak": "tts", "voice": "tts", "say": "tts", "audio": "tts",
            "see": "vision", "image": "vision", "look": "vision",
            "think": "ask_ai", "ai": "ask_ai", "reason": "ask_ai", "summarize": "ask_ai",
@@ -2238,17 +2280,26 @@ def tool_manual(args: dict, config: Config) -> ToolResult:
            "pi": "delegate", "coder": "delegate", "agent": "delegate",
            "offload": "delegate", "handoff": "delegate", "coding": "delegate"}
     want = syn.get(topic, topic)
-    sections = re.split(r"\n(?=## )", text)
+    # §0 indistinguishability: a topic whose page does not exist in this world answers EXACTLY
+    # like a topic that never existed — same wording, and the topic list names only what IS.
+    topics_s = (", ".join(t for t in _MANUAL_TOPIC_GATES if allowed is None or t in allowed)
+                or "(none)")
+    no_match = ToolResult(
+        output=f"No manual section matched '{topic}'. Topics: {topics_s}. "
+               f"Call manual {{}} (no topic) for the whole manual.",
+        full_output_path=None, success=True, duration_s=0)
+    if allowed is not None and want not in allowed:
+        return no_match
     for s in sections:
         first = s.strip().splitlines()[0].lower() if s.strip() else ""
         if first.startswith(f"## {want}"):
             return ToolResult(output=s.strip(), full_output_path=None, success=True, duration_s=0)
-    for s in sections:  # fallback: keyword anywhere in a section
+    for s in sections:  # fallback: keyword anywhere in a section (only sections of this world)
+        if allowed is not None and _manual_section_topic(s) not in allowed:
+            continue
         if want in s.lower():
             return ToolResult(output=s.strip(), full_output_path=None, success=True, duration_s=0)
-    return ToolResult(output=f"No manual section matched '{topic}'. Topics: tts, vision, ask_ai, network, "
-                      f"devices, cpu, delegate. Call manual {{}} (no topic) for the whole manual.",
-                      full_output_path=None, success=True, duration_s=0)
+    return no_match
 
 
 # --- Tool registry ---
@@ -2485,6 +2536,53 @@ def register_predict_tool(config: Config) -> bool:
 # NOT in this set is therefore a skill, and gets the wall-clock watchdog below.
 _BUILTIN_TOOL_NAMES = frozenset(TOOLS)
 
+# Builtins that join TOOLS only AFTER import, behind their own flag — the snapshot above misses
+# them, but they are still PLATFORM tools (lockable units), never a creature's self-authored skill.
+# `predict` registers via register_predict_tool (4.1) and belongs to the foresight unit.
+_FLAG_REGISTERED_BUILTINS = frozenset({"predict"})
+_EVER_BUILTIN_NAMES = _BUILTIN_TOOL_NAMES | _FLAG_REGISTERED_BUILTINS
+
+# Registry aliases: alias name -> the canonical tool it rides on. An alias exists exactly when its
+# canonical tool exists — aliases travel with their organ (TOOL_PROGRESSION: "aliases/satellites
+# travel together"). `check_tools` is deliberately NOT here: the unit table makes it its own
+# newborn organ (proprioception), not a satellite of list_skills, even though they share a handler.
+TOOL_ALIASES: dict[str, str] = {
+    "fetch": "http_request",
+    "http": "http_request",
+    "see": "vision",
+}
+
+
+def _ladder_active(config) -> bool:
+    """True when the tool-progression ladder governs what exists in the creature's world
+    (creature mode AND pillars_tool_unlocks_enabled). Every §0 wording fork keys on this, so a
+    flag-off run keeps every string byte-identical to the pre-ladder behavior."""
+    return bool(getattr(config, "creature_mode", False)
+                and getattr(config, "pillars_tool_unlocks_enabled", False))
+
+
+def visible_tools(config) -> dict[str, Callable[[dict, "Config"], ToolResult]]:
+    """The registry as the creature's world sees it (TOOL_PROGRESSION: ONE accessor, five
+    consumers — grammar, prompt, check_tools, manual, dispatch). House mode or ladder off returns
+    TOOLS ITSELF (the very object), so every consumer stays byte-identical pre-cutover. Ladder
+    active returns a filtered COPY — a pure read, no global mutation (register_predict_tool owns
+    the only registry mutations):
+      · every granted unit's tools (unlocks.granted_tools — fail-open to the newborn floor),
+      · registry aliases of granted tools (an alias travels with its organ),
+      · every hot-loaded self-authored skill (a creature's own makings are never locked).
+    A name absent here DOES NOT EXIST in the creature's world (§0): the grammar cannot emit it,
+    check_tools doesn't show it, the manual has no page for it, dispatch treats it as unknown."""
+    if config is None or not _ladder_active(config):
+        return TOOLS
+    try:
+        from unlocks import granted_tools
+        granted = set(granted_tools(config))    # never raises, never empty (newborn floor)
+    except Exception:  # noqa: BLE001 - a broken unlocks MODULE is a platform defect, not a lived
+        return TOOLS   # state: keep the mind its body rather than amputate it blind
+    granted.update(alias for alias, canon in TOOL_ALIASES.items() if canon in granted)
+    return {name: fn for name, fn in TOOLS.items()
+            if name in granted or name not in _EVER_BUILTIN_NAMES}
+
 _TOOL_ARG_MODELS: dict[str, type[_ToolArgs]] = {
     "bash": BashArgs,
     "write_file": WriteFileArgs,
@@ -2572,6 +2670,13 @@ def _run_skill_under_watchdog(call: ToolCall, handler: Callable, config: Config,
     th.start()
     th.join(timeout_s)
     if th.is_alive():
+        # §0: the fix-hint's tail names the net primitives / bg_run only where they exist (house
+        # mode); in the creature's world those names were never taught and never will be.
+        _tail = ("or compose the built-in bounded primitives (tcp_probe / http_probe / net_scan / "
+                 "udp_listen). For genuinely long work, dispatch it with bash/bg_run instead of "
+                 "doing it inline."
+                 if not _ladder_active(config) else
+                 "For genuinely long work, dispatch it with bash instead of doing it inline.")
         return ToolResult(
             output=(
                 f"WATCHDOG: skill '{call.tool}' ran past {timeout_s:.0f}s and was ABANDONED so the tick "
@@ -2579,9 +2684,7 @@ def _run_skill_under_watchdog(call: ToolCall, handler: Callable, config: Config,
                 f"min). Its call is still running detached and will be cleaned up on the next eidos "
                 f"restart. FIX THE SKILL with edit_skill: put an explicit timeout on EVERY network / HTTP "
                 f"/ socket / subprocess call — e.g. requests.get(url, timeout=5), "
-                f"socket.create_connection(addr, timeout=5), subprocess.run(..., timeout=10) — or compose "
-                f"the built-in bounded primitives (tcp_probe / http_probe / net_scan / udp_listen). For "
-                f"genuinely long work, dispatch it with bash/bg_run instead of doing it inline."),
+                f"socket.create_connection(addr, timeout=5), subprocess.run(..., timeout=10) — {_tail}"),
             full_output_path=None, success=False, duration_s=time.monotonic() - start,
             fail_kind="timeout")
     res = box.get("res")
@@ -2596,10 +2699,15 @@ def execute_tool(call: ToolCall, config: Config) -> ToolResult:
     """Look up and execute a tool by name. Never raises — a broken tool/skill
     returns a failed ToolResult instead of crashing the tick loop — and never blocks the tick loop
     longer than the skill watchdog (self-authored skills only; built-ins are bounded/trusted)."""
-    handler = TOOLS.get(call.tool)
+    # The dispatch backstop reads the SAME accessor as the grammar/prompt/check_tools (§0): with
+    # the ladder off this IS the TOOLS object (byte-identical); with it on, a locked builtin is
+    # absent from the registry and therefore INDISTINGUISHABLE from a name that never existed —
+    # same message shape, same fail_kind, and the listing names only what exists in this world.
+    registry = visible_tools(config)
+    handler = registry.get(call.tool)
     if not handler:
         return ToolResult(
-            output=f"Unknown tool: '{call.tool}'. Available: {', '.join(sorted(TOOLS.keys()))}",
+            output=f"Unknown tool: '{call.tool}'. Available: {', '.join(sorted(registry.keys()))}",
             full_output_path=None,
             success=False,
             duration_s=0,

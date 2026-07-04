@@ -1255,6 +1255,13 @@ def list_skills(config: Config) -> dict:
         }
     builtins = sorted(n for n in RESERVED_NAMES if n not in {
         "create_skill", "edit_skill", "list_skills", "rollback_skill"})
+    try:
+        from tools import visible_tools
+        vis = visible_tools(config)
+        if vis is not TOOLS:    # the creature ladder is active: a locked name does not exist (§0)
+            builtins = [n for n in builtins if n in vis]
+    except Exception:  # noqa: BLE001 - fail to the unfiltered (house) listing
+        pass
     return {"builtin_tools": builtins, "skills": skills,
             "loaded_in_registry": sorted(n for n in m.get("skills", {}) if n in TOOLS)}
 

@@ -387,6 +387,8 @@ class Config:
     pillars_skill_composition_enabled: bool = False    # 3.3 the `call` atom (skill→skill) + promotion-to-atom (depth cap, shared budget, static cycle check)
     # Phase 5 — the System (quests)
     pillars_quests_enabled: bool = False               # 5.1 quest engine (issue/track/adjudicate; one active quest)
+    # Phase 5.x — the tool-progression ladder (TOOL_PROGRESSION.md / CREATURE_GENETICS.md)
+    pillars_tool_unlocks_enabled: bool = False         # unit grants + visible_tools accessor + infant nap curve + stage-expressed alleles (unlocks.py); a locked tool does not exist (§0)
 
     @property
     def workspace(self) -> Path:
@@ -763,6 +765,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.pillars_skill_retire_unused_days = float(pillars.get("skill_retire_unused_days", config.pillars_skill_retire_unused_days))
         config.pillars_skill_composition_enabled = pillars.get("skill_composition_enabled", config.pillars_skill_composition_enabled)
         config.pillars_quests_enabled = pillars.get("quests_enabled", config.pillars_quests_enabled)
+        config.pillars_tool_unlocks_enabled = pillars.get("tool_unlocks_enabled", config.pillars_tool_unlocks_enabled)
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)
