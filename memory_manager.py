@@ -36,6 +36,7 @@ from typing import Any, Optional
 
 import engram
 from engram import Consolidator, Engram, EncodedAt, LongTermStore, INHERITED_STRENGTH_FLOOR
+from episodes import STEP_CHARS, SUMMARY_CHARS, clean_fragment
 
 # --- Declared knobs (§0.4: each a labeled design knob with its one-line justification) -----------
 RECALL_DEFAULT_BUDGET_CHARS = 1200  # declared: default char budget for a recall set when a caller
@@ -443,12 +444,14 @@ def _episode_src_id(rec: dict) -> str:
 def _episode_body(rec: dict) -> str:
     """Render an episode record as a readable situation→action→outcome digest (episodes.py's schema).
     The situation KEY is carried separately in stats for the recall cascade; the body is the prose a
-    recall would inject into context."""
-    step = _step_of(str(rec.get("key", "")))
+    recall would inject into context — so the step/summary shards are cleaned HERE too: legacy
+    records predate the source cleaning and carry plan-list markers and mid-word hard slices. A step
+    that cleans away entirely gets no "While ," shard."""
+    step = clean_fragment(_step_of(str(rec.get("key", ""))), STEP_CHARS)
     tool = str(rec.get("tool", "") or "")
     ok = bool(rec.get("success"))
     fail_kind = str(rec.get("fail_kind", "") or "")
-    summary = str(rec.get("summary", "") or "")
+    summary = clean_fragment(str(rec.get("summary", "") or ""), SUMMARY_CHARS)
     outcome = "succeeded" if ok else (f"failed ({fail_kind})" if fail_kind else "failed")
     parts = []
     if step:

@@ -847,15 +847,22 @@ class _Pillars:
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars progress observe failed: %s", e)
 
-        # 2.2 — encode this tick as fresh experience (emotional stamp read live inside the manager)
+        # 2.2 — encode this tick as fresh experience (emotional stamp read live inside the manager).
+        # The body is what a future recall injects verbatim — the step/summary shards are cleaned
+        # (plan-list markers, mid-word slices) or the recalled line reads back as a malformed
+        # thought; a step that cleans away entirely gets no "While ," shard.
         if self.manager is not None and tool and tool not in ("parse_error",):
             try:
+                import episodes as _ep
                 outcome = "succeeded" if success else (
                     f"failed ({fail_kind})" if fail_kind else "failed")
-                step = situation.split("|", 1)[1] if situation and "|" in situation else ""
+                step = _ep.clean_fragment(
+                    situation.split("|", 1)[1] if situation and "|" in situation else "",
+                    _ep.STEP_CHARS)
+                note = _ep.clean_fragment(summary, _ep.SUMMARY_CHARS)
                 parts = ([f"While {step},"] if step else []) + [f"`{tool}` {outcome}."]
-                if summary:
-                    parts.append(summary)
+                if note:
+                    parts.append(note)
                 self.manager.encode("episode", " ".join(parts), tick=tick,
                                     stats={"situation": situation or ""})
             except Exception as e:  # noqa: BLE001
@@ -1954,7 +1961,10 @@ def run_loop(config: Config, persona=None, wal=None):
             tick_tool_success = result.success
             tick_tool_duration = result.duration_s
             tick_fail_kind = result.fail_kind
-            tick_summary = (result.output or "")[:160].replace("\n", " ")
+            # The summary is the one-line digest that lands in episode/engram bodies — cut at a
+            # word boundary (a mid-word slice here survives every downstream cap unhealed).
+            import episodes as _ep
+            tick_summary = _ep.clean_fragment(result.output or "", _ep.SUMMARY_CHARS)
             tick_output = (result.output or "")[:2000]
 
             # --- Log observation ---

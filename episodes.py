@@ -31,6 +31,38 @@ _MAX_EPISODES = 2400         # self-bounding ring (no separate rotation needed) 
 _RECALL_WINDOW = 1200        # how far back recall scans
 _MISFIRE = ("system", "watchdog", "dream", "")   # tools that aren't real "actions"
 
+STEP_CHARS = 80              # a situation step is a one-line shard, not the whole plan — recall
+                             # bodies embed it verbatim ("While {step},"), so it stays short
+SUMMARY_CHARS = 160          # one-line outcome summary carried in episode records / engram bodies
+
+# Plan lines arrive as list items ("1. do x", "- do x"), and the digit collapse below turns the
+# number into "#." — bookkeeping from the PLAN surface, not part of the step, and it reads as
+# garbage when a body embeds it ("While #. create…"). The marker must be its own token (trailing
+# space or end) so a collapsed ip ("#.#.#.#") or a glob ("*.txt") is not eaten.
+_LIST_MARKER = re.compile(r"^(?:[-*•]|(?:\d+|#)[.)])(?:\s+|$)")
+
+
+def clean_fragment(text: str, limit: int = 0) -> str:
+    """Normalize a text shard bound for an episode/engram body or situation step: collapse
+    whitespace to one line, strip leading list markers (#., -, *, 1., 1)), and cut at a WORD
+    boundary with a real ellipsis when at/over `limit` — a hard slice ("…my progress, tho,")
+    reads back as a malformed thought when recall injects it. limit <= 0 means no length cap.
+    Idempotent: a shard already elided exactly at the cap is left alone, so the seams that
+    re-clean downstream (record → import → encode) never chew off another word per pass."""
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    while True:
+        t = _LIST_MARKER.sub("", s)
+        if t == s:
+            break
+        s = t
+    # >= (not >): a shard landing exactly ON the cap is, in practice, the residue of a legacy
+    # hard slice — healing it at a word boundary costs at most one word of a rare exact fit.
+    if limit > 0 and len(s) >= limit and not (len(s) == limit and s.endswith("…")):
+        cut = s[:limit]
+        cut = cut[:cut.rfind(" ")] if " " in cut else cut[:limit - 1]
+        s = cut.rstrip(" ,;:.—-") + "…"
+    return s
+
 # Phase 7a-2: semantic situation similarity. Vectors are stored per DISTINCT situation key (not per
 # episode) — keys are normalized, so the distinct set is small (tens) and self-bounds cheaply.
 _MAX_SITUATIONS = 256        # distinct situations to keep embedded (ring)
@@ -45,8 +77,9 @@ def _path(config):
 def _norm_step(text: str) -> str:
     s = (text or "").strip().lower()
     s = re.sub(r"\d+", "#", s)               # collapse numbers (ips/ports/counts)
-    s = re.sub(r"\s+", " ", s)
-    return s[:80]
+    # clean AFTER the collapse so a plan marker "1." (now "#.") goes too; record and recall both
+    # come through here, so a recurring situation still produces a recurring key
+    return clean_fragment(s, STEP_CHARS)
 
 
 def situation_key(config) -> str:
@@ -102,7 +135,7 @@ def record_episode(config, *, tick: int, tool: str, sig: str, fail_kind: str,
             key = situation_key(config)
         ep = {"tick": int(tick), "key": key, "tool": tool, "sig": str(sig or tool),
               "fail_kind": fail_kind or "", "success": bool(success),
-              "summary": (summary or "")[:160], "ts": _t.time()}
+              "summary": clean_fragment(summary, SUMMARY_CHARS), "ts": _t.time()}
         config.workspace.mkdir(parents=True, exist_ok=True)
         with open(_path(config), "a", encoding="utf-8") as f:
             f.write(json.dumps(ep) + "\n")

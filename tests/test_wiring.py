@@ -259,6 +259,24 @@ def test_memory_manager_recall_encode_and_bets(tmp_path):
     assert not [b for b in hub.bets.all_bets() if b["status"] == "open" and b["tick"] == 5]
 
 
+def test_encode_body_cleans_step_and_summary_shards(tmp_path):
+    """2.2 encode hygiene: the engram body is what recall injects verbatim — a plan-list marker
+    riding in on the situation step must be stripped, a marker-only step must drop the "While ,"
+    shard entirely, and the summary shard must land one-line and word-bounded."""
+    cfg = _mk_config(tmp_path, pillars_memory_engram_enabled=True,
+                     pillars_memory_manager_enabled=True)
+    hub = eidos._Pillars(cfg)
+    hub.after_outcome(tick=1, tool="bash", args={}, success=True, fail_kind="",
+                      situation="obj1|#. create a journal in the nest",
+                      summary="wrote the\nfirst entry", event_text="", persona=None)
+    hub.after_outcome(tick=2, tool="thought", args={}, success=False, fail_kind="timeout",
+                      situation="obj1|#.", summary="", event_text="", persona=None)
+    from engram import LongTermStore
+    bodies = sorted(e.body for e in LongTermStore(cfg).load() if e.kind == "episode")
+    assert bodies == ["While create a journal in the nest, `bash` succeeded. wrote the first entry",
+                      "`thought` failed (timeout)."]
+
+
 def test_context_manager_takeover_flag_on(tmp_path):
     """With the manager flag ON: the handed-in recall block renders and the legacy knowledge slice
     ('Possibly relevant from memory') stays retired from the durable blob."""

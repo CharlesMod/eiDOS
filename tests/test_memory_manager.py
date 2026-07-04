@@ -175,6 +175,45 @@ class TestImporter:
 
 
 # =================================================================================================
+class TestEpisodeBodyHygiene:
+    """The body is what a future recall injects verbatim — legacy records carry plan-list markers
+    and mid-word hard slices, and the body seam must not let them through as malformed shards."""
+
+    def _import_one(self, tmp_path, **rec):
+        cfg = _cfg(tmp_path)
+        _write_episode(cfg, **rec)
+        MemoryManager(cfg).import_episodes()
+        return LongTermStore(cfg).load()[0].body
+
+    def test_plan_list_marker_stripped_from_step(self, tmp_path):
+        body = self._import_one(tmp_path, tick=1, key="obj7|#. create a journal in the nest",
+                                tool="thought", success=True)
+        assert body == "While create a journal in the nest, `thought` succeeded."
+
+    def test_marker_only_step_drops_the_while_shard(self, tmp_path):
+        body = self._import_one(tmp_path, tick=1, key="obj7|#.", tool="bash", success=True)
+        assert body == "`bash` succeeded."          # no "While ," fragment
+
+    def test_legacy_midword_step_slice_healed_at_word_boundary(self, tmp_path):
+        # Pre-fix keys were cut step[:80] mid-word ("…my progress, tho") — the body render must
+        # back the shard off to a whole word and mark the cut honestly.
+        step = ("track my progress with the journal " * 3)[:80]
+        assert not step.endswith(" ") and step.endswith("p")     # a severed shard, like the live one
+        body = self._import_one(tmp_path, tick=1, key=f"obj7|{step}", tool="thought", success=True)
+        healed = body[len("While "):body.index(", `thought`")]
+        assert healed.endswith("…")
+        assert all(w in ("track", "my", "progress", "with", "the", "journal")
+                   for w in healed[:-1].split()), healed         # only whole words survive
+
+    def test_legacy_midword_summary_slice_healed(self, tmp_path):
+        summary = ("catalogued the services on the segment " * 5)[:160]
+        assert summary.endswith("cata")              # the severed stump a legacy [:160] leaves
+        body = self._import_one(tmp_path, tick=1, key="obj7|probe the lan", tool="bash",
+                                success=True, summary=summary)
+        assert body.endswith("segment…")             # backed off to a word boundary, not the stump
+
+
+# =================================================================================================
 class TestRecallCascade:
     def _seed_situations(self, cfg, *, strength=0.9):
         """Episodes across two objectives sharing a step, plus an unrelated one. All at equal

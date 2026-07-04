@@ -258,6 +258,77 @@ class TestSituationKey(unittest.TestCase):
         self.assertIn("|", k)
         self.assertIn("map the network", k)
 
+    def test_key_strips_plan_list_marker(self):
+        # A numbered plan line digit-collapses to "#." — the marker is plan bookkeeping, not part
+        # of the step, and it must not ride into the key (and from there into recall bodies).
+        from memory import write_plan
+        write_plan(self.config, "# Plan\n1. Create a journal.md file in the nest/ directory")
+        step = episodes.situation_key(self.config).split("|", 1)[1]
+        self.assertTrue(step.startswith("create a journal"), step)
+
+    def test_key_step_cut_lands_on_word_boundary(self):
+        from memory import write_plan
+        write_plan(self.config, "# Plan\n1. " + "reconfigure " * 12)   # far past the step cap
+        step = episodes.situation_key(self.config).split("|", 1)[1]
+        self.assertLessEqual(len(step), episodes.STEP_CHARS)
+        self.assertTrue(step.endswith("…"))
+        self.assertTrue(all(w == "reconfigure" for w in step[:-1].split()), step)
+
+
+class TestCleanFragment(unittest.TestCase):
+
+    def test_strips_leading_list_markers(self):
+        for raw in ("#. probe the lan", "- probe the lan", "* probe the lan",
+                    "1. probe the lan", "1) probe the lan", "2. - probe the lan"):
+            self.assertEqual(episodes.clean_fragment(raw, 80), "probe the lan", raw)
+
+    def test_marker_needs_its_own_token(self):
+        # A collapsed ip or a glob is content, not a list marker — it must survive.
+        self.assertEqual(episodes.clean_fragment("#.#.#.# answered the probe", 80),
+                         "#.#.#.# answered the probe")
+        self.assertEqual(episodes.clean_fragment("*.txt files moved", 80), "*.txt files moved")
+
+    def test_marker_only_cleans_to_empty(self):
+        self.assertEqual(episodes.clean_fragment("#.", 80), "")
+        self.assertEqual(episodes.clean_fragment("  - ", 80), "")
+
+    def test_collapses_whitespace_to_one_line(self):
+        self.assertEqual(episodes.clean_fragment("probe\nthe   lan\t now", 80), "probe the lan now")
+
+    def test_truncates_at_word_boundary_with_ellipsis(self):
+        s = episodes.clean_fragment("meaningful " * 20, 80)
+        self.assertLessEqual(len(s), 80)
+        self.assertTrue(s.endswith("…"))
+        self.assertTrue(all(w == "meaningful" for w in s[:-1].split()), s)   # no severed word
+
+    def test_heals_a_legacy_hard_slice_at_the_cap(self):
+        # Pre-fix records were cut s[:cap] mid-word; a shard landing exactly ON the cap is that
+        # residue, and a re-clean at the same cap must back it off to a word boundary.
+        sliced = ("track my progress with a journal and keep it honest " * 3)[:80]
+        healed = episodes.clean_fragment(sliced, 80)
+        self.assertTrue(healed.endswith("…"))
+        self.assertTrue(healed[:-1].strip().split()[-1] in
+                        "track my progress with a journal and keep it honest".split(), healed)
+
+    def test_idempotent_reclean_never_chews_another_word(self):
+        once = episodes.clean_fragment("meaningful " * 20, 80)
+        self.assertEqual(episodes.clean_fragment(once, 80), once)
+
+    def test_no_limit_means_no_cut(self):
+        long = "word " * 50
+        self.assertEqual(episodes.clean_fragment(long, 0), long.strip())
+
+    def test_record_cuts_summary_on_word_boundary(self):
+        cfg = _cfg()
+        episodes.record_episode(cfg, tick=1, tool="bash", sig="bash:probe", fail_kind="",
+                                success=True, summary="the probe returned " + "results " * 30,
+                                key="objA|probe")
+        rec = episodes._read(cfg)[0]
+        self.assertLessEqual(len(rec["summary"]), episodes.SUMMARY_CHARS)
+        self.assertTrue(rec["summary"].endswith("…"))
+        self.assertTrue(all(w in ("the", "probe", "returned", "results")
+                            for w in rec["summary"][:-1].split()), rec["summary"])
+
 
 if __name__ == "__main__":
     unittest.main()
