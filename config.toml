@@ -229,19 +229,19 @@ power_battery_capacity_ah = 100.0  # 24V 100Ah ≈ 2.56 kWh
 causal_ledger_enabled = true      # 0.3 per-tick pressure-field log for "show me why it did that"
 backup_enabled = true             # 0.4 automated workspace snapshots during sleep (life insurance)
 killable_skills_enabled = true    # 1.2 subprocess-isolated, hard-killable skills (no more tick freezes)
-memory_engram_enabled = false     # 2.1 the engram + hot/episodic/long-term stores (engram.py; a library until 2.2 wires it in)
+memory_engram_enabled = true      # 2.1 the engram + hot/episodic/long-term stores (engram.py; a library until 2.2 wires it in)
 skill_affordances_enabled = false # 3.1 surface top-K situation-relevant skills at the decision point
 skill_economy_enabled = false     # 3.2 similarity-priced authoring + reuse-favoring XP + auto-retire
 skill_composition_enabled = false # 3.3 the `call` atom (skill→skill): depth cap 2, shared budget, static cycle check, promotion-to-atom
 quests_enabled = false            # 5.1 quest engine (the System: issue/track/adjudicate)
-memory_manager_enabled = false    # 2.2 store importer + 4-layer recall cascade (memory_manager.py)
+memory_manager_enabled = true     # 2.2 store importer + 4-layer recall cascade (memory_manager.py)
 recall_explore_ratio = 0.15       # 2.2 fraction of a recall set reserved for a low-strength sample (anti-Matthew)
-sleep_engine_enabled = false      # 2.4 job-list sleep: consolidation/decay/distillation (nervous/sleep.py)
+sleep_engine_enabled = true       # 2.4 job-list sleep: consolidation/decay/distillation (nervous/sleep.py)
 max_wake_hours = 18.0             # 2.4 adenosine cap: past this, sleep-pressure overrides all drive floors
-expectations_enabled = false      # 4.1 expectation ledger: typed predictions closed by glue → surprise
+expectations_enabled = true       # 4.1 expectation ledger: typed predictions closed by glue → surprise
 max_open_predictions = 12         # 4.1 bound on simultaneously-open predictions
-salience_gate_enabled = false     # 1.3 salience-gate organ: admission bias = salience × relevance × neuromod gain
-bet_ledger_enabled = false        # 2.3 recall-utility loop: injected engrams are bets settled by glue (never self-report)
+salience_gate_enabled = true      # 1.3 salience-gate organ: admission bias = salience × relevance × neuromod gain
+bet_ledger_enabled = true         # 2.3 recall-utility loop: injected engrams are bets settled by glue (never self-report)
 learning_xp_enabled = false       # 4.2 XP weighted by learning progress (falling error slope); grind/noise pay ~0
 news_enabled = false              # 4.4 news queue: deferred communication, presence-gated, engagement-ranked
 news_max_items = 20               # 4.4 bound on queued news (eviction/expiry past this)
