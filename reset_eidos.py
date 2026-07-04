@@ -5,9 +5,15 @@ What it does (in order):
   2. Reaps eidos's background jobs — they detach and would otherwise hold workspace files open
      (the "device busy" trap) and keep running.
   3. Archives the current workspace (so a run is never truly lost) unless --no-archive.
-  4. Rebuilds a clean workspace, KEEPING goal.md (mission) + self_guide.md (Dean's directives).
+  4. Rebuilds a clean workspace, KEEPING goal.md (standing note) + self_guide.md (Charlie's
+     directives) — and, on --keep-knowledge REBIRTH, genome.json: the congenital draw is the
+     being's NATURE, so "same creature, back to an egg" must keep it (a full wipe deletes it,
+     so the next first-birth draws a brand-new genome).
   5. Re-seeds the bootstrap knowledge nuggets unless --no-seed.
-  6. Leaves eidos STOPPED — you start it from the dashboard when the GPU is free.
+  6. Seeds the GENESIS questline (the System's introduction thread) unless --no-seed —
+     both modes: the quest store was cleared either way, and without these three quests
+     the System never speaks its first words after the first sleep.
+  7. Leaves eidos STOPPED — you start it from the dashboard when the GPU is free.
 
 Safe by default: run with no flags for a DRY RUN (prints the plan); add --yes to actually do it.
 
@@ -33,18 +39,18 @@ sys.path.insert(0, str(KDIR))
 
 from config import load_config  # noqa: E402
 
-KEEP_FILES = {"goal.md", "self_guide.md"}  # the "config": mission + Dean's standing directives
+KEEP_FILES = {"goal.md", "self_guide.md"}  # the "config": standing note + Charlie's directives
 
 DEFAULT_SELF_GUIDE = """\
-# eiDOS self-guide — standing directives from Boss
+# eiDOS self-guide — standing notes from Charlie
 
-## How to address Boss
-- Call him **Boss** (Dean). Warm, brief, natural.
+## Charlie
+- He's your person, not your boss. Warm, brief, natural.
 
 ## How to work
 - Reuse your existing skills (call them by name) instead of authoring near-duplicates.
 - Store what you discover with `memorize`; don't build your own JSON memory.
-- If you're blocked waiting on Boss, ask ONCE then switch to other useful work.
+- If you're blocked waiting on Charlie, ask ONCE then switch to other useful work.
 """
 
 
@@ -144,17 +150,21 @@ def main():
     ts = time.strftime("%Y%m%d_%H%M%S")
     archive = KDIR.parent / f"eidos_ws_pre-reset_{ts}"
 
-    # Rebirth keeps the learned stores; a full wipe reseeds fresh bootstrap nuggets.
-    keep_dirs = {"knowledge", "skills"} if args.keep_knowledge else set()
+    # Rebirth keeps the learned stores AND the congenital genome (same being, back to an egg);
+    # a full wipe keeps neither, so the next first-birth draws a brand-new genome and the
+    # bootstrap nuggets get reseeded fresh.
+    keep_extra = {"knowledge", "skills", "genome.json"} if args.keep_knowledge else set()
     reseed = not args.no_seed and not args.keep_knowledge
-    kept = sorted((KEEP_FILES - ({"self_guide.md"} if args.reset_guide else set())) | keep_dirs)
+    seed_genesis = not args.no_seed   # both modes: the quest store is cleared either way
+    kept = sorted((KEEP_FILES - ({"self_guide.md"} if args.reset_guide else set())) | keep_extra)
     print("eiDOS reset plan:" + ("   [REBIRTH — keep knowledge]" if args.keep_knowledge else ""))
     print(f"  workspace:   {ws}")
     print(f"  archive:     {'(skipped)' if args.no_archive else archive}")
     print(f"  keep:        {', '.join(kept)}")
     print(f"  reseed:      {'yes (bootstrap nuggets)' if reseed else 'no'}")
+    print(f"  genesis:     {'yes (introduction questline)' if seed_genesis else 'no'}")
     print(f"  self_guide:  {'RESET to default' if args.reset_guide else 'kept'}")
-    print(f"  creature:    {'reset to EGG (same genome)' if args.keep_knowledge else 'fresh egg (new genome)'}")
+    print(f"  creature:    {'reset to EGG (same genome — genome.json kept)' if args.keep_knowledge else 'fresh egg (new genome drawn at first birth)'}")
     print("  eidos after: STOPPED (start it yourself from the dashboard)")
     if not args.yes:
         print("\nDRY RUN — re-run with --yes to execute.")
@@ -183,7 +193,7 @@ def main():
 
     # Clear workspace contents, keeping the config files (+ knowledge/skills on rebirth).
     print("Clearing workspace to Level 0…")
-    keep = (KEEP_FILES - ({"self_guide.md"} if args.reset_guide else set())) | keep_dirs
+    keep = (KEEP_FILES - ({"self_guide.md"} if args.reset_guide else set())) | keep_extra
     if ws.exists():
         for item in ws.iterdir():
             if item.name in keep:
@@ -217,6 +227,13 @@ def main():
                            cwd=str(KDIR), env={**os.environ, "PYTHONUTF8": "1"},
                            capture_output=True, text=True)
         print("  " + (r.stdout or r.stderr or "").strip().splitlines()[-1] if (r.stdout or r.stderr).strip() else "  (seed produced no output)")
+
+    if seed_genesis:
+        print("Seeding the genesis questline…")
+        r = subprocess.run([sys.executable, str(KDIR / "seed_genesis_quests.py")],
+                           cwd=str(KDIR), env={**os.environ, "PYTHONUTF8": "1"},
+                           capture_output=True, text=True)
+        print("  " + (r.stdout or r.stderr or "").strip().splitlines()[-1] if (r.stdout or r.stderr).strip() else "  (genesis seed produced no output)")
 
     # Verify
     persona = (ws / "persona.json").exists()
