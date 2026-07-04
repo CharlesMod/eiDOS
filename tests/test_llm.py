@@ -50,6 +50,25 @@ class TestLLMComplete(unittest.TestCase):
         self.assertEqual(out, "hi there")
 
     @patch("llm.urllib.request.urlopen")
+    def test_grammar_disables_thinking(self, mock_urlopen):
+        """A GBNF grammar masks the model's think-opening tokens from the first sampled token —
+        off-distribution babble to max_tokens (the newborn's incoherent first ticks). Constrained
+        calls must therefore disable the thinking phase via the chat template; unconstrained calls
+        must NOT carry the kwarg (thinking stays available)."""
+        mock_urlopen.return_value = _FakeResponse({
+            "choices": [{"message": {"content": "ok"}}]
+        })
+        complete(self.messages, self.config, grammar='root ::= "x"')
+        sent = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
+        self.assertEqual(sent["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertIn("grammar", sent)
+
+        complete(self.messages, self.config)
+        sent = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
+        self.assertNotIn("chat_template_kwargs", sent)
+        self.assertNotIn("grammar", sent)
+
+    @patch("llm.urllib.request.urlopen")
     def test_complete_http_error_includes_body(self, mock_urlopen):
         http_error = urllib.error.HTTPError(
             url="http://localhost:1234/v1/chat/completions",
