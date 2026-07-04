@@ -368,3 +368,13 @@ predicts and is paid for growth, levels through mastery, and answers to the voic
 
 **Full combined regression: 1319 passed.** Pre-cutover workspace snapshot taken + restore-verified.
 **AWAITING DEAN'S GO:** the flag flips (staged: observability → memory core → economies/System; shadows+generals stay dark as level-gated unlocks) and the paused boot. Known deferred seams: persona.record_* config threading (hub compensates), run_post_tick invocation (would double-run 2 organs), dashboard panels for roster/missions/Administrator.
+
+## Post-cutover (2026-07-04, afternoon)
+
+- ✅ **Charlie's GO + full cutover** — 17 flags on in 3 staged commits; shadows/generals dark (level-gated); `last_good` checkpoint `eidos-good-20260704_175350`
+- ✅ **Maiden run (5 min, fresh slate)** — 18 ticks, 1 skill authored, genesis-01 adjudicated end-to-end (sleep → cadence → issue → answer → glue), Administrator check-in on level_candidacy, 44 engrams, 1 sleep+backup
+- ✅ **Maiden-run defect fixed** — mastery gate was bypassed by config-less award paths (Lv.2 at 57 XP); `config` now threaded through every `persona.record_*` + call site — the "hub compensates" seam above is CLOSED (`0d03128`)
+- ✅ **Fresh-creature surfaces** — amalgam system prompt, nuggets 32→11, genesis questline (`seed_genesis_quests.py`), goal.md rewritten as Charlie's standing note (`0c805b9`), Dean→Charlie sweep
+- ✅ **Genome v1** — congenital personality as pressure: 4 latents (sensitivity/openness/tenacity/tempo; one saved seeded draw) → declared loading matrix → 8 clamped gene multipliers + temperament stamp_baselines [0.38, 0.62] (every newborn still reads "steady"); consumers: temperament drift/spring/grip, recall explore seat, salience share, restlessness, bet feeling-gain, adenosine ceiling (±10% max — dampers stay sovereign). HARD RULE test-enforced: genome shapes drives/perception, NEVER the ledger. 143-test gate green (`db26b74`)
+- ✅ **`scripts/fresh_slate.sh`** — the rebirth procedure encoded (dashboard STOPPED for the swap — the watchdog respawns eidos; reseed nuggets + genesis; boot PAUSED) (`4a3e4c2`)
+- Deferred still open: run_post_tick invocation (would double-run 2 organs), dashboard panels for roster/missions.
