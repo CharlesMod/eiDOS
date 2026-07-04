@@ -19,7 +19,10 @@ from config import Config
 from memory import read_goal, read_plan, read_recent_observations, read_interventions, read_recent_thoughts, read_self_guide
 from env_snapshot import generate as generate_env_snapshot
 from env_snapshot import generate_alerts as generate_env_alerts
-from prompts import SYSTEM_PROMPT_BRIEFING, SYSTEM_PROMPT_CREATURE, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED
+from prompts import (
+    SYSTEM_PROMPT_BRIEFING, SYSTEM_PROMPT_CREATURE, TICK_PROMPT, TICK_PROMPT_LOOP_DETECTED,
+    TICK_PROMPT_LOOP_DETECTED_CREATURE, render_creature_system_prompt,
+)
 
 logger = logging.getLogger("eidos.context")
 
@@ -174,6 +177,73 @@ def _rrf_blend(*ranked_lists, top_k: int, k: int = 60) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Tool-unlocks prompt surfaces (TOOL_PROGRESSION.md — dark behind pillars_tool_unlocks_enabled)
+# ---------------------------------------------------------------------------
+
+def _unlocks_active(config) -> bool:
+    """The growing-body cutover switch: creature mode AND `pillars_tool_unlocks_enabled`. Flag off
+    (or house mode) ⇒ every legacy string below renders byte-identically (test-pinned). House mode
+    is untouched by the ladder entirely."""
+    return bool(getattr(config, "creature_mode", False)
+                and getattr(config, "pillars_tool_unlocks_enabled", False))
+
+
+def _visible_tool_names(config) -> frozenset:
+    """The creature-visible tool set, read through the ONE accessor when it exists
+    (tools.visible_tools — built by the cutover; guarded so this module works before it lands)
+    with unlocks.granted_tools as the fallback. Fail-open toward the newborn floor: §0 says a
+    doubtful tool is treated as locked (never named), never guessed visible."""
+    try:
+        import tools as _tools
+        vt = getattr(_tools, "visible_tools", None)
+        if callable(vt):
+            return frozenset(vt(config))
+    except Exception:  # noqa: BLE001 - the accessor is optional until the cutover lands
+        pass
+    try:
+        import unlocks as _unlocks
+        return _unlocks.granted_tools(config)
+    except Exception:  # noqa: BLE001 - fail-open: nothing extra is visible
+        return frozenset()
+
+
+def _granted_unit_ids(config) -> tuple[str, ...]:
+    """Granted units in unlocks.UNITS canonical order, derived through the tools accessor: a unit
+    is granted exactly when every one of its tools is visible (every tool lives in exactly one
+    unit, so there is no partial-unit ambiguity, and authored-skill extras can't confuse it).
+    Fail-open: the newborn unit alone."""
+    try:
+        import unlocks as _unlocks
+        visible = _visible_tool_names(config)
+        granted = tuple(u.id for u in _unlocks.UNITS if set(u.tools) <= visible)
+        return granted or (_unlocks.NEWBORN_UNIT_ID,)
+    except Exception:  # noqa: BLE001 - fail-open by contract
+        return ("body",)
+
+
+def _tool_locked(config, name: str) -> bool:
+    """§0 leak guard for creature-facing platform strings: True only when the ladder is ACTIVE and
+    `name` is not in the creature's world — a locked tool must never be named, so the caller swaps
+    in a generic wording. Flag off / house mode: never locked (legacy bytes untouched)."""
+    if not _unlocks_active(config):
+        return False
+    return name not in _visible_tool_names(config)
+
+
+def _creature_system_prompt(config) -> str:
+    """The flag-on creature system prompt: lexicon-rendered BASE + the granted units' stanzas in
+    canonical order (prompts.render_creature_system_prompt). The lexicon is the creature's own
+    morph row (phenotype.body_words — fail-open to the declared default row)."""
+    try:
+        from phenotype import body_words
+        lexicon = body_words(config)
+    except Exception:  # noqa: BLE001 - fail-open: placeholders render literally rather than crash
+        lexicon = {}
+    return render_creature_system_prompt(lexicon, _granted_unit_ids(config),
+                                         workspace=str(config.workspace))
+
+
+# ---------------------------------------------------------------------------
 # Context assembly
 # ---------------------------------------------------------------------------
 
@@ -223,15 +293,21 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
         bt = (boss_text or "").lower()
         wants_voice = any(k in bt for k in (
             "speak", "say ", "tts", "out loud", "aloud", "hear you", "hear me", "voice", "tell me out"))
+        # §0 leak guard (flag-gated; flag off never trips): a locked voice is never named — the
+        # request falls through to the plain reply nudge, indistinguishable from a world where the
+        # word does not exist.
+        if wants_voice and _tool_locked(config, "speak"):
+            wants_voice = False
         if wants_voice:
             boss_prefix = ("🔊 BOSS WANTS TO HEAR YOU (he said so in chat). THIS TICK you MUST call `speak` "
                            "with what you want to say — a text-only <reply> does NOT satisfy this. You may "
                            "ALSO <reply> the same words, but the spoken call is the point. One sentence. "
                            "Do not narrate that you'll speak, do not test the pipeline — just speak.\n\n")
         else:
+            _acts = "run, build, make" if _tool_locked(config, "speak") else "speak, run, build"
             boss_prefix = ("Boss just messaged you (see 'New since last tick') — this is a HIGH-PRIORITY "
                            "COMMAND, not a note to acknowledge. DO what he asks THIS tick: <reply> to him AND "
-                           "take any action he requested (speak, run, build), then keep acting on it until "
+                           f"take any action he requested ({_acts}), then keep acting on it until "
                            "it's actually done. Do NOT acknowledge and wander off to other work.\n\n")
         # Replying to Boss is itself the circuit-breaker, so don't also stack the loop-detected variant.
         loop_detected = False
@@ -244,17 +320,24 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
         except Exception:  # noqa: BLE001
             _cap = 8
         if tension >= _cap - 2:
+            # §0 leak guard: a locked objectives kit is never named — "set it down" carries the
+            # same pressure without teaching a word that doesn't exist yet. Flag off: legacy bytes.
+            _park = "set it down" if _tool_locked(config, "objective_block") else "park it (objective_block)"
             boss_prefix = (f"⚠ This focus is almost out of patience ({tension}/~{_cap}): make REAL progress "
-                           f"THIS tick or park it (objective_block) and move on — the gate will rotate you "
+                           f"THIS tick or {_park} and move on — the gate will rotate you "
                            f"otherwise.\n\n")
 
     urgency_note = ""
     if max_ticks > 0:
         remaining = max_ticks - tick_number
+        _od_locked = _tool_locked(config, "objective_done")   # §0 leak guard (flag off: never)
         if remaining <= 0:
-            urgency_note = " — FINAL TICK: state your result and mark the objective done (objective_done) now"
+            urgency_note = (" — FINAL TICK: state your result now" if _od_locked else
+                            " — FINAL TICK: state your result and mark the objective done (objective_done) now")
         elif remaining <= 2:
-            urgency_note = f" — {remaining} tick{'s' if remaining != 1 else ''} remaining: wrap up and call objective_done if ready"
+            _rem = f" — {remaining} tick{'s' if remaining != 1 else ''} remaining: "
+            urgency_note = (_rem + "wrap up now" if _od_locked else
+                            _rem + "wrap up and call objective_done if ready")
 
     try:
         import objectives
@@ -268,7 +351,12 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
         subtask_line = f"Current focus: {focus}" if focus else "Focus on your mission directly."
 
     if loop_detected:
-        return boss_prefix + TICK_PROMPT_LOOP_DETECTED.format(
+        # Flag-on creature mode uses the GENERIC circuit-breaker (no tool named at all — §0: the
+        # legacy "create the skill" nudge would tease an ungrown rung); flag off / house mode
+        # renders the legacy template byte-identically.
+        _loop_tmpl = (TICK_PROMPT_LOOP_DETECTED_CREATURE if _unlocks_active(config)
+                      else TICK_PROMPT_LOOP_DETECTED)
+        return boss_prefix + _loop_tmpl.format(
             tick_number=tick_number,
             max_ticks=max_ticks if max_ticks else "?",
             timestamp=now, elapsed=elapsed,
@@ -507,12 +595,15 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
         import glue
         _outs = glue.recent_outcomes(config)
         cond = glue.compute_condition(_outs)
+        # §0 leak guard (flag-gated; flag off keeps the legacy bytes): a locked `memorize` is
+        # never named in the nudge — "write down a fact" is the same push through a newborn's kit.
+        _keep = "write down a fact" if _tool_locked(config, "memorize") else "memorize a fact"
         _desc = {
             "STABLE": "steady — pick the next useful thing and do it",
             "FOCUSED": "on a roll — keep advancing the current objective",
             "STRAINED": "repeated failure lately — change METHOD or let the gate move you on; don't retry the same thing",
             "RECOVERY": "just recovered from a rough patch — consolidate, then proceed",
-            "RUMINATING": "you've been thinking without acting — take ONE CONCRETE action this tick (probe, build, memorize a fact); more narration burns patience",
+            "RUMINATING": f"you've been thinking without acting — take ONE CONCRETE action this tick (probe, build, {_keep}); more narration burns patience",
         }.get(cond, "")
         lines.append(f"Condition: {cond}" + (f" — {_desc}" if _desc else ""))
         # When the same dead end keeps repeating AND the delegate exists, steer the pivot
@@ -765,9 +856,14 @@ def _stable_head_blocks(config: Config, creature: bool) -> list:
         from skills import skills_brief
         sb = skills_brief(config)
         if sb:
+            # §0 leak guard (flag-gated; flag off keeps the legacy bytes): a non-empty brief means
+            # skills exist, which in practice means skillcraft was lived — but if the books say the
+            # forge is locked, its verbs are not named here either.
+            _fix = ("reuse it" if _tool_locked(config, "edit_skill")
+                    else "reuse it, or edit_skill to improve it")
             head.append("## Your skills — CALL these by name as tools (e.g. <tool>check_mqtt_port</tool>). "
-                        "Do NOT author a new skill that duplicates one of these; reuse it, or edit_skill "
-                        "to improve it.\n" + sb)
+                        f"Do NOT author a new skill that duplicates one of these; {_fix}"
+                        ".\n" + sb)
     except Exception:  # noqa: BLE001
         pass
 
@@ -804,6 +900,16 @@ def _stable_head_signature(config: Config, creature: bool) -> str:
              ("self_guide_on", bool(getattr(config, "self_guide_enabled", True))),
              ("limits", int(getattr(config, "context_self_guide_max_chars", 0) or 0),
               int(getattr(config, "context_goal_max_chars", 0) or 0))]
+    # Tool unlocks (TOOL_PROGRESSION): the granted-unit set + the morph lexicon are prompt inputs,
+    # so a grant (or a morph appearing at first birth) re-renders the head exactly ONCE and the KV
+    # prefix stays append-only between grants. Flag off: no extra parts — signature unchanged.
+    if _unlocks_active(config):
+        parts.append(("units", _granted_unit_ids(config)))
+        try:
+            from phenotype import body_words
+            parts.append(("morph", tuple(sorted(body_words(config).items()))))
+        except Exception:  # noqa: BLE001 - fail-open: an unreadable lexicon still signs stably
+            parts.append(("morph", None))
     paths = []
     for attr in ("self_guide_path", "goal_path"):
         try:
@@ -865,8 +971,14 @@ def _assemble_briefing(
     messages = []
     creature = getattr(config, "creature_mode", False)   # undisturbed-creature mode: no task framing
 
-    # 1. Standing Orders (system message) — compressed prompt
-    system = (SYSTEM_PROMPT_CREATURE if creature else SYSTEM_PROMPT_BRIEFING).format(workspace=str(config.workspace))
+    # 1. Standing Orders (system message) — compressed prompt.
+    # Tool unlocks (TOOL_PROGRESSION, dark behind pillars_tool_unlocks_enabled): flag-on creature
+    # mode assembles BASE + granted stanzas (lexicon-rendered, append-only between grants); flag
+    # off renders the legacy constant byte-identically (test-pinned). House mode never changes.
+    if _unlocks_active(config):
+        system = _creature_system_prompt(config)
+    else:
+        system = (SYSTEM_PROMPT_CREATURE if creature else SYSTEM_PROMPT_BRIEFING).format(workspace=str(config.workspace))
     messages.append({"role": "system", "content": system})
 
     # --- Durable context in KV tiers (BIBLE §2.11: stable cached prefix + delta prompting).
