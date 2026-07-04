@@ -23,11 +23,14 @@ def _temp():
 
 class TestDrift(unittest.TestCase):
 
-    def test_starts_neutral(self):
+    def test_starts_at_congenital_baseline(self):
+        # Birth draw (4.3 divergence): a fresh creature starts AT its own drawn baselines, each
+        # within GENOME_BASELINE ± BIRTH_SPREAD — near-neutral, never pre-labeled at birth.
         t = _temp()
-        self.assertEqual(t.initiative, 0.5)
-        self.assertEqual(t.persistence, 0.5)
-        self.assertEqual(t.caution, 0.5)
+        for ax in ("initiative", "persistence", "caution"):
+            self.assertEqual(getattr(t, ax), t.baselines[ax])
+            self.assertLessEqual(abs(t.baselines[ax] - 0.5), 0.081)
+        self.assertEqual(t.disposition(), "steady")
 
     def test_sustained_success_raises_initiative_lowers_caution(self):
         t = _temp()

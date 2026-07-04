@@ -212,7 +212,10 @@ def springs_scenario(config, *, days_max: int = SPRINGS_RECOVERY_DAYS_MAX,
     days. Only meaningful once springs_available() — without springs a neutral tick leaves
     temperament frozen by design, so callers must skip-with-reason first."""
     t = Temperament(config)
-    baseline = float(getattr(t, "baseline", getattr(t, "genome_baseline", 0.5)) or 0.5)
+    # Prefer the creature's own congenital caution baseline (the 4.3 birth draw) — the spring pulls
+    # toward ITS nature, not the species mean; fall back to the scalar seam names for older bases.
+    baseline = float((getattr(t, "baselines", None) or {}).get(
+        "caution", getattr(t, "baseline", getattr(t, "genome_baseline", 0.5)) or 0.5))
     for _ in range(SPRINGS_BAD_STREAK):
         t.observe(success=False, failed=True, overridden=False)
     spiked = t.caution

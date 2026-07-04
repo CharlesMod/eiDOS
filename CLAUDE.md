@@ -1,7 +1,7 @@
 # eiDOS — the house AI (this repo)
 
 eiDOS is an always-on autonomous agent (extended from the Kairos tick-loop framework) that runs
-Dean's house on the local **house-ai** model. Operator = Dean. There is exactly ONE eiDOS and it
+Dean's house on the local **house-ai** model. Operator = Charlie (called "Dean" in older docs — same person). There is exactly ONE eiDOS and it
 is normally already running — never try to "start the LLM/TTS/eidos" from scratch; they exist as
 services.
 

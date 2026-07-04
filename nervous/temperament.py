@@ -29,8 +29,15 @@ STEP = 0.02          # per-update drift rate — slow (a target shift takes ~50 
 _NEUTRAL = 0.5
 
 # Pillars 4.3 setpoint springs (pitfall #3, flag-gated by pillars_mastery_gates_enabled):
-GENOME_BASELINE = _NEUTRAL   # declared: the genome setpoint every axis is elastically pulled toward —
+GENOME_BASELINE = _NEUTRAL   # declared: the species-mean setpoint axes are elastically pulled toward —
                              # the "who it is underneath" that a streak bends but never rewrites.
+BIRTH_SPREAD = 0.08          # declared: at FIRST BIRTH (no temperament.json yet) each axis's personal
+                             # baseline is drawn once, uniform in GENOME_BASELINE ± BIRTH_SPREAD, and
+                             # persisted for life — a congenital disposition. Two creatures with
+                             # identical code diverge from tick one, and the springs pull each toward
+                             # ITS OWN nature, not a universal mean (Charlie: new creatures should
+                             # become vastly different beings over years). 0.08 keeps every draw well
+                             # inside the disposition() bands so no newborn starts pre-labeled.
 SPRING_STEP = 0.004          # declared: STEP/5 — experience outpulls the spring 5:1 (a real losing
                              # streak still moves caution), but on neutral ticks the residue relaxes
                              # ~63% back toward baseline in ~250 updates instead of ratcheting forever
@@ -49,20 +56,35 @@ class Temperament:
         self.initiative = _NEUTRAL
         self.persistence = _NEUTRAL
         self.caution = _NEUTRAL
+        self.baselines = {ax: GENOME_BASELINE for ax in self.AXES}
         self.updates = 0
-        self.load()
+        born = not self.load()
+        if born and config is not None:
+            # First birth: draw this creature's congenital baselines (see BIRTH_SPREAD) and start
+            # each axis AT its own nature. Persisted immediately so the draw happens exactly once.
+            import random
+            for ax in self.AXES:
+                b = max(0.0, min(1.0, GENOME_BASELINE + random.uniform(-BIRTH_SPREAD, BIRTH_SPREAD)))
+                self.baselines[ax] = round(b, 3)
+                setattr(self, ax, self.baselines[ax])
+            self.save()
 
     def _path(self):
         return self.config.state_dir / "temperament.json"
 
-    def load(self):
+    def load(self) -> bool:
+        """Returns True when a persisted temperament existed (False = this is a fresh birth)."""
         try:
             d = json.loads(self._path().read_text(encoding="utf-8"))
             for ax in self.AXES:
                 setattr(self, ax, max(0.0, min(1.0, float(d.get(ax, _NEUTRAL)))))
+            saved = d.get("baselines") or {}
+            for ax in self.AXES:
+                self.baselines[ax] = max(0.0, min(1.0, float(saved.get(ax, GENOME_BASELINE))))
             self.updates = int(d.get("updates", 0))
-        except Exception:  # noqa: BLE001 - missing/corrupt file => start neutral
-            pass
+            return True
+        except Exception:  # noqa: BLE001 - missing/corrupt file => fresh birth
+            return False
 
     def save(self):
         try:
@@ -96,10 +118,10 @@ class Temperament:
             self.initiative = self._toward(self.initiative, 0.3, s)
         if self.config is not None and getattr(self.config, "pillars_mastery_gates_enabled", False):
             # Setpoint springs (pitfall #3): after the experience nudge, every axis relaxes one small
-            # bounded step toward the genome baseline — including on neutral ticks, which is exactly
-            # when a spiked caution gets to recover. Flag off = byte-identical legacy drift.
+            # bounded step toward THIS creature's congenital baseline — including on neutral ticks,
+            # which is exactly when a spiked caution gets to recover. Flag off = byte-identical.
             for ax in self.AXES:
-                setattr(self, ax, self._toward(getattr(self, ax), GENOME_BASELINE, SPRING_STEP))
+                setattr(self, ax, self._toward(getattr(self, ax), self.baselines[ax], SPRING_STEP))
         self.updates += 1
         if self.updates % 10 == 0:        # persist periodically, not every tick (I/O frugality)
             self.save()
@@ -131,4 +153,5 @@ class Temperament:
         d = {ax: round(getattr(self, ax), 3) for ax in self.AXES}
         d["updates"] = self.updates
         d["disposition"] = self.disposition()
+        d["baselines"] = dict(self.baselines)
         return d

@@ -183,11 +183,14 @@ class TestSetpointSprings:
         cfg = _cfg(tmp_path)
         t = self._streaked(cfg)
         spiked = t.caution
-        assert spiked > GENOME_BASELINE + 0.1           # the streak genuinely moved it
+        assert spiked > t.baselines["caution"] + 0.1    # the streak genuinely moved it
         for _ in range(400):                            # neutral ticks: nothing happens but time
             t.observe(success=False, failed=False, overridden=False)
         assert t.caution < spiked                       # the spring relaxed it...
-        assert abs(t.caution - GENOME_BASELINE) < 0.1   # ...most of the way back to the genome
+        # ...most of the way back to THIS creature's congenital baseline (drawn at birth,
+        # GENOME_BASELINE ± BIRTH_SPREAD — the divergence mechanism).
+        assert abs(t.caution - t.baselines["caution"]) < 0.1
+        assert abs(t.baselines["caution"] - GENOME_BASELINE) <= 0.081
 
     def test_flag_off_neutral_ticks_leave_axes_untouched(self, tmp_path):
         cfg = _cfg(tmp_path, gates_on=False)
