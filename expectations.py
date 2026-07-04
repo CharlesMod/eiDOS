@@ -68,6 +68,11 @@ RESIDUE_STRENGTH_FLOOR = 0.5  # declared: the episode engram born at closure sta
                             # resists forgetting before the bet ledger has scored it.
 DEFAULT_DOMAIN = "general"  # declared: predictions with no explicit domain bucket here, so Brier
                             # calibration still has a home for un-tagged bets.
+STATS_NAME = "expectations_stats.json"  # the ledger's tiny book of record in state_dir: the
+                            # monotonic count of predictions EVER PLACED. The ring trims and
+                            # forgets (bounded, by design), so counting its prediction engrams
+                            # under-reports a lived history; adjudication (quest criteria over
+                            # `expectations.total`) needs the honest lifetime fact.
 
 
 # ============================================================================================
@@ -83,6 +88,29 @@ _PRED_TAG = "pred:"   # the body suffix marker that carries a prediction's machi
 
 def _now_epoch() -> float:
     return time.time()
+
+
+# --- the monotonic placed-counter (single writer: ExpectationLedger.predict) ---------------------
+def _read_total_placed(config) -> int:
+    """The persisted count of bets ever placed. Missing/corrupt file → 0 (the ledger re-seeds
+    from ring evidence at read time — fail-open toward the facts, never toward a bigger number)."""
+    try:
+        d = json.loads((config.state_dir / STATS_NAME).read_text(encoding="utf-8"))
+        return max(0, int(d.get("total_placed", 0)))
+    except Exception:  # noqa: BLE001 - missing/corrupt => no persisted count
+        return 0
+
+
+def _write_total_placed(config, n: int) -> None:
+    """Atomic tmp+replace, best-effort (house pattern: counter bookkeeping never bricks a bet)."""
+    try:
+        config.state_dir.mkdir(parents=True, exist_ok=True)
+        p = config.state_dir / STATS_NAME
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"total_placed": int(n)}), encoding="utf-8")
+        tmp.replace(p)
+    except OSError:
+        pass
 
 
 @dataclass
@@ -206,7 +234,10 @@ class ExpectationLedger:
 
     def __init__(self, config, *, ring: Optional[EpisodicRing] = None):
         self.config = config
-        self.ring = ring or EpisodicRing(config)
+        # `is None`, not `or`: EpisodicRing has __len__, so an injected EMPTY ring is falsy and
+        # `ring or ...` would silently swap it for a default-capacity ring (found by the
+        # total_placed eviction pin).
+        self.ring = ring if ring is not None else EpisodicRing(config)
 
     # --- read the ledger ----------------------------------------------------------------------
     def _all_predictions(self) -> list[Prediction]:
@@ -220,6 +251,14 @@ class ExpectationLedger:
     def open_predictions(self) -> list[Prediction]:
         """Every currently-open bet, oldest-first (ring order)."""
         return [p for p in self._all_predictions() if p.status == "open"]
+
+    def total_placed(self) -> int:
+        """Predictions EVER PLACED — the honest monotonic counter quest glue adjudicates
+        (`expectations.total`, §0.5: a bet IN the ledger, never a mere `predict` tool attempt).
+        The persisted counter is the book of record; a missing counter file re-seeds from the
+        ring's surviving prediction engrams (fail-open toward evidence, never to empty) — and the
+        counter only ever moves up, so closures and ring eviction cannot walk it backwards."""
+        return max(_read_total_placed(self.config), len(self._all_predictions()))
 
     @property
     def max_open(self) -> int:
@@ -246,11 +285,14 @@ class ExpectationLedger:
                     "refuse a new bet until one closes (bounded, no unbounded growth)")
             # Evict the oldest open bet — retire it (it went unresolved, so it did not come true).
             self._retire(open_now[0])
+        placed_before = self.total_placed()   # read BEFORE the new engram lands (monotonic +1)
         p = Prediction(statement=statement, target=(target or "").strip(),
                        deadline=float(deadline), confidence=float(confidence),
                        domain=(domain or DEFAULT_DOMAIN).strip() or DEFAULT_DOMAIN)
         eg = p.to_engram(encoded_at=encoded_at)
         self.ring.encode(eg)
+        # Single writer of the lifetime counter: only a bet that actually reached the ring counts.
+        _write_total_placed(self.config, placed_before + 1)
         return p
 
     def _retire(self, p: Prediction) -> None:

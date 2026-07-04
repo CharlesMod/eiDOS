@@ -408,6 +408,63 @@ def test_quest_expiry_settles_on_screen_nothing_paid(tmp_path):
     assert persona["xp"] == 0
 
 
+def test_quest_stats_sections_are_adjudicated_facts(tmp_path):
+    """5.1 + TOOL_PROGRESSION: every `_quest_stats` section is a glue-adjudicated fact from a
+    manifest/ledger/store — attempt counters (persona.tools_used, which increment on FAILED calls
+    too) move nothing. Fixture stores drive each section; the failed-call hole genesis-01 once
+    passed through stays closed."""
+    cfg = _mk_config(tmp_path, pillars_quests_enabled=True, pillars_mastery_gates_enabled=True,
+                     pillars_expectations_enabled=True)
+    hub = eidos._Pillars(cfg)
+    persona = {"level": 1, "xp": 0, "total_ticks": 12,
+               "tools_used": {"create_skill": 5, "predict": 3}}   # ATTEMPTS — possibly all failed
+    import quests
+
+    # Empty world: every adjudicated section reads zero, whatever the attempt counters claim.
+    stats = hub._quest_stats(persona)
+    assert stats["skills"] == {"live_count": 0, "trusted_count": 0}
+    assert stats["expectations"] == {"total": 0}
+    assert stats["sleeps"] == {"total": 0}
+    assert stats["quests"] == {"passed": 0}
+    made_live = quests.Criterion(path="skills.live_count", op=">=", value=1)
+    placed_bet = quests.Criterion(path="expectations.total", op=">=", value=1)
+    assert not made_live.check(stats)      # five failed create_skill calls buy nothing
+    assert not placed_bet.check(stats)     # three failed predict calls buy nothing
+
+    # skills: the manifest is the fact — live = active|trusted; trusted counted within live.
+    import skills as skills_mod
+    skills_mod._save_manifest(cfg, {"skills": {
+        "probe": {"status": "trusted"}, "sweep": {"status": "active"},
+        "old": {"status": "retired"}}})
+    # expectations: two bets IN the ledger; one closes — the total counts EVER PLACED.
+    import expectations
+    led = expectations.ExpectationLedger(cfg)
+    led.predict(statement="the probe finishes", target="probe done",
+                deadline=time.time() + 3600, confidence=0.7)
+    p2 = led.predict(statement="the kettle boils", target="kettle boiled",
+                     deadline=time.time() + 3600, confidence=0.6)
+    expectations.close_prediction(cfg, led, p2, outcome=True, reason="event")
+    # sleeps: the single writer at the sleep boundary (flag-gated internally).
+    import level_gates
+    level_gates.record_sleep_cycle(cfg)
+    level_gates.record_sleep_cycle(cfg)
+    # quests: one adjudicated PASS lands in the store.
+    passed = quests.Quest(id="done1", directive="d",
+                          success_criteria=quests.Criterion(path="persona.xp", op=">=", value=0))
+    passed.state = quests.PASSED
+    hub.quests.store.save(hub.quests.store.load() + [passed])
+
+    stats = hub._quest_stats(persona)
+    assert stats["skills"] == {"live_count": 2, "trusted_count": 1}   # retired never counts
+    assert stats["expectations"] == {"total": 2}     # closure doesn't shrink a lifetime fact
+    assert stats["sleeps"] == {"total": 2}
+    assert stats["quests"] == {"passed": 1}
+    assert made_live.check(stats) and placed_bet.check(stats)
+    # The legacy sections still ride along untouched.
+    assert stats["persona"]["total_ticks"] == 12
+    assert stats["drills"] == {} and stats["remedial"] == {}
+
+
 def test_sleep_window_advances_gates_and_cadence(tmp_path):
     """2.4 + 4.3 + 5.1 at the boundary: a completed sleep clears adenosine, advances the mastery
     gate's sleep counter, and advances the quest digestion counter."""

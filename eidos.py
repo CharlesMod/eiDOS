@@ -932,8 +932,12 @@ class _Pillars:
 
     # --- quests: stats surface, reward sink, closure bookkeeping, event-driven cadence ------------
     def _quest_stats(self, persona) -> dict:
-        """The typed stats dict criteria are checked against (§0.5: glue judges — persona counters
-        plus the drill/remedial stat files their machinery writes). An absent stat never passes."""
+        """The typed stats dict criteria are checked against (§0.5: glue judges — persona counters,
+        the drill/remedial stat files their machinery writes, and the adjudicated sections below).
+        Every counter here is a glue-settled FACT from a manifest/ledger/store, never a tools_used
+        attempt (genesis-01 once passed on a FAILED create_skill call — attempt counters increment
+        on failure; manifest/ledger facts cannot). An absent stat never passes; every failed read
+        degrades to zero, which no >=1 criterion can mistake for evidence."""
         stats = {"persona": dict(persona or {})}
         for name in ("drills", "remedial"):
             try:
@@ -943,6 +947,36 @@ class _Pillars:
                     stats[name] = {}
             except Exception:  # noqa: BLE001
                 stats[name] = {}
+        # skills: manifest facts — a skill counts only once it is LIVE in the manifest.
+        try:
+            import skills as _skills
+            ents = (_skills._load_manifest(self.config).get("skills") or {}).values()
+            live = [e for e in ents if e.get("status") in _skills._LIVE_STATUSES]
+            stats["skills"] = {"live_count": len(live),
+                               "trusted_count": sum(1 for e in live
+                                                    if e.get("status") == "trusted")}
+        except Exception:  # noqa: BLE001 - no manifest => no evidence
+            stats["skills"] = {"live_count": 0, "trusted_count": 0}
+        # expectations: bets EVER PLACED — the ledger's monotonic counter (a bet IN the ledger).
+        try:
+            import expectations as _exp
+            stats["expectations"] = {"total": _exp.ExpectationLedger(self.config).total_placed()}
+        except Exception:  # noqa: BLE001
+            stats["expectations"] = {"total": 0}
+        # sleeps: COMPLETED sleep cycles ever — GateState's monotonic total (single writer at
+        # the sleep boundary; since-level resets on level-up, the total never walks back).
+        try:
+            import level_gates as _lg
+            stats["sleeps"] = {"total": int(_lg.GateState(self.config).sleeps_total)}
+        except Exception:  # noqa: BLE001
+            stats["sleeps"] = {"total": 0}
+        # quests: adjudicated PASSES from the store (live file + rotated archives).
+        try:
+            import quests as _quests
+            store = self.quests.store if self.quests is not None else _quests.QuestStore(self.config)
+            stats["quests"] = {"passed": store.passed_count()}
+        except Exception:  # noqa: BLE001
+            stats["quests"] = {"passed": 0}
         return stats
 
     def _quest_reward_sink(self, cfg, quest) -> None:

@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import quests
 from quests import (
     Criterion, Quest, System, QuestStore, daily_quest, render_active, render_reveal,
-    ACTIVE, OFFERED, PASSED, EXPIRED, DAILY_KINDS, REWARD_XP,
+    reward_xp_amount, ACTIVE, OFFERED, PASSED, EXPIRED, DAILY_KINDS, REWARD_XP, REWARD_UNLOCK,
 )
 
 
@@ -325,6 +325,113 @@ class TestRotation(unittest.TestCase):
         self.assertEqual(len(loaded), 1)
         self.assertEqual(loaded[0].id, "q1")
         self.assertEqual(loaded[0].success_criteria.value, 3)
+
+
+# =================================================================================================
+class TestGrantsUnit(unittest.TestCase):
+    """TOOL_PROGRESSION issuance-grant pattern: the persisted `grants_unit` binding — the unit a
+    quest's ISSUANCE grants. The engine only carries the data; unlocks.grant acts on it."""
+
+    def test_round_trips_through_store(self):
+        import tempfile
+        cfg = _cfg(tempfile.mkdtemp())
+        store = QuestStore(cfg)
+        q = _level_quest("g1")
+        q.grants_unit = "skillcraft"
+        store.save([q, _level_quest("g2")])          # g2 keeps the default ""
+        loaded = {x.id: x for x in store.load()}
+        self.assertEqual(loaded["g1"].grants_unit, "skillcraft")
+        self.assertEqual(loaded["g2"].grants_unit, "")
+
+    def test_legacy_record_defaults_empty(self):
+        # A quest persisted before the field existed loads with grants_unit "" (grants nothing).
+        d = _level_quest("old").to_dict()
+        d.pop("grants_unit")
+        self.assertEqual(Quest.from_dict(d).grants_unit, "")
+
+    def test_dict_shape_carries_the_binding(self):
+        q = _level_quest("g3")
+        q.grants_unit = "foresight"
+        self.assertEqual(Quest.from_dict(q.to_dict()).grants_unit, "foresight")
+
+
+# =================================================================================================
+class TestUnlockPlusXpReward(unittest.TestCase):
+    """TOOL_PROGRESSION: 'it pays' pays limbs AND XP — an unlock reward carries an xp leg that
+    still pays through the standard sink path; rendering states both legs."""
+
+    def setUp(self):
+        import tempfile
+        self.cfg = _cfg(tempfile.mkdtemp())
+
+    def test_reward_xp_amount_reads_the_right_leg(self):
+        self.assertEqual(reward_xp_amount({"kind": REWARD_XP, "amount": 25}), 25)
+        self.assertEqual(reward_xp_amount({"kind": REWARD_UNLOCK, "what": "workshop", "xp": 50}), 50)
+        self.assertEqual(reward_xp_amount({"kind": REWARD_UNLOCK, "what": "workshop"}), 0)
+        self.assertEqual(reward_xp_amount({}), 0)
+        self.assertEqual(reward_xp_amount(None), 0)
+        # The legs never cross: an unlock's `amount` is not XP; an xp reward's `xp` is not read.
+        self.assertEqual(reward_xp_amount({"kind": REWARD_UNLOCK, "amount": 99}), 0)
+        self.assertEqual(reward_xp_amount({"kind": REWARD_XP, "xp": 99}), 0)
+
+    def test_render_states_both_legs(self):
+        self.assertEqual(quests._reward_str({"kind": REWARD_UNLOCK, "what": "workshop", "xp": 50}),
+                         "unlock: workshop +50 XP")
+        # No xp leg → the unlock renders as before (no dangling "+0 XP").
+        self.assertEqual(quests._reward_str({"kind": REWARD_UNLOCK, "what": "workshop"}),
+                         "unlock: workshop")
+        self.assertEqual(quests._reward_str({"kind": REWARD_XP, "amount": 25}), "25 XP")
+
+    def test_default_sink_pays_the_xp_leg_of_an_unlock(self):
+        # The XP leg of an unlock reward pays through the SAME standard path as a plain XP reward.
+        import persona as persona_mod
+        p = persona_mod._default_persona()
+        sysm = System(self.cfg, reward_sink=lambda cfg, q: quests.default_reward_sink(cfg, q, p))
+        q = Quest(id="u1", directive="Finish something you chose.",
+                  success_criteria=Criterion(path="persona.goals_completed", op=">=", value=1),
+                  reward={"kind": REWARD_UNLOCK, "what": "workshop", "xp": 50})
+        sysm.propose(q)
+        active = sysm.issue_next(sleeps_since_close=1, condition="STABLE")
+        before = p["xp"]
+        r = sysm.check(active, {"persona": {"goals_completed": 1}})
+        self.assertTrue(r["passed"])
+        self.assertEqual(p["xp"], before + 50)
+        # The unlock LEG stays recorded on the closed quest — the grant seam's job, not the sink's.
+        closed = next(x for x in sysm.store.load() if x.id == "u1")
+        self.assertEqual(closed.state, PASSED)
+        self.assertEqual(closed.reward.get("kind"), REWARD_UNLOCK)
+        self.assertEqual(closed.reward.get("what"), "workshop")
+
+
+# =================================================================================================
+class TestPassedCount(unittest.TestCase):
+    """quests.passed is an honest adjudicated fact: PASSES in the store, surviving rotation."""
+
+    def test_counts_only_passes(self):
+        import tempfile
+        cfg = _cfg(tempfile.mkdtemp())
+        store = QuestStore(cfg)
+        a, b, c = _level_quest("a"), _level_quest("b"), _level_quest("c")
+        a.state = PASSED
+        b.state = EXPIRED
+        c.state = OFFERED
+        store.save([a, b, c])
+        self.assertEqual(store.passed_count(), 1)
+
+    def test_survives_rotation_to_archive(self):
+        import tempfile
+        cfg = _cfg(tempfile.mkdtemp())
+        store = QuestStore(cfg, max_bytes=2000)      # tiny threshold forces rotation offline
+        many = []
+        for i in range(60):
+            q = _level_quest(f"old{i}")
+            q.state = PASSED
+            q.closed_ts = f"2026-01-01T00:{i:02d}:00Z"
+            many.append(q)
+        store.save(many)                             # rotation archives the overflow
+        live_passes = sum(1 for q in store.load() if q.state == PASSED)
+        self.assertLess(live_passes, 60)             # rotation really trimmed the live file
+        self.assertEqual(store.passed_count(), 60)   # the fact never walked backwards
 
 
 if __name__ == "__main__":

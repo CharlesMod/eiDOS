@@ -341,3 +341,45 @@ class TestAwaitingRenderer:
         for p in led.open_predictions():
             close_prediction(cfg, led, p, outcome=True, reason="event")
         assert led.render() == ""
+
+
+# =================================================================================================
+class TestTotalPlaced:
+    """The honest monotonic ever-placed counter (quest glue's `expectations.total`): a bet IN the
+    ledger, counted once, forever — closures and the ring's bounded forgetting never shrink it."""
+
+    def test_counts_and_survives_closure(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        led = ExpectationLedger(cfg)
+        assert led.total_placed() == 0
+        led.predict(statement="first bet", target="t1", deadline=_future())
+        p2 = led.predict(statement="second bet", target="t2", deadline=_future())
+        assert led.total_placed() == 2
+        close_prediction(cfg, led, p2, outcome=True, reason="event")
+        assert led.total_placed() == 2                 # a lifetime fact never walks back
+        assert len(led.open_predictions()) == 1
+
+    def test_survives_ring_eviction(self, tmp_path):
+        # The ring is bounded and forgets (by design); the book of record must not.
+        from engram import EpisodicRing
+        cfg = _cfg(tmp_path, max_open=100)
+        led = ExpectationLedger(cfg, ring=EpisodicRing(cfg, max_items=2))
+        for i in range(5):
+            led.predict(statement=f"bet {i}", target=f"t{i}", deadline=_future())
+        assert len(led._all_predictions()) <= 2        # the ring forgot the old bets…
+        assert led.total_placed() == 5                 # …the counter did not
+
+    def test_reseeds_from_ring_evidence_when_counter_missing(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        led = ExpectationLedger(cfg)
+        led.predict(statement="a", target="t", deadline=_future())
+        led.predict(statement="b", target="t", deadline=_future())
+        (cfg.state_dir / expectations.STATS_NAME).unlink()     # the counter file is lost
+        assert ExpectationLedger(cfg).total_placed() == 2      # fail-open re-seed from evidence
+
+    def test_eviction_path_still_counts_the_new_bet(self, tmp_path):
+        cfg = _cfg(tmp_path, max_open=1)
+        led = ExpectationLedger(cfg)
+        led.predict(statement="a", target="t", deadline=_future())
+        led.predict(statement="b", target="t", deadline=_future(), evict_oldest=True)
+        assert led.total_placed() == 2                 # the evicted bet was still PLACED

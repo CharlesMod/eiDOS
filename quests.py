@@ -158,6 +158,11 @@ class Quest:
     expiry_ts: Optional[float] = None    # epoch seconds; None = no expiry (e.g. hidden achievements)
     hidden: bool = False                 # achievement: offered+hidden is not rendered; reveals on pass
     kind: str = "quest"                  # "quest" | "daily" — daily quests are recurring drill slots
+    grants_unit: str = ""                # TOOL_PROGRESSION issuance-grant pattern: the tool UNIT this
+                                         # quest's ISSUANCE grants (the System's window that names the
+                                         # tool IS the moment it starts existing). "" = grants nothing.
+                                         # This engine only PERSISTS the binding; unlocks.grant() is
+                                         # the single writer that acts on it (seam, not a call here).
     state: str = OFFERED
     created_ts: str = field(default_factory=_now)
     closed_ts: Optional[str] = None
@@ -173,6 +178,7 @@ class Quest:
             "expiry_ts": self.expiry_ts,
             "hidden": self.hidden,
             "kind": self.kind,
+            "grants_unit": self.grants_unit,
             "state": self.state,
             "created_ts": self.created_ts,
             "closed_ts": self.closed_ts,
@@ -190,6 +196,7 @@ class Quest:
             expiry_ts=d.get("expiry_ts"),
             hidden=bool(d.get("hidden", False)),
             kind=d.get("kind", "quest"),
+            grants_unit=str(d.get("grants_unit", "") or ""),
             state=d.get("state", OFFERED),
             created_ts=d.get("created_ts") or _now(),
             closed_ts=d.get("closed_ts"),
@@ -251,6 +258,26 @@ class QuestStore:
     def queue(self) -> list[Quest]:
         return [q for q in self.load() if q.state == OFFERED]
 
+    def passed_count(self) -> int:
+        """Adjudicated PASSES on the books — the honest fact behind a `quests.passed` criterion
+        (§0.5: a pass is a glue-closed state in THIS store, never a tools_used attempt). Counts the
+        live file plus every rotated monthly archive so rotation can't walk the number backwards."""
+        n = sum(1 for q in self.load() if q.state == PASSED)
+        try:
+            for arc in self.config.state_dir.glob(f"{ARCHIVE_PREFIX}*.jsonl"):
+                for line in arc.read_text(encoding="utf-8", errors="replace").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        if json.loads(line).get("state") == PASSED:
+                            n += 1
+                    except (ValueError, json.JSONDecodeError):
+                        continue
+        except OSError:
+            pass
+        return n
+
     # --- write --------------------------------------------------------------------------------
     def save(self, quests: list[Quest]) -> None:
         """Atomically rewrite the whole quest set, rotating terminal overflow to the archive first."""
@@ -288,17 +315,31 @@ class QuestStore:
 # ============================================================================================
 # Reward sink — the payout seam (§0.5: payout through the standard XP path)
 # ============================================================================================
+def reward_xp_amount(reward: Optional[dict]) -> int:
+    """The XP LEG of any reward, read in ONE place (TOOL_PROGRESSION: "it pays" pays limbs, not
+    just XP — so a grant reward can carry both legs). A plain XP reward carries it as `amount`;
+    an unlock/capacity reward may carry an `xp` field riding alongside, e.g.
+    {"kind": "unlock", "what": "workshop", "xp": 50}. The XP leg always pays through the standard
+    sink path; the unlock/capacity leg stays the grant seam's job (this engine never mints one)."""
+    reward = reward or {}
+    key = "amount" if reward.get("kind", REWARD_XP) == REWARD_XP else "xp"
+    try:
+        return int(reward.get(key, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def default_reward_sink(config, quest: "Quest", persona: Optional[dict] = None) -> None:
-    """Apply a quest's reward via the standard XP path. `unlock`/`capacity` rewards are recorded on
-    the quest (state persists them) and are the level-gate phase's job — this engine flags the
-    intent; it does not unlock a tier. Requires a persona dict for XP payout; if none is supplied
-    the caller wires the sink to persona.add_xp itself."""
-    reward = quest.reward or {}
-    if reward.get("kind") == REWARD_XP and persona is not None:
+    """Apply a quest's reward via the standard XP path — the XP leg of ANY kind pays through
+    persona.award_xp (reward_xp_amount reads it), so an unlock reward with an `xp` field still
+    pays its XP. The `unlock`/`capacity` LEG is recorded on the quest (state persists it) and is
+    the grant seam's job — this engine flags the intent; it does not unlock a tier. Requires a
+    persona dict for XP payout; if none is supplied the caller wires the sink itself."""
+    amount = reward_xp_amount(quest.reward)
+    if amount > 0 and persona is not None:
         try:
             import persona as persona_mod
-            persona_mod.award_xp(persona, int(reward.get("amount", 0)),
-                                 reason=f"quest:{quest.id}")
+            persona_mod.award_xp(persona, amount, reason=f"quest:{quest.id}")
         except Exception:  # noqa: BLE001 - reward payout is best-effort, never brick the loop
             pass
 
@@ -544,8 +585,12 @@ def _reward_str(reward: dict) -> str:
     kind = reward.get("kind", REWARD_XP)
     if kind == REWARD_XP:
         return f"{reward.get('amount', 0)} XP"
+    # A non-XP reward may carry an XP leg alongside (reward_xp_amount) — the window states BOTH
+    # legs, because both are what the System actually pays.
+    xp_leg = reward_xp_amount(reward)
+    tail = f" +{xp_leg} XP" if xp_leg > 0 else ""
     if kind == REWARD_UNLOCK:
-        return f"unlock: {reward.get('what', '?')}"
+        return f"unlock: {reward.get('what', '?')}{tail}"
     if kind == REWARD_CAPACITY:
-        return f"+{reward.get('amount', 1)} capacity: {reward.get('what', '?')}"
+        return f"+{reward.get('amount', 1)} capacity: {reward.get('what', '?')}{tail}"
     return str(kind)

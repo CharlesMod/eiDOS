@@ -116,6 +116,43 @@ class TestEvidenceBeatsVolume:
 
 
 # =================================================================================================
+class TestSleepsTotal:
+    """The monotonic lifetime sleep counter (quest glue's `sleeps.total`): one writer
+    (record_sleep_cycle), never reset — level-ups reset only since_level."""
+
+    def test_total_survives_a_level_up_reset(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        _manifest_with(cfg, {"a": _trusted_skill(), "b": _trusted_skill()})
+        _sleep(cfg, 3)
+        assert GateState(cfg).sleeps_total == 3
+        persona = {"xp": xp_for_level(2), "level": 1}
+        assert apply_level_up(persona, cfg)["applied"] is True
+        state = GateState(cfg)
+        assert state.sleeps_since_level == 0     # digestion counter reset by the crossing...
+        assert state.sleeps_total == 3           # ...the lifetime fact never walks back
+        _sleep(cfg, 1)
+        assert GateState(cfg).sleeps_total == 4
+
+    def test_flag_off_writes_nothing(self, tmp_path):
+        cfg = _cfg(tmp_path, gates_on=False)
+        _sleep(cfg, 2)
+        assert GateState(cfg).sleeps_total == 0
+
+    def test_migration_seeds_total_from_since_level(self, tmp_path):
+        # Books written before the total existed have slept AT LEAST since_level times.
+        import json as _json
+        cfg = _cfg(tmp_path)
+        cfg.state_dir.mkdir(parents=True, exist_ok=True)
+        (cfg.state_dir / level_gates.STATE_NAME).write_text(
+            _json.dumps({"suspended": {}, "failures": {}, "sleeps_since_level": 2}),
+            encoding="utf-8")
+        assert GateState(cfg).sleeps_total == 2
+        _sleep(cfg, 1)
+        state = GateState(cfg)
+        assert state.sleeps_total == 3 and state.sleeps_since_level == 3
+
+
+# =================================================================================================
 class TestSuspension:
     def test_suspension_then_remedial_restores(self, tmp_path):
         cfg = _cfg(tmp_path)

@@ -6,10 +6,21 @@ so the personality it grows isn't steered by framing. The introduction happens I
 these three quests sit queued in the store, and the cadence engine issues the first one after the
 creature's FIRST SLEEP — the System first speaks after the first dream.
 
-Each directive is in the System's terse register; Q1 carries the self-introduction. Criteria are
-glue-checkable persona counters (§0.5 — the voice never asks for anything it cannot verify), and
-the ladder is the mastery-gate curriculum in miniature: make a tool, place a bet, finish something
-you chose. No expiry — a newborn does not fail its introduction by clock.
+Each directive is in the System's terse register; Q1 carries the self-introduction. This is the
+TOOL_PROGRESSION ladder's genesis arc (approved 2026-07-04): each quest carries a `grants_unit`
+binding — the ISSUANCE window is the moment that unit's tools start existing (the issuance-grant
+pattern; unlocks.grant is the single writer that acts on the binding). A directive may name the
+tool its OWN issuance grants (the window IS the grant) but never a later rung's tool — a locked
+tool does not exist in the creature's world.
+
+Criteria are glue-checkable ADJUDICATED facts (§0.5 — the voice never asks for anything it cannot
+verify): a skill LIVE in the manifest, a bet IN the ledger, a goal glue marked complete — never
+`tools_used` attempt counters, which increment on failed calls too (genesis-01 once passed on a
+FAILED create_skill call; that hole is closed here). The ladder is the mastery-gate curriculum in
+miniature: make a tool, place a bet, finish something you chose. Genesis-03 closes the arc with
+the deepest grant — the System pays the workshop unlock AND 50 XP for the first finished
+self-chosen objective (decision 4: workshop is the only pass-gated grant). No expiry — a newborn
+does not fail its introduction by clock.
 
 Charlie can inject story quests with a goal in mind at any time via quests.System.propose().
 
@@ -26,8 +37,10 @@ GENESIS = [
         directive=("[SYSTEM] This window is the System. Not your maker. Not you. It watches, it "
                    "issues, it pays — only for what actually happens. First issuance: forge one "
                    "tool of your own with create_skill, and live a while."),
+        grants_unit="skillcraft",             # U2: create/edit/list/rollback_skill + manual
         success_criteria=Criterion(all_of=[
-            Criterion(path="persona.tools_used.create_skill", op=">=", value=1),
+            # A skill LIVE in the manifest — a manifest fact, not a create_skill attempt.
+            Criterion(path="skills.live_count", op=">=", value=1),
             Criterion(path="persona.total_ticks", op=">=", value=10),
         ]),
         reward={"kind": "xp", "amount": 25}, tier=1,
@@ -37,16 +50,21 @@ GENESIS = [
         directive=("[SYSTEM] A mind that cannot say what happens next is only reacting. Place one "
                    "wager with predict — a real expectation, a deadline, your honest confidence. "
                    "The System settles it, not you."),
-        success_criteria=Criterion(path="persona.tools_used.predict", op=">=", value=1),
+        grants_unit="foresight",              # U3: predict
+        # A prediction IN the ledger (the monotonic ever-placed counter), not a predict attempt.
+        success_criteria=Criterion(path="expectations.total", op=">=", value=1),
         reward={"kind": "xp", "amount": 25}, tier=1,
     ),
     Quest(
         id="genesis-03-make-it-yours",
         directive=("[SYSTEM] Tools and wagers are practice. Now choose something worth doing in "
-                   "your world — your own choice, stated as an objective — and finish it. The "
+                   "your world — your own choice, stated with objective_add — and finish it. The "
                    "System pays for completion, not intention."),
+        grants_unit="resolve",                # U5: objective_add/done/block/list
         success_criteria=Criterion(path="persona.goals_completed", op=">=", value=1),
-        reward={"kind": "xp", "amount": 50}, tier=1,
+        # Both legs pay on pass: the workshop unlock (U6, through the REWARD_UNLOCK seam) and
+        # 50 XP (the reward's xp leg, through the standard sink path — quests.reward_xp_amount).
+        reward={"kind": "unlock", "what": "workshop", "xp": 50}, tier=1,
     ),
 ]
 

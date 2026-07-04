@@ -79,6 +79,10 @@ class GateState:
         self.suspended: dict[str, dict] = {}      # tier(str) -> {since, failures, remedial_id}
         self.failures: dict[str, int] = {}        # tier(str) -> consecutive non-delegated failures
         self.sleeps_since_level: int = 0
+        self.sleeps_total: int = 0                # MONOTONIC completed-sleep count — the honest
+                                                  # lifetime fact quest glue adjudicates
+                                                  # (`sleeps.total`); level-ups reset since_level,
+                                                  # never this. Single writer: record_sleep_cycle.
         self.load()
 
     def _path(self):
@@ -90,6 +94,9 @@ class GateState:
             self.suspended = dict(d.get("suspended", {}))
             self.failures = {k: int(v) for k, v in dict(d.get("failures", {})).items()}
             self.sleeps_since_level = int(d.get("sleeps_since_level", 0))
+            # Migration floor: books written before the total existed have slept AT LEAST
+            # since_level times (fail-open re-seed from evidence, never to empty).
+            self.sleeps_total = int(d.get("sleeps_total", self.sleeps_since_level))
         except Exception:  # noqa: BLE001 - missing/corrupt file => fresh books
             pass
 
@@ -102,6 +109,7 @@ class GateState:
                 "suspended": self.suspended,
                 "failures": self.failures,
                 "sleeps_since_level": self.sleeps_since_level,
+                "sleeps_total": self.sleeps_total,
             }, ensure_ascii=False), encoding="utf-8")
             tmp.replace(p)
         except Exception:  # noqa: BLE001 - best-effort persistence
@@ -300,9 +308,12 @@ def record_remedial_completion(config, tier: int) -> bool:
 
 
 def record_sleep_cycle(config) -> None:
-    """Advance the mandatory-digestion counter. The cutover calls this at each sleep boundary."""
+    """Advance the sleep counters — the mandatory-digestion counter AND the monotonic lifetime
+    total (the `sleeps.total` fact quest glue adjudicates). One writer, one boundary: the cutover
+    calls this at each COMPLETED sleep."""
     if not _enabled(config):
         return
     state = GateState(config)
     state.sleeps_since_level += 1
+    state.sleeps_total += 1
     state.save()
