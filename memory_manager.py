@@ -348,52 +348,53 @@ class MemoryManager:
 
         ranked = sorted(candidates, key=_score, reverse=True)
 
-        # --- exploration slot (§6, anti-Matthew) --------------------------------------------------
+        # --- budget first, then the exploration slot INSIDE the budget (§6, anti-Matthew) ----------
+        # The slot used to be spliced into the candidate list before budgeting, which parked it at
+        # index ~n·(1−ratio) — any realistic char budget cut it long before that, and the sim-days
+        # harness caught the slot silently vanishing under production-shaped recalls (promotions → 0
+        # from day 2). The seat must be reserved within what the budget actually returns.
         ratio = self.config.pillars_recall_explore_ratio if explore_ratio is None else explore_ratio
-        ranked = self._reserve_exploration_slot(ranked, relevance, ratio)
+        fitted = _fit_to_budget(ranked, budget_chars)
+        return self._reserve_exploration_slot(ranked, fitted, budget_chars, ratio)
 
-        # --- budget to char limit -----------------------------------------------------------------
-        return _fit_to_budget(ranked, budget_chars)
-
-    def _reserve_exploration_slot(self, ranked: list[Engram], relevance: dict[str, float],
-                                  explore_ratio: float) -> list[Engram]:
-        """Reserve a low-strength EXPLORATION slot in the recall set (§6). Strength-ranked recall is
-        rich-get-richer: a memory that ranking buries can never be recalled, so can never earn back
-        its strength, so stays buried — an echo chamber you cannot detect from inside. To break it,
-        we deliberately promote ONE low-strength but relevant engram that pure ranking would exclude
-        into the set, sized by `explore_ratio` (config.pillars_recall_explore_ratio, default 0.15 —
-        norepinephrine's explore/exploit balance). The sample is the LOWEST-strength relevant
-        candidate not already in the exploit head, so the slot surfaces exactly what ranking buries.
+    def _reserve_exploration_slot(self, ranked: list[Engram], fitted: list[Engram],
+                                  budget_chars: int, explore_ratio: float) -> list[Engram]:
+        """Reserve a low-strength EXPLORATION seat inside the BUDGETED recall set (§6). Strength-ranked
+        recall is rich-get-richer: a memory that ranking buries can never be recalled, so can never
+        earn back its strength, so stays buried — an echo chamber you cannot detect from inside. To
+        break it, ONE low-strength but relevant engram that the budgeted ranking excluded is promoted
+        into the returned set, its seat paid for by exploit's LAST seat (the lowest-ranked fitted item
+        is dropped until the sample fits the char budget). `explore_ratio` > 0 turns the slot on
+        (config.pillars_recall_explore_ratio, default 0.15 — norepinephrine's explore/exploit balance);
+        exactly one sample is promoted per recall regardless of ratio size — the point is that the
+        allocation must never round (or get budget-cut) to zero.
         """
         try:
             ratio = float(explore_ratio)
         except (TypeError, ValueError):
             ratio = 0.0
         if ratio <= 0.0 or len(ranked) < 2:
-            return ranked
+            return fitted
 
-        # The exploit head is what ranking alone would return, minus the one slot exploration claims.
-        # (Reserve at least one slot whenever the ratio is positive — 0.15 of a handful still buys the
-        # buried memory a seat; the whole point is that a tiny allocation must not round to zero.)
-        n = len(ranked)
-        explore_slots = max(1, round(ratio * n))
-        head_len = max(1, n - explore_slots)
-        head = ranked[:head_len]
-        tail = ranked[head_len:]
-        head_ids = {e.id for e in head}
-
-        # The buried, low-strength, still-relevant candidate: lowest strength among those NOT in the
-        # exploit head. This is precisely an engram pure ranking would have excluded from the head.
-        buried = [e for e in ranked if e.id not in head_ids
+        # The buried, low-strength, still-relevant candidate: lowest strength among those the
+        # budgeted set excluded. This is precisely what pure ranking-under-budget would never show.
+        fitted_ids = {e.id for e in fitted}
+        buried = [e for e in ranked if e.id not in fitted_ids
                   and float(e.strength) <= EXPLORE_STRENGTH_CEILING]
         if not buried:
-            return ranked  # nothing low-strength was buried — no echo-chamber risk to correct here
+            return fitted  # every low-strength candidate already made the set — nothing is buried
         sample = min(buried, key=lambda e: float(e.strength))
 
-        # Splice the sample into the returned set: keep the exploit head, then lead the tail with the
-        # exploration sample (so it survives budgeting even when the tail would otherwise be cut).
-        rest = [e for e in tail if e.id != sample.id]
-        return head + [sample] + rest
+        # Pay for the seat: drop exploit's lowest-ranked items until the sample fits the budget.
+        # At least one exploit item always stays — exploration accompanies recall, never replaces it.
+        kept = list(fitted)
+        if budget_chars is not None and budget_chars > 0:
+            used = sum(len(e.body) for e in kept)
+            while len(kept) > 1 and used + len(sample.body) > budget_chars:
+                used -= len(kept.pop().body)
+            if used + len(sample.body) > budget_chars:
+                return kept  # a budget too small for even (1 exploit + sample): exploit wins the seat
+        return kept + [sample]
 
 
 # =================================================================================================

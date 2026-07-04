@@ -39,6 +39,9 @@ SPRING_STEP = 0.004          # declared: STEP/5 — experience outpulls the spri
 
 class Temperament:
     AXES = ("initiative", "persistence", "caution")
+    genome_baseline = GENOME_BASELINE   # Pillars 4.3 seam: the setpoint the springs pull toward —
+                                        # class-visible so harnesses (sim-days) can probe for the
+                                        # mechanism and read the recovery target without guessing.
 
     def __init__(self, config=None, *, step=STEP):
         self.config = config

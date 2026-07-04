@@ -327,7 +327,7 @@ checkpoint + backup snapshot before each; rollback is always "flag off," never a
       justification (plan §0.4).
 - [ ] Tick-flow integration test: recorded-tick replay asserting bus events + context blocks stay
       byte-stable when flags are off (safe rollout: every phase ships dark behind its flag).
-- [ ] **Simulated-days harness** (`tools/simdays.py` + tests): mock-LLM creature-days — tick →
+- [ ] **Simulated-days harness** (`simdays.py` + tests): mock-LLM creature-days — tick →
       outcomes → sleep, repeated — running the coupled economies TOGETHER (strength decay ×
       exploration slot × adenosine × quest cadence × metabolic prices). Asserts the dampers hold
       in combination, not just alone: the exploration slot still surfaces after 50 decay cycles;

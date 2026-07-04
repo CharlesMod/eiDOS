@@ -281,6 +281,37 @@ class TestExplorationSlot:
         explored = mgr.recall("pantry shelf jar", budget_chars=10_000, explore_ratio=0.15)
         assert buried.id in {e.id for e in explored}, "exploration slot must surface the buried engram"
 
+    def test_exploration_slot_survives_tight_budget(self, tmp_path):
+        """The sim-days finding: the slot used to be spliced into the CANDIDATE list before
+        budgeting, parking it at index ~n·(1−ratio) — a production-shaped char budget cut it every
+        time (promotions → 0 from day 2 of the coupled run). The seat must live INSIDE the budget,
+        paid for by exploit's last seat."""
+        cfg = _cfg(tmp_path)
+        con = Consolidator(cfg)
+        bodies = [
+            "the pantry shelf keeps a jar of flour milled fine for sourdough baking",
+            "the pantry shelf keeps a jar of sugar raw cane crystals sweetening dessert",
+            "the pantry shelf keeps a jar of rice short grain steamed alongside curry",
+            "the pantry shelf keeps a jar of beans black turtle simmered into chili",
+            "the pantry shelf keeps a jar of pasta dried rigatoni boiled under ragu",
+            "the pantry shelf keeps a jar of oats rolled thick soaked overnight cold",
+            "the pantry shelf keeps a jar of lentils split orange stewed with cumin",
+            "the pantry shelf keeps a jar of quinoa rinsed white fluffed beside salmon",
+        ]
+        for body in bodies:
+            con.commit(Engram(kind="fact", body=body, strength=0.95, stats={"situation": ""}))
+        buried = con.commit(Engram(
+            kind="fact", body="the pantry shelf keeps a dusty forgotten jar of saffron",
+            strength=0.05, stats={"situation": ""}))
+        mgr = MemoryManager(cfg)
+
+        budget = 3 * 75   # fits only ~3 strong bodies — far short of where the old splice sat
+        out = mgr.recall("pantry shelf jar", budget_chars=budget, explore_ratio=0.15)
+        ids = {e.id for e in out}
+        assert buried.id in ids, "the exploration seat must survive a tight budget"
+        assert len(out) >= 2, "exploration accompanies recall, never replaces it"
+        assert sum(len(e.body) for e in out) <= budget, "the seat is paid for WITHIN the budget"
+
     def test_exploration_ratio_defaults_from_config(self, tmp_path):
         cfg = _cfg(tmp_path)
         assert cfg.pillars_recall_explore_ratio == pytest.approx(0.15)   # the declared default

@@ -30,7 +30,7 @@ The five damper verdicts (PILLARS_TODO verbatim):
                                    diverges monotonically to a rail (the named envelope below).
 
 Run standalone for the Phase 5.5 dashboard-facing artifact:
-    PYTHONUTF8=1 .venv/bin/python tools/simdays.py --days 100 --seed 7
+    PYTHONUTF8=1 .venv/bin/python simdays.py --days 100 --seed 7
 Tests (tests/test_simdays.py) call the same engine with fewer days so the suite stays fast.
 
 Doctrine (PILLARS_PLAN §0): §0.4 every constant below is a DECLARED knob or envelope bound with a
@@ -283,6 +283,7 @@ def _build_config(root: Path) -> Config:
         "pillars_learning_xp_enabled",
         "pillars_quests_enabled",
         "pillars_news_enabled",
+        "pillars_mastery_gates_enabled",   # 4.3: the temperament setpoint springs join the coupled run
     ):
         setattr(cfg, flag, True)
     cfg.workspace.mkdir(parents=True, exist_ok=True)
@@ -648,20 +649,22 @@ class SimCreature:
         return self
 
     def exploration_probe(self) -> dict:
-        """The damper-1 mechanism check, post-decay/prune: with NO budget cut (isolating the
-        decay+prune threat the TODO names), does the exploration slot still promote a low-strength
-        engram ahead of where pure ranking (explore_ratio=0) places it?"""
+        """The damper-1 mechanism check, post-decay/prune: under a TIGHT budget — the regime the
+        slot exists for — does exploration still seat a low-strength engram that pure
+        ranking-under-budget excludes? (An unbudgeted recall shows everything, so nothing is buried
+        and the slot correctly does nothing — the original probe assumed the pre-fix splice-reorder
+        and went blind the day the slot became budget-aware.)"""
         probe = "drill probe ops/learnable ops/mastered ops/noise"
-        got = self.mm.recall(probe, budget_chars=0)
-        pure = self.mm.recall(probe, budget_chars=0, explore_ratio=0.0)
-        pure_ids = [e.id for e in pure]
-        promoted = None
-        for i, e in enumerate(got):
-            if i < len(pure_ids) and e.id != pure_ids[i]:
-                promoted = e
-                break
-        ok = promoted is not None and promoted.strength <= EXPLORE_STRENGTH_CEILING
-        return {"ok": ok, "candidates": len(got),
+        unbudgeted = self.mm.recall(probe, budget_chars=0, explore_ratio=0.0)
+        # A budget fitting roughly a third of the candidate mass — tight enough to bury the tail,
+        # the production shape the sim-days finding was about.
+        budget = max(1, sum(len(e.body) for e in unbudgeted) // 3)
+        got = self.mm.recall(probe, budget_chars=budget)
+        pure_ids = {e.id for e in self.mm.recall(probe, budget_chars=budget, explore_ratio=0.0)}
+        promoted = next((e for e in got if e.id not in pure_ids
+                         and float(e.strength) <= EXPLORE_STRENGTH_CEILING), None)
+        ok = promoted is not None
+        return {"ok": ok, "candidates": len(unbudgeted),
                 "promoted_strength": None if promoted is None else round(promoted.strength, 3)}
 
     def verdicts(self) -> list[Verdict]:
