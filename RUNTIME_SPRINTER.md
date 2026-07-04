@@ -62,6 +62,11 @@ sudo systemctl restart eidos-dashboard.service
 # STATUS / LOGS:
 systemctl status eidos-dashboard.service llama-swap.service
 journalctl -u eidos-dashboard.service -n 100 --no-pager
+
+# FRESH SLATE (retire the creature, birth a new one — archive workspace, reseed nuggets +
+# genesis quests, restart on fresh code, boot PAUSED). Never hand-roll this: the watchdog
+# respawns eidos, so the workspace swap must happen with the dashboard STOPPED.
+scripts/fresh_slate.sh
 ```
 
 ## Gotchas that will bite you
