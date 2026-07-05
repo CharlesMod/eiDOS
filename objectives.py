@@ -443,6 +443,9 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
     if active["frustration"] >= park_at:
         parked = True
         active["state"] = "blocked"
+        # Re-blocking a thawed goal without progress CONFIRMS the belief (the exposure didn't pan
+        # out this time), so drop the refutation tag — only a real progress tick may refute.
+        active.pop("_thawed_from_block", None)
         active["blocked_reason"] = active.get("blocked_reason") or (
             f"stalled — {active['ticks_since_progress']} ticks without progress")
         # leave wake_condition as set by the model if any
