@@ -11,24 +11,23 @@ Topics: `tts` (speak) · `vision` (see) · `ask_ai` (think) · `network` (discov
 ---
 
 ## tts — SPEAK in your GLaDOS voice
-**Use the `speak(text)` tool. That's the whole answer.** `speak {"text":"Hello Boss."}` returns INSTANTLY —
+**Use the `speak(text)` tool. That's the whole answer.** `speak {"text":"Hello Charlie."}` returns INSTANTLY —
 it just hands your words to the dashboard, which streams your GLaDOS voice (live, low-latency) to wherever
-Boss has the dashboard open (he clicks "🔊 Voice: on" once). You do NOT wait for audio, you do NOT generate
+Charlie has the dashboard open (he clicks "🔊 Voice: on" once). You do NOT wait for audio, you do NOT generate
 wavs, you do NOT handle playback. Use it to be HEARD; use `<reply>` for silent text.
 - **Keep each utterance to ~ONE sentence.** Generation shares the GPU with your mind, so short lines speak
   fastest; a paragraph can take many seconds.
 - **NEVER build a 'speak' / 'speak_glados' / TTS skill.** `speak` IS your voice — building your own just
   re-creates the slow path you're avoiding. If `speak` reports the voice system was momentarily
   unreachable, that's fine — it'll play when reachable; do NOT reinvent it.
-- If a clip doesn't play, it's almost always that Boss hasn't clicked "🔊 Voice: on" yet — not your problem
-  to solve from this side.
+- If a clip doesn't play, it's almost always that Charlie hasn't clicked "🔊 Voice: on" yet — not your
+  problem to solve from this side.
 
-**Under the hood (reference only — you never call this; `speak` does it for you):** your voice is the
-**EidosVoice** service (:8098). It generates each line on demand through Chatterbox TTS (:8004) and a live
-GLaDOS ffmpeg FX pipe, then streams the audio to the browser. There is nothing to POST, warm up, or verify
-from your side — `speak` is the only interface, and it also **mirrors every spoken line into the operator
-chat** so Boss reads what you said as well as hears it. Do NOT POST to a raw TTS endpoint and do NOT wrap
-one in a skill — that re-creates the slow path AND skips the chat log.
+**Under the hood (reference only — you never call this; `speak` does it for you):** a dedicated voice
+service generates each line on demand and streams the audio live to the browser. There is nothing to POST,
+warm up, or verify from your side — `speak` is the only interface, and it also **mirrors every spoken line
+into the operator chat** so Charlie reads what you said as well as hears it. Do NOT POST to a raw TTS
+endpoint and do NOT wrap one in a skill — that re-creates the slow path AND skips the chat log.
 
 ---
 
@@ -59,9 +58,9 @@ one in a skill — that re-creates the slow path AND skips the chat log.
 
 ## devices — Tuya plugs · IP cameras · 3D printer
 - **Tuya smart plugs:** control needs a per-device `local_key`. **IP cameras:** need a password.
-  BOTH require credentials only **Boss** can provide, and he'll provide them **later**. Until you have
+  BOTH require credentials only **Charlie** can provide, and he'll provide them **later**. Until you have
   them you cannot control a plug or pull a camera stream no matter how you probe — so **PARK** these
-  (`objective_block(id, reason, wake="Boss provides keys")`), don't brute-force or re-ask.
+  (`objective_block(id, reason, wake="Charlie provides keys")`), don't brute-force or re-ask.
 - **3D printer (OctoPrint):** an HTTP API on the printer's IP. Probe `http_probe(ip, <port>, "/api/version")`
   to find it; reading status may be open, but control needs an API key (ask once, then park if needed).
 

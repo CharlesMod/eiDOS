@@ -50,6 +50,12 @@ RESERVED_NAMES = {
     "create_skill", "edit_skill", "list_skills", "rollback_skill",
     "call",        # 3.3 composition atom — a skill named `call` would shadow it in every namespace
     *ATOM_NAMES,   # a skill must not shadow an atom in its own namespace
+    # Every lockable unit tool (TOOL_PROGRESSION): a creature must not author a skill named
+    # `predict` or `delegate` before that organ exists — the later grant would collide with (and
+    # shadow) its own making. Locked or not, these names belong to the species.
+    "note_append", "note_read", "note_list", "note_close", "check_tools", "manual",
+    "predict", "speak", "vision", "see",
+    "objective_add", "objective_done", "objective_block", "objective_list", "delegate",
 }
 
 # Meta-execution builtins forbidden inside skill source (they bypass review).
@@ -1256,10 +1262,19 @@ def list_skills(config: Config) -> dict:
     builtins = sorted(n for n in RESERVED_NAMES if n not in {
         "create_skill", "edit_skill", "list_skills", "rollback_skill"})
     try:
-        from tools import visible_tools
+        from tools import visible_tools, TOOLS as _REG
         vis = visible_tools(config)
-        if vis is not TOOLS:    # the creature ladder is active: a locked name does not exist (§0)
-            builtins = [n for n in builtins if n in vis]
+        if vis is not _REG:
+            # The creature ladder is active. The mirror must show the WHOLE visible body, not
+            # RESERVED_NAMES ∩ visible — the old intersection hid note_*, check_tools, manual,
+            # and every granted organ that never sat in RESERVED_NAMES, so a newborn's own
+            # proprioception listed 3 of its 8 organs (review: "the mirror lies"). Derive from
+            # the accessor: every visible builtin except the skill-forge meta-verbs; the
+            # creature's authored skills get their own YOUR SKILLS section.
+            authored = set(m.get("skills", {}))
+            builtins = sorted(n for n in vis
+                              if n not in authored and n not in {
+                                  "create_skill", "edit_skill", "list_skills", "rollback_skill"})
     except Exception:  # noqa: BLE001 - fail to the unfiltered (house) listing
         pass
     return {"builtin_tools": builtins, "skills": skills,

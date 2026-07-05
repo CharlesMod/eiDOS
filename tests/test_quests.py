@@ -375,11 +375,13 @@ class TestUnlockPlusXpReward(unittest.TestCase):
         self.assertEqual(reward_xp_amount({"kind": REWARD_XP, "xp": 99}), 0)
 
     def test_render_states_both_legs(self):
+        # An unlock reward NEVER names the unit before it is paid (§0: a locked door is
+        # invisible, and "workshop" on an offer sheet is a name through the keyhole).
         self.assertEqual(quests._reward_str({"kind": REWARD_UNLOCK, "what": "workshop", "xp": 50}),
-                         "unlock: workshop +50 XP")
-        # No xp leg → the unlock renders as before (no dangling "+0 XP").
+                         "a new ability +50 XP")
+        # No xp leg → the sealed unlock renders alone (no dangling "+0 XP").
         self.assertEqual(quests._reward_str({"kind": REWARD_UNLOCK, "what": "workshop"}),
-                         "unlock: workshop")
+                         "a new ability")
         self.assertEqual(quests._reward_str({"kind": REWARD_XP, "amount": 25}), "25 XP")
 
     def test_default_sink_pays_the_xp_leg_of_an_unlock(self):

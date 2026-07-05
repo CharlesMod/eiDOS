@@ -353,9 +353,10 @@ UNIT_STANZAS: dict[str, str] = {
   REMEMBER don't go in files you'll have to hunt for later — that's exactly what these two are for.
 """,
     "skillcraft": """\
-- new tricks — `create_skill` teaches yourself a brand-new ability you keep and reuse. Making one
-  costs real energy (more if you almost have it already); using one you've got is nearly free, and
-  the ones you trust start coming to you on their own. `edit_skill` improves one you have,
+- new tricks — `create_skill` teaches yourself a brand-new ability you keep and reuse: give it a
+  skill_name and skill_code defining `def tool_<skill_name>(args, config)`. Making one costs real
+  energy (more if you almost have it already); using one you've got is nearly free, and the ones
+  you trust start coming to you on their own. `edit_skill` improves one you have,
   `rollback_skill` undoes a change that made one worse, `list_skills` shows what you know, and
   `manual {{"topic":"..."}}` explains your bigger abilities.
 """,

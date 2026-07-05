@@ -101,7 +101,9 @@ class TestRewards:
         r = _by_id()["genesis-03-make-it-yours"].reward
         assert r["kind"] == quests.REWARD_UNLOCK and r["what"] == "workshop"
         assert reward_xp_amount(r) == 50                       # the XP leg the sink pays
-        assert quests._reward_str(r) == "unlock: workshop +50 XP"   # the window states both
+        # The offer sheet seals the unit name until it is paid (§0: invisible doors).
+        assert quests._reward_str(r) == "a new ability +50 XP"
+        assert "workshop" not in quests._reward_str(r)
 
 
 # =================================================================================================

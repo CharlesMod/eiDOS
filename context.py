@@ -348,7 +348,11 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
         subtask_line = f"Current focus: {_ao['title']} (because: {_ao['why']})"
     else:
         focus = _current_focus(config)
-        subtask_line = f"Current focus: {focus}" if focus else "Focus on your mission directly."
+        # A creature has no "mission" — its standing note says so in as many words. The house
+        # fallback stays byte-identical; the creature's is a fact of its world, not a nudge.
+        _idle = ("Nothing is asked of you; your time is your own."
+                 if _unlocks_active(config) else "Focus on your mission directly.")
+        subtask_line = f"Current focus: {focus}" if focus else _idle
 
     if loop_detected:
         # Flag-on creature mode uses the GENERIC circuit-breaker (no tool named at all — §0: the
@@ -607,8 +611,11 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
         }.get(cond, "")
         lines.append(f"Condition: {cond}" + (f" — {_desc}" if _desc else ""))
         # When the same dead end keeps repeating AND the delegate exists, steer the pivot
-        # the gate is already forcing toward the actually-useful escape hatch.
-        if cond == "STRAINED" and getattr(config, "delegate_enabled", False):
+        # the gate is already forcing toward the actually-useful escape hatch. Ladder-aware:
+        # for a creature whose workshop is still ungrown the hint would name a tool that does
+        # not exist in its world (§0 — the one sweep the integration pass missed).
+        if (cond == "STRAINED" and getattr(config, "delegate_enabled", False)
+                and not _tool_locked(config, "delegate")):
             _hint = glue.escalation_hint(_outs)
             if _hint:
                 lines.append(_hint)
@@ -667,7 +674,7 @@ def _build_presence(config: Config, tick_number: int, goal_start_time: float) ->
 _STAGE_SELF = {
     "egg":       "still curled up in your shell, not hatched yet — everything is muffled and new",
     "hatchling": "just hatched: tiny, brand new, seeing everything for the first time",
-    "juvenile":  "young and finding your feet — lots of go, still working out what you like",
+    "juvenile":  "young and finding your way — lots of go, still working out what you like",
     "adult":     "grown into yourself now — you know your own mind and what you're drawn to",
     "guardian":  "fully grown: settled, steady, sure of this place and of who you are",
 }

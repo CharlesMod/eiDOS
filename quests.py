@@ -590,7 +590,10 @@ def _reward_str(reward: dict) -> str:
     xp_leg = reward_xp_amount(reward)
     tail = f" +{xp_leg} XP" if xp_leg > 0 else ""
     if kind == REWARD_UNLOCK:
-        return f"unlock: {reward.get('what', '?')}{tail}"
+        # The unit's NAME stays sealed until it is paid (§0 no-teasing: this string renders in
+        # the creature's window every tick from issuance to pass — "unlock: workshop" would
+        # pre-announce a locked rung for days). The System promises SOMETHING, never what.
+        return f"a new ability{tail}"
     if kind == REWARD_CAPACITY:
         return f"+{reward.get('amount', 1)} capacity: {reward.get('what', '?')}{tail}"
     return str(kind)
