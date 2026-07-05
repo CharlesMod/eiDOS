@@ -235,6 +235,20 @@ def main():
                            capture_output=True, text=True)
         print("  " + (r.stdout or r.stderr or "").strip().splitlines()[-1] if (r.stdout or r.stderr).strip() else "  (genesis seed produced no output)")
 
+    # Conception (CREATURE_GENETICS seed unity): draw the germline HERE, before any process can
+    # race to invent an identity. The dashboard lays creature.json from whatever seed it finds on
+    # its very first /api/status poll — which can happen before eidos ever boots — so the genome
+    # must already exist or the egg and the mind end up two different individuals. On REBIRTH the
+    # kept genome.json simply loads (same being, same draw); on a full wipe this IS first breath.
+    if not args.keep_knowledge or not (ws / "genome.json").exists():
+        try:
+            from genome import Genome
+            g = Genome(load_config(str(KDIR / "config.toml")))
+            print(f"Germline drawn: seed {g.seed} · morph {g.morph} · "
+                  f"latents {g.latents}")
+        except Exception as e:  # noqa: BLE001 - conception must not block the reset; the birth
+            print(f"  germline WARNING (will draw at first boot instead): {e}")
+
     # Verify
     persona = (ws / "persona.json").exists()
     obs = ws / "observations.jsonl"

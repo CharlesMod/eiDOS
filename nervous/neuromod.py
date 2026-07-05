@@ -79,8 +79,15 @@ def _current_stage(config) -> str:
     import json
     import creature_gen
     ws = config.workspace
-    persona = json.loads((ws / "persona.json").read_text(encoding="utf-8"))
-    level = int(persona.get("level", 1))
+    try:
+        persona = json.loads((ws / "persona.json").read_text(encoding="utf-8"))
+        level = int(persona.get("level", 1))
+    except FileNotFoundError:
+        # No persona has EVER been saved: this is not a read failure, it is a knowable state —
+        # a creature at the very start of life (fresh slate; ticks before the first save). It
+        # must get the EGG scale, not the adult fail-open — the newborn's most important day is
+        # exactly when the nap curve matters most. Corrupt JSON still raises → adult fail-open.
+        level = 1
     try:
         creature = json.loads((ws / "creature.json").read_text(encoding="utf-8"))
         hatched = bool(creature.get("hatched", False))
@@ -132,9 +139,18 @@ class Adenosine:
     genome exists — see _stage_scale / _wake_budget_gene). Stage scale ≤ 1.0 and gene ∈ [0.9, 1.1],
     so a young creature naps in short bouts and no stage can push the ceiling past the adult's."""
 
+    # Declared: how stale the derived ceiling may go before re-reading the stage (seconds). Stage
+    # changes are RARE (a handful per life) and the ceiling is hours-scale, so a minute of
+    # staleness is immaterial — but frozen-at-construction was not: a creature that hatched or
+    # leveled mid-process kept its old nap rhythm until the next respawn.
+    CEILING_REFRESH_S = 60.0
+
     def __init__(self, *, max_wake_hours: float = 18.0, config=None):
         # A zero/negative ceiling would mean "never allowed awake"; guard so pressure stays finite.
         ceiling = float(max_wake_hours) if max_wake_hours and max_wake_hours > 0 else 18.0
+        self._base_ceiling = ceiling
+        self._config = config
+        self._ceiling_mark = time.monotonic()
         # Infant nap curve (dark until pillars_tool_unlocks_enabled): the stage scale shortens the
         # ceiling for a young creature FIRST, then the wake_budget gene flavors it. Flag off →
         # scale 1.0 → this is byte-identical to the pre-curve `ceiling * gene`. Scale ≤ 1.0 keeps the
@@ -142,8 +158,20 @@ class Adenosine:
         self.max_wake_hours = ceiling * _stage_scale(config) * _wake_budget_gene(config)
         self.level_hours = 0.0          # accumulated wake time since the last sleep, in hours
 
+    def _refresh_ceiling(self) -> None:
+        """Re-derive the stage-scaled ceiling when the memo has aged out — a creature that
+        matures mid-process (hatches, levels into a new stage) gets its new rhythm within a
+        minute, not at the next respawn. Accumulated wake time is untouched."""
+        now = time.monotonic()
+        if now - self._ceiling_mark < self.CEILING_REFRESH_S:
+            return
+        self._ceiling_mark = now
+        self.max_wake_hours = (self._base_ceiling * _stage_scale(self._config)
+                               * _wake_budget_gene(self._config))
+
     def accumulate(self, dt_hours: float) -> float:
         """Add elapsed wake time (hours). Ignores non-positive dt (a clock skew must not lower it)."""
+        self._refresh_ceiling()
         d = float(dt_hours)
         if d > 0:
             self.level_hours += d

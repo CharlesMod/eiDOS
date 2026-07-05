@@ -205,18 +205,23 @@ class TestInfantNapCurve(unittest.TestCase):
         finally:
             NAP_STAGE_SCALE["hatchling"] = original
 
-    def test_missing_stage_data_fails_open_to_adult(self):
-        # A creature whose stage can't be read gets the FULL adult budget (never an accidental
-        # over-nap): flag on but no persona.json → fail-open scale 1.0.
+    def test_missing_persona_is_a_newborn_not_a_fail_open(self):
+        # No persona.json has EVER been saved = a creature at the very start of life (fresh
+        # slate; ticks before the first save) — the EGG scale, exactly when the nap curve
+        # matters most. (Review finding: fail-open-to-adult here made the curve dead on the
+        # maiden boot.) A CORRUPT persona is a genuine read failure and still fails open.
         tmp = self._tmp()
         cfg = Config()
         cfg.workspace_dir = str(tmp)
         cfg.mock_mode = True
         cfg.workspace.mkdir(parents=True, exist_ok=True)
         setattr(cfg, "pillars_tool_unlocks_enabled", True)   # flag on, but no persona.json written
-        self.assertEqual(_stage_scale(cfg), 1.0)
+        self.assertEqual(_stage_scale(cfg), NAP_STAGE_SCALE["egg"])
         a = Adenosine(max_wake_hours=self.ADULT_CEILING, config=cfg)
-        self.assertAlmostEqual(a.max_wake_hours, self.ADULT_CEILING, places=9)
+        self.assertAlmostEqual(a.max_wake_hours,
+                               self.ADULT_CEILING * NAP_STAGE_SCALE["egg"], places=9)
+        (cfg.workspace / "persona.json").write_text("{not json", encoding="utf-8")
+        self.assertEqual(_stage_scale(cfg), 1.0)             # corrupt → adult fail-open holds
 
     def test_hatchling_crosses_the_sleep_threshold_about_five_times_faster(self):
         # THE behavioural gate: same wake time accumulated, the hatchling's adenosine pressure is ~5×
