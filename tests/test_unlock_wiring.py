@@ -26,6 +26,7 @@ Pins (TOOL_PROGRESSION.md §0 + CREATURE_GENETICS.md, all behind pillars_tool_un
 No services / GPU / live LLM — temp workspaces, mock mode, injected probes only.
 """
 import json
+import re
 import sys
 import time
 import types
@@ -107,9 +108,11 @@ class TestFlagPlumbing:
         assert Config().pillars_tool_unlocks_enabled is False
         assert "pillars_tool_unlocks_enabled" in eidos._PILLARS_WIRED_FLAGS  # hub constructs on it
 
-    def test_config_toml_ships_dark(self):
+    def test_config_toml_sets_the_flag_explicitly(self):
+        # Shipped dark until the operator's flip (2026-07-05, the maiden walk); either way the
+        # flag must be EXPLICIT in config.toml — never left to a silent default.
         text = (_ROOT / "config.toml").read_text(encoding="utf-8")
-        assert "tool_unlocks_enabled = false" in text  # dark until the operator flips it
+        assert re.search(r"^tool_unlocks_enabled = (true|false)\b", text, re.M)
 
     def test_toml_loader_parses_the_flag(self, tmp_path, monkeypatch):
         import config as config_mod

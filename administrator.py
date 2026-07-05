@@ -375,6 +375,19 @@ def _last_checkin_section(config, state: AdminState) -> dict:
     return lc
 
 
+def _creature_tools_section(config) -> Optional[list]:
+    """What exists in the creature's world right now (TOOL_PROGRESSION §0) — so proposals aim at
+    the body eiDOS actually has, not the one it might grow. Ladder off → None, and compile_dossier
+    omits the key entirely (pre-ladder dossiers stay byte-identical)."""
+    try:
+        import tools as tools_mod
+        if not tools_mod._ladder_active(config):
+            return None
+        return sorted(tools_mod.visible_tools(config))
+    except Exception:  # noqa: BLE001 - a missing subsystem yields a null section, never a wound
+        return None
+
+
 def compile_dossier(config, since_checkin: Optional[str] = None, *,
                     persona: Optional[dict] = None) -> dict:
     """Compile the Administrator's FRESH per-check-in telemetry dossier (§7a: it reads a report; it
@@ -387,7 +400,7 @@ def compile_dossier(config, since_checkin: Optional[str] = None, *,
     since = since_checkin if since_checkin is not None else str(state.last_checkin.get("ts") or "")
     persona = _persona_of(config, persona)
     level = _level_section(config, persona)
-    return {
+    dossier = {
         "compiled_ts": _now_iso(),
         "level": level,
         "quests": _quest_section(config),
@@ -399,6 +412,10 @@ def compile_dossier(config, since_checkin: Optional[str] = None, *,
         "notable_episodes": _notable_episodes_section(config, since),
         "last_checkin": _last_checkin_section(config, state),
     }
+    creature_tools = _creature_tools_section(config)
+    if creature_tools is not None:
+        dossier["creature_tools"] = creature_tools
+    return dossier
 
 
 # ============================================================================================
@@ -457,6 +474,9 @@ Each check-in you receive a fresh telemetry dossier. Your job:
     calibration domains, tiers with no trusted skills, orbited-but-locked doors, stale scars.
     Success criteria must be glue-checkable predicates (path/op/value over the stats dict) — never
     self-report. Directives are terse and impersonal: the System's register.
+    When the dossier carries `creature_tools`, that list IS eiDOS's whole world: a directive may
+    only name tools on it. A tool absent from the list does not exist for eiDOS yet — naming one
+    tears the fiction, and such proposals are held, never issued.
  2. WEAKNESS REPORT — the sharpest reading of where growth is stalling and why, for the operator.
  3. NARRATOR — optional flavor text for the quest window, in the System's voice. Terse. Never
     reveal the project, the plan, the operator, or your own existence.
@@ -641,6 +661,29 @@ class AdminReport:
     tuning_flags: list[dict] = field(default_factory=list)
 
 
+# Short common-word tool names the ladder's capstone gate also exempts: "see what changed" is
+# prose, not a leak. Kept in sync with tests/test_ladder_consistency.py.
+_PROSE_COLLISIONS = {"see", "manual", "predict", "recall", "speak", "vision", "bash", "delegate"}
+
+
+def locked_tool_mentions(config, text: str) -> list[str]:
+    """Tool names in `text` that do not exist in the creature's world right now (§0: a locked door
+    is invisible, and a directive naming one is a name through the keyhole). Checks the full
+    ever-registered builtin universe against the same visibility source every other consumer uses
+    (tools.visible_tools); prose-collision names are exempt. Ladder off → [] (nothing is locked)."""
+    try:
+        import tools as tools_mod
+        if not tools_mod._ladder_active(config):
+            return []
+        visible = set(tools_mod.visible_tools(config))
+        locked = {n for n in tools_mod._EVER_BUILTIN_NAMES - visible
+                  if n not in _PROSE_COLLISIONS}
+    except Exception:  # noqa: BLE001 - the lint must never wound a check-in
+        return []
+    body = text or ""
+    return sorted(n for n in locked if re.search(rf"\b{re.escape(n)}\b", body))
+
+
 def _quest_from_proposal(p: dict, *, now: Optional[float] = None) -> Quest:
     """Build the Quest that crosses the wall. ONLY quest-window fields ride on it — no narrator
     internals, no dossier text, no plan text (the one-directional wall, §7a)."""
@@ -700,7 +743,14 @@ def check_in(config, llm: Callable[[list, str], str], event: Any, *,
         record = dict(p)
         record.update({"narrator": parsed["narrator"], "event": kind,
                        "created_ts": _now_iso(), "resolved_ts": None})
-        if state.tier_has_autonomy(p["tier"]):
+        leaks = locked_tool_mentions(config, str(p.get("directive") or ""))
+        if leaks:
+            # §0: the directive names doors the creature cannot see. It may never auto-issue;
+            # it pends with the leak on the record so the operator sees WHY it is held.
+            record["locked_tool_mentions"] = leaks
+            logger.info("administrator: proposal %s names locked tools %s — held for the operator",
+                        pid, ", ".join(leaks))
+        if state.tier_has_autonomy(p["tier"]) and not leaks:
             # Graduated autonomy: this tier's recent approval record earned auto-issue (§7).
             quest = _quest_from_proposal(p, now=now)
             System(config).propose(quest)
@@ -761,6 +811,14 @@ def approve_proposal(config, proposal_id: str, edit: Optional[dict] = None) -> O
             logger.warning("administrator: edit made proposal %s criteria un-checkable — refused",
                            proposal_id)
             return None
+    # Re-lint at the moment of issue (the directive may have been edited, or the unlock may have
+    # landed since intake): a directive naming a tool outside the creature's world never crosses.
+    leaks = locked_tool_mentions(config, str(p.get("directive") or ""))
+    if leaks:
+        logger.warning("administrator: proposal %s directive names tools outside the creature's "
+                       "world (%s) — refused; edit the directive or wait for the unlock",
+                       proposal_id, ", ".join(leaks))
+        return None
     quest = _quest_from_proposal(p)
     System(config).propose(quest)
     p["status"] = "approved"

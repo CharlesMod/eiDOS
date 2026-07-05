@@ -439,5 +439,88 @@ class TestFlagOff(unittest.TestCase):
         self._nothing_written()
 
 
+# =================================================================================================
+class TestLadderLint(unittest.TestCase):
+    """TOOL_PROGRESSION §0 at the Administrator seam: a directive naming a tool outside the
+    creature's world is held at intake (never auto-issued) and refused at approve — a locked door
+    stays invisible no matter who writes the window. (Found live on the maiden walk: the first
+    sleep_complete check-in proposed a quest naming net_scan at a newborn that had 8 organs.)"""
+
+    NEWBORN = {"bash", "check_tools", "note_append", "note_close", "note_list", "note_read",
+               "read_file", "write_file"}
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = _Config(Path(self.tmp.name))
+        self.cfg.creature_mode = True
+        self.cfg.pillars_tool_unlocks_enabled = True
+        _gap_dossier_manifest(self.cfg)
+        self.persona = persona_mod._default_persona()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def _output(qid, directive):
+        return json.dumps({
+            "quests": [{"id": qid, "directive": directive, "tier": 2, "reward_xp": 40,
+                        "expiry_hours": 0,
+                        "criteria": {"path": "skills.tiers.2.trusted", "op": ">=", "value": 1}}],
+            "weakness_report": "w", "narrator": "n", "tuning_flags": [],
+        })
+
+    def _propose(self, qid, directive):
+        return check_in(self.cfg, _mock_llm(self._output(qid, directive)), EVT_SLEEP_COMPLETE,
+                        persona=self.persona)
+
+    def test_locked_tool_mentions(self):
+        hits = administrator.locked_tool_mentions(
+            self.cfg, "Create one skill with create_skill that runs net_scan on the tailnet.")
+        self.assertEqual(hits, ["create_skill", "net_scan"])
+        # Prose collisions and newborn organs are never leaks.
+        self.assertEqual(administrator.locked_tool_mentions(
+            self.cfg, "See the manual, speak your mind, bash around, predict nothing."), [])
+        # Ladder off → nothing is locked (byte-identical pre-cutover behavior).
+        off = _Config(Path(self.tmp.name) / "off")
+        self.assertEqual(administrator.locked_tool_mentions(
+            off, "create_skill and net_scan galore"), [])
+
+    def test_leaking_proposal_is_held_never_auto_issued(self):
+        # Earn tier-2 autonomy the declared way first…
+        for i in range(AUTONOMY_MIN_SAMPLE):
+            self._propose(f"adm_clean_{i}", "Earn trust at the new tier. Author nothing.")
+            self.assertIsNotNone(approve_proposal(self.cfg, f"adm_clean_{i}"))
+        self.assertTrue(tier_has_autonomy(self.cfg, 2))
+        # …then a leaking proposal in that tier still pends, tagged with WHY.
+        report = self._propose("adm_leak", "Run net_scan across the subnet and log it.")
+        self.assertEqual(report.auto_issued_ids, [])
+        self.assertEqual(report.pending_ids, ["adm_leak"])
+        record = AdminState(self.cfg).proposals["adm_leak"]
+        self.assertEqual(record["locked_tool_mentions"], ["net_scan"])
+        self.assertNotIn("adm_leak", [q.id for q in quests.QuestStore(self.cfg).queue()])
+
+    def test_approve_refuses_until_the_unlock_lands(self):
+        self._propose("adm_forge", "Forge one tool of your own with create_skill.")
+        # Locked door: approval refuses; the proposal stays pending (edit or wait).
+        self.assertIsNone(approve_proposal(self.cfg, "adm_forge"))
+        self.assertEqual(AdminState(self.cfg).proposals["adm_forge"]["status"], "pending")
+        self.assertEqual(quests.QuestStore(self.cfg).queue(), [])
+        # The unlock lands → the same approval crosses the wall.
+        import unlocks
+        self.assertTrue(unlocks.grant(self.cfg, "skillcraft", "test"))
+        q = approve_proposal(self.cfg, "adm_forge")
+        self.assertIsNotNone(q)
+        self.assertIn("adm_forge", [x.id for x in quests.QuestStore(self.cfg).queue()])
+
+    def test_dossier_carries_creature_tools_only_when_ladder_active(self):
+        d = compile_dossier(self.cfg, persona=self.persona)
+        self.assertLessEqual(self.NEWBORN, set(d["creature_tools"]))
+        self.assertNotIn("create_skill", d["creature_tools"])
+        self.assertNotIn("net_scan", d["creature_tools"])
+        off = _Config(Path(self.tmp.name) / "off")
+        self.assertNotIn("creature_tools", compile_dossier(off, persona=self.persona))
+
+
 if __name__ == "__main__":
     unittest.main()
