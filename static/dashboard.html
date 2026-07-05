@@ -99,6 +99,23 @@ body::after {
     margin-top: 8px;
     font-size: 13px;
 }
+/* Buddy: the unlock ladder (granted / pending-with-reason / still-to-grow) + the System's
+   active directive. Operator-side truth — the creature never sees this pane. */
+#ladder-strip { margin: 4px 0 2px; line-height: 2; }
+.unit-chip {
+    display: inline-block; font-size: 9px; padding: 1px 6px; margin: 0 3px 2px 0;
+    border-radius: 3px; border: 1px solid #16301a; color: #3a4a3a; background: #0a0f0a;
+    letter-spacing: 0.4px; cursor: default;
+}
+.unit-chip.granted { color: #7CFC9B; border-color: #2a6a2a; background: #0c180c; }
+.unit-chip.pending { color: #ffb347; border-color: #7a5a1a; animation: chip-pulse 2.2s ease-in-out infinite; }
+@keyframes chip-pulse { 50% { opacity: 0.5; } }
+#quest-line { margin: 2px 0 5px; font-size: 10px; color: #8fb8e8; word-break: break-word; line-height: 1.5; }
+#quest-line:empty, #ladder-strip:empty { display: none; }
+.quest-tag {
+    color: #6ea8fe; border: 1px solid #27437a; border-radius: 3px;
+    padding: 0 4px; font-size: 9px; margin-right: 3px; white-space: nowrap;
+}
 .xp-bar {
     display: inline-block;
     width: 200px;
@@ -1130,6 +1147,8 @@ function toggleVoice(){
                 <span id="name-level"></span> · <span id="mood-display"></span><br>
                 <div class="xp-bar"><div class="xp-fill" id="xp-fill"></div></div>
                 <span id="xp-text" style="font-size:10px;color:#555;"></span><br>
+                <div id="ladder-strip"></div>
+                <div id="quest-line"></div>
                 <span id="traits"></span><br>
                 <span id="titles"></span>
             </div>
@@ -1880,9 +1899,14 @@ function update(data) {
         legacyCreature(cr);
     }
 
-    // Persona info
-    document.getElementById('name-level').textContent =
-        (p.name || 'eiDOS') + ' ✦ Lv.' + (p.level || 1) + ' ' + ((spec && spec.stage) || cr.stage || '');
+    // Persona info — the nameplate carries the genetic identity (genetics v2: morph),
+    // with the germline seed on hover.
+    let nameEl = document.getElementById('name-level');
+    let ident = (spec && spec.identity) || {};
+    nameEl.textContent =
+        (p.name || 'eiDOS') + ' ✦ Lv.' + (p.level || 1) + ' ' + ((spec && spec.stage) || cr.stage || '')
+        + (ident.morph ? ' · ' + ident.morph : '');
+    nameEl.title = ident.seed ? 'germline seed ' + ident.seed : '';
     let moodEl = document.getElementById('mood-display');
     if (spec && spec.expr && spec.expr.condition) {
         moodEl.textContent = spec.expr.condition.toLowerCase();
@@ -1900,6 +1924,9 @@ function update(data) {
 
     let titlesEl = document.getElementById('titles');
     titlesEl.innerHTML = (p.titles || []).map(t => '<span class="title-badge">⚡' + t + '</span>').join('');
+
+    renderLadder(spec);
+    renderQuestLine(spec);
 
     // Gauges
     let ram = hb.ram_pct || 0;
@@ -1952,6 +1979,42 @@ function update(data) {
     // Last update
     document.getElementById('last-update').textContent =
         'updated ' + new Date().toLocaleTimeString();
+}
+
+// The unlock ladder, one chip per unit in ladder order: lit = granted (hover: how it was
+// earned), amber-pulsing = pending on a service hold (hover: the exact reason), dim = still
+// to grow. Ladder flag off → empty payload → the strip collapses (CSS :empty).
+const UNIT_ICONS = { body: '✋', memory: '✦', skillcraft: '⚒', foresight: '◈',
+                     senses: '👁', resolve: '▣', workshop: '⚙' };
+function renderLadder(spec) {
+    const el = document.getElementById('ladder-strip');
+    if (!el) return;
+    const lad = spec && spec.ladder;
+    if (!lad || !lad.units || !lad.units.length) { el.innerHTML = ''; return; }
+    el.innerHTML = lad.units.map(u => {
+        let cls = 'unit-chip', tip = u + ' — still to grow';
+        if (lad.granted && (u in lad.granted)) {
+            cls += ' granted';
+            tip = u + ' — granted' + (lad.granted[u] ? ' (' + lad.granted[u] + ')' : '');
+        } else if (lad.pending && (u in lad.pending)) {
+            cls += ' pending';
+            tip = u + ' — pending: ' + lad.pending[u];
+        }
+        return '<span class="' + cls + '" title="' + escapeHtml(tip) + '">'
+             + (UNIT_ICONS[u] || '•') + ' ' + escapeHtml(u) + '</span>';
+    }).join('');
+}
+
+// The System's ACTIVE directive — what the creature is answering to right now (the
+// Administrator's proposal queue has its own panel; this is the issued quest).
+function renderQuestLine(spec) {
+    const el = document.getElementById('quest-line');
+    if (!el) return;
+    const q = spec && spec.quest;
+    if (!q || !q.directive) { el.innerHTML = ''; return; }
+    el.innerHTML = '<span class="quest-tag">SYSTEM · T' + (q.tier || 1) + '</span>'
+                 + escapeHtml(q.directive);
+    el.title = q.id || '';
 }
 
 async function loadChat() {

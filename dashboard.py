@@ -498,7 +498,48 @@ def build_creature_spec(config: Config, persona: dict, heartbeat: dict,
     bond = _accrue_bond(config, doc)
     spec["bond_expr"] = {"tier": int(bond.get("tier", 0))}
     spec["bond_hover"] = dict(bond.get("counts", {}))
+    spec["identity"] = _identity_payload(config)
+    spec["ladder"] = _ladder_payload(config)
+    spec["quest"] = _active_quest_payload(config)
     return spec
+
+
+def _identity_payload(config: Config) -> dict:
+    """The creature's genetic identity (genetics v2): morph + germline seed for the Buddy pane's
+    nameplate. Operator-facing — the fourth wall doesn't apply to the forge's window."""
+    try:
+        g = json.loads((config.workspace / "genome.json").read_text(encoding="utf-8"))
+        return {"morph": str(g.get("morph") or ""), "seed": str(g.get("seed") or "")}
+    except Exception:  # noqa: BLE001 — pre-genome workspace: the pane just omits the line
+        return {}
+
+
+def _ladder_payload(config: Config) -> dict:
+    """The tool-unlock ladder at a glance: every unit in ladder order, with its books state
+    (granted source / pending hold reason). Flag off → {} and the pane renders nothing."""
+    try:
+        if not getattr(config, "pillars_tool_unlocks_enabled", False):
+            return {}
+        import unlocks
+        st = unlocks.UnlockState(config)
+        return {"units": [u.id for u in unlocks.UNITS],
+                "granted": {k: str(v.get("source") or "") for k, v in st.granted.items()},
+                "pending": dict(st.pending)}
+    except Exception:  # noqa: BLE001 — the ladder must never break the page
+        return {}
+
+
+def _active_quest_payload(config: Config) -> dict:
+    """What the System has ISSUED to the creature right now (not the Administrator's proposal
+    queue — that has its own panel). Empty dict when nothing is active."""
+    try:
+        import quests
+        q = quests.QuestStore(config).active()
+        if q is None:
+            return {}
+        return {"id": q.id, "directive": q.directive, "tier": int(getattr(q, "tier", 1) or 1)}
+    except Exception:  # noqa: BLE001 — the System must never break the page
+        return {}
 
 
 def _delegates_payload(config: Config) -> list:
