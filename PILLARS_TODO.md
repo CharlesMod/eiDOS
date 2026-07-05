@@ -421,7 +421,13 @@ existing pressure to the domain that lacked it — no hardcoding.
 - ✅ **Adversarial review** — 6 findings (3 high, all the false-positive-merge direction), all fixed:
   Jaccard over overlap-coefficient (subset ≠ duplicate), done/dead never merge, `_unique_id` guards
   slug collisions, consolidate falls back to a blocked survivor, no IP-gating leak into goals.
-- ○ **Concern 3 — repetitive learning** (deferred) — re-deriving stored facts instead of recalling;
-  a recall/affordance-surfacing tune-up. Partly self-resolves as naps consolidate duplicate diary
-  entries; revisit after the creature runs on the new code.
-- **New deferred:** `level_candidacy` edge-trigger (done in `8a96311`); `store_entry` correction-swallow (above).
+- ✅ **Concern 3 — repetitive learning** (`78fa704`, review `f51e2cd`) — re-deriving stored facts
+  because recall keyed only on the top plan line. `_build_relevant_recall` now folds the active
+  objective + recently-used tools into the query, with STEP PRIMACY (the top step hit is guaranteed;
+  broadening only fills the rest, so recall can only improve). Embeddings remain off — this is the
+  BM25 fix; enabling semantic recall is a future lever if a local embed model lands.
+- ✅ **`store_entry` self-correction** (`78fa704`, review `f51e2cd`) — the near-dup dedup swallowed a
+  correction (returned the stale wrong entry); a mind couldn't fix its own memory. A higher-confidence
+  near-dup now SUPERSEDES in place (ranked confidence; unknown labels sit MID so they can't be
+  downgraded). This is the platform-level version of the manual correction done earlier.
+- Both memory changes reviewed (no high/med bugs; two low edges fixed: no-downgrade, step-primacy).
