@@ -489,7 +489,14 @@ Each check-in you receive a fresh telemetry dossier. Your job:
     adjudicatable vocabulary listed under ADJUDICATABLE CRITERIA PATHS below — those are the only
     facts the engine checks, and the op is >= or > only (every path is a monotonic count; an ==
     can be skipped over and never close). Directives are terse and impersonal: the System's
-    register — reserved, a little mysterious, never chatty, never explaining itself.
+    register — reserved, a little mysterious, never chatty, never explaining itself. A directive
+    is shown to the creature VERBATIM in a small window: ONE complete sentence, well under 250
+    characters — a directive that runs long is cut off mid-word and becomes unreadable noise.
+    When coaching calibration, know that the creature's `predict` tool ONLY accepts checkable
+    targets: a stat claim over the same adjudicatable vocabulary below (e.g.
+    "skills.trusted_count >= 5") or a file claim ("exists:holt/<file>"). Never direct wagers at
+    unmeasurable things (network latency, CPU load, disk speed) — such bets are refused at the
+    tool boundary, and a directive demanding them is a directive to fail.
     When the dossier carries `creature_tools`, that list IS eiDOS's whole world: a directive may
     only name tools on it. A tool absent from the list does not exist for eiDOS yet — naming one
     tears the fiction, and such proposals are held, never issued.
@@ -553,7 +560,7 @@ def build_admin_grammar() -> str:
         (f'questarr ::= "[" jws ( quest )? "]" jws' if q_more <= 0 else
          f'questarr ::= "[" jws ( quest ( "," jws quest ){{0,{q_more}}} )? "]" jws'),
         f'quest ::= "{{" jws {key("id")} bstring "," jws'
-        f' {key("directive")} bstring "," jws'
+        f' {key("directive")} dstring "," jws'
         f' {key("tier")} jint "," jws'
         f' {key("reward_xp")} jint "," jws'
         f' {key("expiry_hours")} jnumber "," jws'
@@ -566,6 +573,10 @@ def build_admin_grammar() -> str:
         # past any token budget (truncated mid-JSON = 100% malformed). bstring caps ids/directives/
         # knob names at 200 chars; mstring caps reports/narrator/evidence at 500.
         f'bstring ::= "\\"" schar{{0,200}} "\\"" jws',
+        # dstring: directives only — shown to the creature VERBATIM, so the cap is a wide backstop
+        # (the prompt demands ≤250 chars; 400 here means a rambling one still ends at a sentence,
+        # not mid-word at the old 200 wall — the live calibration quests all hit that wall).
+        f'dstring ::= "\\"" schar{{0,400}} "\\"" jws',
         f'mstring ::= "\\"" schar{{0,500}} "\\"" jws',
         'schar ::= [^"\\\\\\x7F\\x00-\\x1F] | "\\\\" ( ["\\\\bfnrt/] | "u" jhex jhex jhex jhex )',
         # The criteria object is constrained to the Criterion SHAPE, not free JSON — the second
