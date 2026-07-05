@@ -232,6 +232,32 @@ def can_level(persona: dict, config) -> tuple[bool, dict]:
                 "checks": checks}
 
 
+def render_standing(persona: dict, config) -> str:
+    """ONE terse line of growth proprioception for the System window: level, XP, and what stands
+    between the creature and the next level — unmet gate NAMES, or the suspension. Rendered from
+    the same can_level evidence the dashboard reads (glue facts, never self-report). A creature
+    that cannot feel its own growth cannot pursue it: before this line existed, level/XP/gates
+    were entirely invisible in-context, and the only coupling (quests) had been broken bricks.
+    Returns '' when the gates are off."""
+    if not _enabled(config):
+        return ""
+    try:
+        ok, report = can_level(persona, config)
+    except Exception:  # noqa: BLE001 - proprioception is best-effort; the tick must not care
+        return ""
+    lv = int(persona.get("level", 1))
+    xp = int(persona.get("xp", 0))
+    state = GateState(config)
+    if state.suspended:
+        tiers = ", ".join(sorted(state.suspended.keys()))
+        return (f"LV.{lv} · XP {xp} · ADVANCEMENT SUSPENDED (tier {tiers}) — "
+                f"clear the remedial quest to restore it")
+    if ok:
+        return f"LV.{lv} · XP {xp} · all gates open — advancement imminent"
+    unmet = [name for name, c in (report.get("checks") or {}).items() if not c.get("ok")]
+    return f"LV.{lv} · XP {xp} · gates unmet: {', '.join(unmet) if unmet else '—'}"
+
+
 def apply_level_up(persona: dict, config) -> dict:
     """Cross the gate: verifies can_level, advances the level by EXACTLY one, resets the sleep
     counter. Returns the evidence report (with `applied`). The only path that moves the level
@@ -272,10 +298,26 @@ def record_tier_outcome(config, tier: int, success: bool, *, delegated: bool = F
     state.save()
     try:
         import quests as _quests
+        # The remedial's criteria MUST come from the same glue-checkable vocabulary every quest
+        # uses (quests.ADJUDICATABLE_PATHS) — the original `remedial.tier_N_passed` path had NO
+        # writer anywhere, so the remedial could never pass and the suspension was permanent
+        # (exactly the brick quests.py warns about). And it must be achievable WHILE the remedial
+        # itself holds the one-active-quest slot (a `quests.passed` target would deadlock).
+        # "Demonstrate the failed competence on a fresh problem" made mechanical: forge one more
+        # skill and carry it all the way to TRUSTED — the tier's own competence currency, earned
+        # through the skill economy's adjudicated record, checkable any tick.
+        try:
+            import skills as _skills
+            ents = (_skills._load_manifest(config).get("skills") or {}).values()
+            trusted_now = sum(1 for e in ents if e.get("status") == "trusted")
+        except Exception:  # noqa: BLE001 - no manifest reads as zero; the target stays honest
+            trusted_now = 0
         _quests.System(config).propose(_quests.Quest(
             id=remedial_id,
-            directive=f"Re-earn tier {key}: demonstrate the failed competence on a fresh problem.",
-            success_criteria=_quests.Criterion(path=f"remedial.tier_{key}_passed", op="==", value=True),
+            directive=(f"Re-earn tier {key}: forge a NEW skill and prove it to trusted "
+                       f"through real use."),
+            success_criteria=_quests.Criterion(path="skills.trusted_count", op=">=",
+                                               value=int(trusted_now) + 1),
             tier=int(tier), kind="quest",
         ))
     except Exception as e:  # noqa: BLE001 - the seam is best-effort; suspension holds regardless

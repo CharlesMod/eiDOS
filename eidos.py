@@ -875,15 +875,33 @@ class _Pillars:
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars settle_bets failed: %s", e)
 
-        # 4.1 — the closure pass (deadline + matching-event grounds; glue is the only closer)
+        # 4.1 — the closure pass (claim-measurement + deadline + matching-event grounds; glue is
+        # the only closer). Each settlement is then WRITTEN INTO THE STREAM: a verdict the creature
+        # never experiences is a verdict it can never learn from — the old silent closures left it
+        # unable to discover why its bets kept dying, and its calibration never had a chance.
         closures = []
         if getattr(c, "pillars_expectations_enabled", False):
             try:
                 closures = _glue.settle_predictions(c, event_text=event_text or "", tick=tick,
-                                                    reward=self.learner, curiosity=self.curiosity)
+                                                    reward=self.learner, curiosity=self.curiosity,
+                                                    stats=self._quest_stats(persona))
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars settle_predictions failed: %s", e)
                 closures = []
+        for cl in closures:
+            try:
+                p = cl.prediction
+                measured = "" if cl.actual is None else f"; measured {cl.actual}"
+                how = {"claim": "the claim came true", "event": "a matching event landed",
+                       "deadline": "the deadline passed"}.get(cl.reason, cl.reason)
+                verdict = "CAME TRUE" if cl.outcome else "DID NOT COME TRUE"
+                append_observation(c, {
+                    "tick": tick, "tool": "bet_settled", "success": bool(cl.outcome),
+                    "output": (f"[bet settled] \"{p.statement}\" → {verdict} "
+                               f"({how}; claim: {p.target or '—'}{measured}; "
+                               f"you held it at {p.confidence:.0%})")})
+            except Exception as e:  # noqa: BLE001 - the notice is best-effort; the close stands
+                logger.warning("bet settlement notice failed: %s", e)
 
         # 4.2 — learning progress observes closure wrongness + this tick's adjudicated outcome
         if self.tracker is not None:
@@ -937,21 +955,14 @@ class _Pillars:
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars news ingest failed: %s", e)
 
-        # 5.1 — adjudicate the active quest against typed stats; 4.3 — feed its tier's standing
+        # 5.1 — adjudicate the active quest against typed stats. Tier standing moves ONLY on
+        # quest ADJUDICATIONS (inside _on_quest_closed) — never on a tick's tool-call success.
+        # (The old per-tool-call record_tier_outcome here suspended tier 1 after any 5 clumsy
+        # calls in a row — a hatchling's syntax fumbles were being graded as failed mastery.)
         if self.quests is not None:
             try:
                 active = self.quests.store.active()
                 if active is not None:
-                    if (getattr(c, "pillars_mastery_gates_enabled", False)
-                            and tool and tool not in ("thought", "parse_error", "chat_reply")):
-                        try:
-                            import level_gates as _lg
-                            remedial = _lg.record_tier_outcome(
-                                c, int(getattr(active, "tier", 1) or 1), bool(success))
-                            if remedial:
-                                self._event("suspension", persona)
-                        except Exception as e:  # noqa: BLE001
-                            logger.warning("pillars tier outcome failed: %s", e)
                     r = self.quests.check(active, self._quest_stats(persona))
                     if r.get("passed") or r.get("expired"):
                         self._on_quest_closed(r, persona, tick=tick)
@@ -1116,6 +1127,20 @@ class _Pillars:
         trainer, and make the event-driven issue attempt (cadence still demands a sleep first)."""
         q = r.get("quest")
         self._set_sleeps_since_close(0)
+        # 4.3 — tier standing moves on ADJUDICATED quest outcomes, the unit of attempted mastery
+        # (a pass resets the failure streak; an expiry counts against the tier). Remedials are
+        # excluded: an already-suspended tier's remedial expiring must not double-punish, and its
+        # pass restores the tier below via record_remedial_completion.
+        if (q is not None and getattr(self.config, "pillars_mastery_gates_enabled", False)
+                and not str(getattr(q, "id", "")).startswith("remedial-tier")):
+            try:
+                import level_gates as _lg
+                remedial = _lg.record_tier_outcome(
+                    self.config, int(getattr(q, "tier", 1) or 1), bool(r.get("passed")))
+                if remedial:
+                    self._event("suspension", persona)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars tier outcome failed: %s", e)
         # Settlement notice: ONE system_window observation in the System's own register. The paid
         # amount is read from the quest's reward — exactly what the sink pays through award_xp
         # (glue settled it; this only reports the settlement). Non-XP rewards are the level-gate
@@ -2041,6 +2066,11 @@ def run_loop(config: Config, persona=None, wal=None):
         tick_tool_success = False
         tick_tool_duration = 0.0
         tick_fail_kind = ""
+        # Human-readable action label for the reward learner + world model: "bash: ls holt/",
+        # never a loop-detector hash — the value cache's distilled lessons are RENDERED back into
+        # the creature's context, and a lesson about "a129652c…" teaches nothing (live bug: the
+        # whole Learned block was MD5 hashes). Falls back to the tool name for tool-less ticks.
+        tick_action_label = ""
         tick_summary = ""
         tick_output = ""      # the full tool output (Pillars 4.1's event-closure text; unused dark)
         tick_situation = ""   # the SITUATION digest for this tick's episode (captured pre-action)
@@ -2329,10 +2359,16 @@ def run_loop(config: Config, persona=None, wal=None):
             if call.tool == "bash" and isinstance(call.args, dict):
                 _cmd = call.args.get("cmd") or call.args.get("command") or ""
                 call_hash = hashlib.md5(("bash:" + _norm_cmd(_cmd)).encode()).hexdigest()
+                tick_action_label = f"bash: {_norm_cmd(_cmd)[:60]}"
             else:
                 call_hash = hashlib.md5(
                     json.dumps({"tool": call.tool, "args": call.args}, sort_keys=True).encode()
                 ).hexdigest()
+                try:
+                    _args_terse = json.dumps(call.args, sort_keys=True, ensure_ascii=False)[:60]
+                except (TypeError, ValueError):
+                    _args_terse = ""
+                tick_action_label = f"{call.tool} {_args_terse}".strip()
             recent_hashes.append(call_hash)
 
         # --- Log rotation check (every 50 ticks) ---
@@ -2553,15 +2589,16 @@ def run_loop(config: Config, persona=None, wal=None):
                 # intrinsic-reward bonus + restlessness. (Pre-pivot this also FED the metabolism; post-pivot
                 # food = literal battery power, so learning no longer recharges energy — only curiosity.)
                 _intrinsic = 0.0
+                _act_readable = tick_action_label or tick_tool_name or str(_act_sig)
                 if nervous_worldmodel is not None and _wm_prev_sit is not None:
                     nervous_worldmodel.observe(_wm_prev_sit, _wm_prev_act, tick_situation)
                     _progress = float(getattr(nervous_worldmodel, "last_progress", 0.0) or 0.0)
                     if nervous_curiosity is not None:
                         _intrinsic = nervous_curiosity.observe(_progress)
-                nervous_learner.observe(situation=tick_situation, action=str(_act_sig),
+                nervous_learner.observe(situation=tick_situation, action=_act_readable,
                                         success=tick_tool_success, made_progress=_made_progress,
                                         strain=_strain_bump, intrinsic=_intrinsic, tick=tick_number)
-                _wm_prev_sit, _wm_prev_act = tick_situation, str(_act_sig)
+                _wm_prev_sit, _wm_prev_act = tick_situation, _act_readable
             except Exception as _le:  # noqa: BLE001 - learning must never break the tick
                 logger.warning("reward learning failed: %s", _le)
 
