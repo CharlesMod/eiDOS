@@ -361,10 +361,14 @@ UNIT_STANZAS: dict[str, str] = {
   `manual {{"topic":"..."}}` explains your bigger abilities.
 """,
     "foresight": """\
-- a hunch — `predict {{"statement":"...","target":"...","deadline":"...","confidence":0.7}}` places
-  a bet on the future; it settles on its own when the deadline or the event arrives. The world —
-  never your own say-so — settles whether you were right, and a wrong guess that teaches you
-  something is worth more than a lucky one.
+- a hunch — `predict {{"statement":"...","target":"...","deadline":"...","confidence":0.7}}` bets
+  on your own near future. The `target` is a claim the world can CHECK: a stat claim like
+  `"skills.trusted_count >= 5"`, or a file claim like `"exists:{home}/inventory_map.txt"` — a
+  thing you'll have made by the deadline. It settles TRUE the moment the claim holds, FALSE if
+  the deadline arrives with it still false; either way the settlement shows up in your world, so
+  you can tell how good your guesses are getting. The world — never your own say-so — settles
+  whether you were right, and a wrong guess that teaches you something is worth more than a
+  lucky one.
 """,
     "senses": """\
 - a voice — `speak {{"text":"..."}}` says something out loud.

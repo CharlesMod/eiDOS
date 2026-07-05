@@ -79,8 +79,8 @@ class TestPredictCreatesEngram:
 
     def test_tool_predict_creates_prediction_engram(self, tmp_path):
         cfg = _cfg(tmp_path)
-        res = tools.tool_predict({"statement": "dean gets home before dinner",
-                                  "target": "front door opens", "deadline": "in 2h",
+        res = tools.tool_predict({"statement": "I'll have two trusted skills by tonight",
+                                  "target": "skills.trusted_count >= 2", "deadline": "in 2h",
                                   "confidence": 0.7, "domain": "house"}, cfg)
         assert res.success, res.output
         led = ExpectationLedger(cfg)
@@ -89,6 +89,21 @@ class TestPredictCreatesEngram:
         assert opens[0].domain == "house"
         # "in 2h" parsed to a FUTURE epoch (~7200s out)
         assert opens[0].deadline == pytest.approx(time.time() + 7200, abs=60)
+
+    def test_tool_predict_refuses_ungradeable_target(self, tmp_path):
+        # The winnable-game boundary: a free-text target glue can never grade is REFUSED WITH THE
+        # MANUAL at the tool boundary — never accepted and auto-failed at its deadline (the old
+        # rigged game that drove Brier to 0.51 on claims that were actually true).
+        cfg = _cfg(tmp_path)
+        res = tools.tool_predict({"statement": "dean gets home before dinner",
+                                  "target": "front door opens", "deadline": "in 2h"}, cfg)
+        assert not res.success and res.fail_kind == "args"
+        assert "isn't checkable" in res.output and "exists:" in res.output
+        assert not ExpectationLedger(cfg).open_predictions()   # nothing entered the ledger
+        # A stat claim outside the adjudicatable vocabulary is refused the same way.
+        res = tools.tool_predict({"statement": "latency stays low",
+                                  "target": "network.latency_ms <= 50", "deadline": "in 5m"}, cfg)
+        assert not res.success and "isn't a stat the world tracks" in res.output
 
     def test_tool_predict_blocked_when_flag_off(self, tmp_path):
         cfg = _cfg(tmp_path, enabled=False)
@@ -123,8 +138,10 @@ class TestBoundedLedger:
 
     def test_tool_refusal_is_typed_not_a_crash(self, tmp_path):
         cfg = _cfg(tmp_path, max_open=1)
-        assert tools.tool_predict({"statement": "first bet"}, cfg).success
-        res = tools.tool_predict({"statement": "second bet"}, cfg)
+        assert tools.tool_predict({"statement": "first bet",
+                                   "target": "persona.xp >= 1"}, cfg).success
+        res = tools.tool_predict({"statement": "second bet",
+                                  "target": "persona.xp >= 2"}, cfg)
         assert not res.success
         assert res.fail_kind == "blocked"
         assert "refused" in res.output.lower()
@@ -259,7 +276,9 @@ class TestSelfReportNeverCloses:
             with pytest.raises(ValueError, match="ground truth"):
                 close_prediction(cfg, led, p, outcome=True, reason=prose_reason)
         assert len(led.open_predictions()) == 1           # still open — prose settled nothing
-        assert CLOSE_REASONS == {"deadline", "event"}     # the whitelist IS the doctrine
+        # the whitelist IS the doctrine — all three are GLUE ground truth (claim = a measured
+        # verdict against the stats dict / filesystem, still never the model's say-so)
+        assert CLOSE_REASONS == {"deadline", "event", "claim"}
 
     def test_no_closing_tool_surface(self, tmp_path):
         """Only GLUE can close: enabling the organ adds exactly ONE tool (`predict` — a maker of
@@ -281,7 +300,8 @@ class TestSelfReportNeverCloses:
         p = led.predict(statement="the original bet", target="t", deadline=_future())
         # The model "re-predicting the outcome happened" just makes ANOTHER open bet; the
         # original stays open until glue settles it.
-        tools.tool_predict({"statement": "the original bet came true, I am sure"}, cfg)
+        tools.tool_predict({"statement": "the original bet came true, I am sure",
+                            "target": "persona.xp >= 1"}, cfg)
         opens = ExpectationLedger(cfg).open_predictions()
         assert len(opens) == 2
         assert next(q for q in opens if q.id == p.id).status == "open"
@@ -296,17 +316,23 @@ class TestBrierCalibration:
         net = [(0.9, True), (0.8, True), (0.7, False)]
         # domain "ops": (0.6, False) → brier = 0.36 (worse-calibrated than net)
         ops = [(0.6, False)]
+        # Targets are CLAIM-shaped: only claim-bearing (gradeable) bets count toward Brier.
         for i, (conf, outcome) in enumerate(net):
-            p = led.predict(statement=f"net bet {i}", target=f"net target {i}",
+            p = led.predict(statement=f"net bet {i}", target=f"persona.xp >= {i + 1}",
                             deadline=_future(), confidence=conf, domain="net")
             close_prediction(cfg, led, p, outcome=outcome,
                              reason="event" if outcome else "deadline")
         for i, (conf, outcome) in enumerate(ops):
-            p = led.predict(statement=f"ops bet {i}", target=f"ops target {i}",
+            p = led.predict(statement=f"ops bet {i}", target=f"quests.passed >= {i + 1}",
                             deadline=_future(), confidence=conf, domain="ops")
             close_prediction(cfg, led, p, outcome=outcome, reason="deadline")
-        led.predict(statement="still open — must not count", target="x",
+        led.predict(statement="still open — must not count", target="persona.xp >= 99",
                     deadline=_future(), confidence=0.5, domain="net")
+        # A LEGACY free-text bet (ungradeable) closed wrong must NOT count either — its closure
+        # carries no calibration information (the old rigged game).
+        legacy = led.predict(statement="free-text legacy bet", target="cpu stays cool",
+                             deadline=_future(), confidence=0.9, domain="net")
+        close_prediction(cfg, led, legacy, outcome=False, reason="deadline")
 
         scores = brier_calibration_by_domain(cfg)
         assert set(scores) == {"net", "ops"}
@@ -383,3 +409,67 @@ class TestTotalPlaced:
         led.predict(statement="a", target="t", deadline=_future())
         led.predict(statement="b", target="t", deadline=_future(), evict_oldest=True)
         assert led.total_placed() == 2                 # the evicted bet was still PLACED
+
+
+# =================================================================================================
+# Checkable claims — the winnable game (parse / evaluate / by-deadline settlement)
+# =================================================================================================
+class TestClaimSettlement:
+    def test_claim_true_settles_early_as_claim(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        led = ExpectationLedger(cfg)
+        led.predict(statement="I'll be at 100 XP soon", target="persona.xp >= 100",
+                    deadline=_future(3600))
+        from expectations import close_claim_predictions
+        cls = close_claim_predictions(cfg, led, {"persona": {"xp": 150}})
+        assert len(cls) == 1
+        assert cls[0].outcome is True and cls[0].reason == "claim"
+        assert cls[0].actual == 150.0                  # the measured value rides the closure
+        assert not led.open_predictions()
+
+    def test_claim_false_at_deadline_is_a_measurement_not_a_default(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        led = ExpectationLedger(cfg)
+        led.predict(statement="I'll be at 100 XP", target="persona.xp >= 100",
+                    deadline=time.time() - 5)          # already past
+        from expectations import close_claim_predictions
+        cls = close_claim_predictions(cfg, led, {"persona": {"xp": 40}})
+        assert len(cls) == 1
+        assert cls[0].outcome is False and cls[0].reason == "deadline"
+        assert cls[0].actual == 40.0                   # measured false, not defaulted false
+
+    def test_unmeasurable_claim_defers_never_defaults(self, tmp_path):
+        # No stats this pass (or the path missing from them) → the bet WAITS, even past deadline.
+        cfg = _cfg(tmp_path)
+        led = ExpectationLedger(cfg)
+        led.predict(statement="x", target="persona.xp >= 100", deadline=time.time() - 5)
+        from expectations import close_claim_predictions, close_due_predictions
+        assert close_claim_predictions(cfg, led, None) == []
+        assert close_claim_predictions(cfg, led, {"skills": {}}) == []
+        # And the legacy deadline reaper must NOT touch a claim-bearing bet either.
+        assert close_due_predictions(cfg, led) == []
+        assert len(led.open_predictions()) == 1
+
+    def test_file_claim_settles_on_the_creature_world(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        cfg.creature_mode = True
+        led = ExpectationLedger(cfg)
+        led.predict(statement="I'll have made my map", target="exists:holt/map.txt",
+                    deadline=_future(3600))
+        from expectations import close_claim_predictions
+        assert close_claim_predictions(cfg, led, None) == []       # not made yet → waits
+        import tools as _tools
+        root = _tools._creature_root(cfg)
+        (root / "holt").mkdir(parents=True, exist_ok=True)
+        (root / "holt" / "map.txt").write_text("here", encoding="utf-8")
+        cls = close_claim_predictions(cfg, led, None)              # file claims need no stats
+        assert len(cls) == 1 and cls[0].outcome is True and cls[0].reason == "claim"
+
+    def test_legacy_free_text_still_dies_at_deadline_but_off_the_books(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        led = ExpectationLedger(cfg)
+        led.predict(statement="vibes", target="the vibes hold", deadline=time.time() - 5)
+        from expectations import close_due_predictions, brier_calibration_by_domain
+        cls = close_due_predictions(cfg, led)
+        assert len(cls) == 1 and cls[0].outcome is False
+        assert brier_calibration_by_domain(cfg) == {}              # excluded from calibration

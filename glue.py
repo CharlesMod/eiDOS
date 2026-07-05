@@ -207,7 +207,7 @@ def gate_frustration_bump(outcomes: list[dict]) -> int:
 # Pillars 4.1: prediction settlement — GLUE is the only closer of expectations (M-4, §4 CA1)
 # ============================================================================================
 def settle_predictions(config, *, event_text: str = "", tick: int = 0,
-                       reward=None, curiosity=None) -> list:
+                       reward=None, curiosity=None, stats=None) -> list:
     """Settle open predictions MECHANICALLY (Dean, confirmed 2026-07-03: settlement is mechanical
     only). Two grounds, both outside the model: a bet's DEADLINE passed (the future arrived — it did
     not come true), or a MATCHING EVENT was observed (it did). The LLM saying "that came true"
@@ -231,6 +231,10 @@ def settle_predictions(config, *, event_text: str = "", tick: int = 0,
         import expectations
         ledger = expectations.ExpectationLedger(config)
         closures = []
+        # Claim-bearing bets first: measured against the same glue-checked stats dict quest
+        # criteria use (verdicts, not text-matching). `stats` comes from the caller's
+        # _quest_stats; with none provided, claim bets simply defer to a later pass.
+        closures += expectations.close_claim_predictions(config, ledger, stats, tick=tick)
         if event_text:
             closures += expectations.close_event_predictions(config, ledger, event_text, tick=tick)
         closures += expectations.close_due_predictions(config, ledger, tick=tick)

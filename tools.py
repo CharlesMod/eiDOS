@@ -2429,12 +2429,30 @@ def _parse_deadline(raw: str) -> float:
         return now + _PREDICT_DEFAULT_HORIZON_S
 
 
+def _claim_vocab_help() -> str:
+    """The teaching refusal for an ungradeable bet target — the creature's one manual for what the
+    world can actually check. Rendered at the tool boundary so an unrepresentable bet teaches the
+    vocabulary instead of silently dying at its deadline (the old rigged game)."""
+    import quests as _quests
+    paths = "\n".join(f"    {p} — {d}" for p, d in _quests.ADJUDICATABLE_PATHS.items())
+    return ("Your 'target' must be a claim the world can CHECK. Two shapes:\n"
+            "  1. a stat claim \"<path> <op> <number>\" (ops: >= > == < <=) over:\n"
+            f"{paths}\n"
+            "  2. a file claim \"exists:<path>\" or \"not_exists:<path>\" — a thing you will have\n"
+            "     made (or removed) in your home by the deadline.\n"
+            "Examples: \"skills.trusted_count >= 5\" · \"exists:holt/inventory_map.txt\"\n"
+            "The bet settles TRUE the moment the claim holds (any time before the deadline), or\n"
+            "FALSE if the deadline arrives with the claim measured still false.")
+
+
 def tool_predict(args: dict, config: Config) -> ToolResult:
-    """Commit a TYPED, measurable BET about what will happen — "backup done by 02:30", "the scan
-    finds a new host in 5m". args: {"statement": what you expect, "target": the measurable claim,
-    "deadline": when it must resolve (e.g. "in 2h"), "confidence": 0..1, "domain"?: bucket}. GLUE — not
-    your word — later scores it; a confident-wrong bet is the most valuable memory you can make. The
-    open-bet ledger is BOUNDED; if it's full, an old bet must close before you make a new one."""
+    """Commit a TYPED, measurable BET about your near future — "I'll have 5 trusted skills by
+    tonight", "inventory_map.txt will exist in 20m". args: {"statement": what you expect in words,
+    "target": the CHECKABLE claim (a stat claim like "skills.trusted_count >= 5" or a file claim
+    like "exists:holt/notes.txt"), "deadline": when it must resolve (e.g. "in 2h"), "confidence":
+    0..1, "domain"?: bucket}. GLUE measures the claim — not your word; a confident-wrong bet is the
+    most valuable memory you can make. The open-bet ledger is BOUNDED; if it's full, an old bet
+    must close before you make a new one."""
     if not getattr(config, "pillars_expectations_enabled", False):
         # DARK: unreachable in practice (the tool isn't registered when the flag is off) — this is the
         # belt-and-suspenders guard so a direct dispatch can't create a bet while the organ is dark.
@@ -2445,6 +2463,21 @@ def tool_predict(args: dict, config: Config) -> ToolResult:
     if not statement:
         return ToolResult(output="Error: provide a 'statement' — what you expect to happen.",
                           full_output_path=None, success=False, duration_s=0, fail_kind="args")
+    # The winnable-game boundary: an ungradeable target is REFUSED WITH THE MANUAL, never accepted
+    # and auto-failed later. Stat claims must use the same adjudicatable vocabulary quest criteria
+    # do — the referee and the rulebook stay one thing.
+    target = (args.get("target") or "").strip()
+    claim = expectations.parse_claim(target)
+    if claim is None:
+        return ToolResult(output=f"Bet refused — \"{target or '(empty)'}\" isn't checkable.\n"
+                                 f"{_claim_vocab_help()}",
+                          full_output_path=None, success=False, duration_s=0, fail_kind="args")
+    if claim.get("kind") == "stat":
+        import quests as _quests
+        if claim["path"] not in _quests.ADJUDICATABLE_PATHS:
+            return ToolResult(output=f"Bet refused — \"{claim['path']}\" isn't a stat the world "
+                                     f"tracks.\n{_claim_vocab_help()}",
+                              full_output_path=None, success=False, duration_s=0, fail_kind="args")
     try:
         confidence = float(args.get("confidence", expectations.DEFAULT_CONFIDENCE))
     except (TypeError, ValueError):
@@ -2453,7 +2486,7 @@ def tool_predict(args: dict, config: Config) -> ToolResult:
     deadline = _parse_deadline(str(args.get("deadline", "")))
     ledger = expectations.ExpectationLedger(config)
     try:
-        p = ledger.predict(statement=statement, target=(args.get("target") or "").strip(),
+        p = ledger.predict(statement=statement, target=target,
                            deadline=deadline, confidence=confidence,
                            domain=(args.get("domain") or "general").strip() or "general")
     except ValueError as e:

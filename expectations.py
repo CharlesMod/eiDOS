@@ -40,6 +40,7 @@ cutover; this module only EXPOSES the renderer and the calibration function.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -219,7 +220,8 @@ class Closure:
     outcome: bool
     surprise: float
     residue: Engram
-    reason: str          # "deadline" | "event" — why glue closed it
+    reason: str          # "deadline" | "event" | "claim" — why glue closed it
+    actual: Optional[object] = None   # for claim-bearing bets: the value glue measured at closure
 
 
 # ============================================================================================
@@ -373,6 +375,7 @@ def _fmt_dur(seconds: float) -> str:
 CLOSE_REASONS = frozenset({
     "deadline",   # the future arrived and no matching event had settled it → it did not come true
     "event",      # a matching observation landed → it came true
+    "claim",      # a CHECKABLE claim was measured true before its deadline → it came true
 })
 
 
@@ -436,10 +439,121 @@ def close_due_predictions(config, ledger: ExpectationLedger, *, now: Optional[fl
     now = _now_epoch() if now is None else now
     closures: list[Closure] = []
     for p in ledger.open_predictions():
+        # Claim-bearing bets are OWNED by close_claim_predictions: their deadline close is a final
+        # MEASUREMENT of the claim, never an auto-false. Only legacy free-text bets die here.
+        if parse_claim(p.target) is not None:
+            continue
         if p.deadline and p.deadline <= now:
             c = close_prediction(config, ledger, p, outcome=False, reason="deadline", tick=tick)
             if c is not None:
                 closures.append(c)
+    return closures
+
+
+# ============================================================================================
+# Checkable claims — the winnable-game half of the ledger (the same lesson as the
+# Administrator's criteria vocabulary: a bet glue cannot GRADE must be unrepresentable)
+# ============================================================================================
+# A bet's `target` is a CLAIM string in one of two shapes, both mechanically checkable:
+#   "<path> <op> <number>"   — a stat claim over the same glue-checked stats dict quest criteria
+#                              use (quests.ADJUDICATABLE_PATHS; enforced at the predict tool
+#                              boundary, evaluated here against the stats the caller passes)
+#   "exists:<relpath>"       — a file the creature will have made in its home by the deadline
+#   "not_exists:<relpath>"   — a file it will have removed
+# Semantics are BY-DEADLINE: the claim coming true at ANY settle pass before the deadline closes
+# the bet TRUE (reason "claim"); a deadline arriving with the claim still false closes it FALSE
+# (reason "deadline") — but only after a final measurement, never by default. Legacy free-text
+# targets don't parse, keep the old event-overlap/deadline behavior, and are EXCLUDED from the
+# Brier calibration (they were ungradeable — a rigged game must not leave a score).
+
+CLAIM_OPS = (">=", "<=", "==", ">", "<")   # two-char ops first: the parser scans in this order
+
+_CLAIM_PATH_RE = re.compile(r"^[a-z_]+\.[a-z_0-9]+$")
+
+
+def parse_claim(target: str) -> Optional[dict]:
+    """Parse a bet target into a checkable claim, or None if it is legacy free text.
+    Returns {"kind": "stat", "path", "op", "value"} or {"kind": "file", "relpath", "negate"}."""
+    s = (target or "").strip()
+    if not s:
+        return None
+    low = s.lower()
+    for prefix, negate in (("not_exists:", True), ("exists:", False)):
+        if low.startswith(prefix):
+            rel = s[len(prefix):].strip().replace("\\", "/")
+            # Confined to the creature's world: relative, downward-only paths.
+            if not rel or rel.startswith(("/", "~")) or ".." in rel.split("/"):
+                return None
+            return {"kind": "file", "relpath": rel, "negate": negate}
+    for op in CLAIM_OPS:
+        if op in s:
+            left, _, right = s.partition(op)
+            path, val = left.strip().lower(), right.strip()
+            if not _CLAIM_PATH_RE.match(path):
+                continue
+            try:
+                return {"kind": "stat", "path": path, "op": op, "value": float(val)}
+            except ValueError:
+                return None
+    return None
+
+
+def evaluate_claim(config, claim: dict, stats: Optional[dict]) -> tuple[Optional[bool], object]:
+    """Measure a claim NOW. Returns (verdict, actual): verdict True/False, or None when it cannot
+    be measured this pass (stat path absent from the stats dict / no stats provided) — an
+    unmeasurable pass defers, it never defaults to wrong (that was the old rigged game)."""
+    if claim.get("kind") == "file":
+        try:
+            import tools as _tools
+            root = _tools._creature_root(config)
+            present = (root / claim["relpath"]).exists()
+        except Exception:  # noqa: BLE001 - an unreadable world defers, it doesn't settle
+            return None, None
+        return (not present if claim["negate"] else present), present
+    # stat claim — walk the dotted path through the caller-provided stats dict
+    if not isinstance(stats, dict):
+        return None, None
+    node: object = stats
+    for part in claim["path"].split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None, None
+        node = node[part]
+    try:
+        actual = float(node)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None, node
+    v = float(claim["value"])
+    ok = {">=": actual >= v, "<=": actual <= v, ">": actual > v, "<": actual < v,
+          "==": abs(actual - v) < 1e-9}[claim["op"]]
+    return ok, actual
+
+
+def close_claim_predictions(config, ledger: ExpectationLedger, stats: Optional[dict], *,
+                            now: Optional[float] = None, tick: int = 0) -> list[Closure]:
+    """The claim half of glue closure: every open CLAIM-bearing bet is measured this pass.
+    True now → closed TRUE (reason 'claim', even before the deadline — by-deadline semantics).
+    Deadline passed and measurably false → closed FALSE (reason 'deadline', after a real
+    measurement). Unmeasurable this pass → left open (defer, never default).
+
+    DARK GATE: returns [] when the flag is off (no-op — the running system is unchanged)."""
+    if not getattr(config, "pillars_expectations_enabled", False):
+        return []
+    now = _now_epoch() if now is None else now
+    closures: list[Closure] = []
+    for p in ledger.open_predictions():
+        claim = parse_claim(p.target)
+        if claim is None:
+            continue
+        verdict, actual = evaluate_claim(config, claim, stats)
+        if verdict is True:
+            c = close_prediction(config, ledger, p, outcome=True, reason="claim", tick=tick)
+        elif verdict is False and p.deadline and p.deadline <= now:
+            c = close_prediction(config, ledger, p, outcome=False, reason="deadline", tick=tick)
+        else:
+            continue
+        if c is not None:
+            c.actual = actual
+            closures.append(c)
     return closures
 
 
@@ -495,7 +609,10 @@ def brier_calibration_by_domain(config, ledger: Optional[ExpectationLedger] = No
     ledger = ledger or ExpectationLedger(config)
     buckets: dict[str, list[Prediction]] = {}
     for p in ledger._all_predictions():
-        if p.status == "closed" and p.outcome is not None:
+        # Calibration is scored ONLY over claim-bearing bets — a bet glue could actually grade.
+        # Legacy free-text bets auto-failed at deadline regardless of truth (a rigged game), so
+        # their closures carry no information about the creature's calibration and are excluded.
+        if p.status == "closed" and p.outcome is not None and parse_claim(p.target) is not None:
             buckets.setdefault(p.domain or DEFAULT_DOMAIN, []).append(p)
     out: dict[str, dict] = {}
     for domain, preds in buckets.items():
