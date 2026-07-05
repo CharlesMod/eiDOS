@@ -723,7 +723,9 @@ def _award_persona_xp(config: Config, amount: int, reason: str) -> None:
     try:
         import persona
         p = persona.load_persona(config.workspace)
-        persona.award_xp(p, int(amount), reason)
+        # config MUST ride along: a config-less award recomputes level-from-XP and this path
+        # SAVES it — an out-of-band persona.json writer that bypassed the mastery gate.
+        persona.award_xp(p, int(amount), reason, config=config)
         persona.save_persona(config.workspace, p)
     except Exception as e:  # noqa: BLE001
         logger.warning("could not award skill XP (%s): %s", reason, e)

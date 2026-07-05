@@ -714,6 +714,15 @@ def check_in(config, llm: Callable[[list, str], str], event: Any, *,
         return None
     kind = event.get("kind") if isinstance(event, dict) else str(event)
     state = AdminState(config)
+    if len(state.pending()) >= PENDING_MAX and not any(
+            state.tier_has_autonomy(t) for t in (1, 2, 3)):
+        # The pending store is full and nothing can auto-issue: every proposal this check-in
+        # could produce would be dropped on arrival. Skip the whole call — an infant's dream
+        # cadence (minutes apart) was burning a full dossier LLM call per dream to feed a
+        # full shelf. The operator clearing the panel re-opens the tap; no state is written.
+        logger.info("administrator: pending store full (%d) — skipping %s check-in",
+                    PENDING_MAX, kind)
+        return None
     dossier = compile_dossier(config, persona=persona)
     messages = [
         {"role": "system", "content": ADMIN_SYSTEM_PROMPT + "\n\n" + fourth_wall_context(config)},

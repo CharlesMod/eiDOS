@@ -339,7 +339,9 @@ def default_reward_sink(config, quest: "Quest", persona: Optional[dict] = None) 
     if amount > 0 and persona is not None:
         try:
             import persona as persona_mod
-            persona_mod.award_xp(persona, amount, reason=f"quest:{quest.id}")
+            # config MUST ride along: a config-less award recomputes level-from-XP, silently
+            # bypassing the mastery gate (the maiden walk showed Lv.1↔Lv.3 flicker from this).
+            persona_mod.award_xp(persona, amount, reason=f"quest:{quest.id}", config=config)
         except Exception:  # noqa: BLE001 - reward payout is best-effort, never brick the loop
             pass
 
