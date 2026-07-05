@@ -568,7 +568,8 @@ body::after {
     width: 320px;
     height: 100px;                /* FIXED so the creature never shifts */
     margin: 0 auto 16px auto;
-    overflow: hidden;
+    /* NO overflow:hidden here — it would clip the tail (::before/::after hang below the
+       box). #thought-text does its own clipping, so text stays contained regardless. */
     display: flex;
     flex-direction: column;
     text-align: left;
