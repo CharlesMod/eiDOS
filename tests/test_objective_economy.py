@@ -87,6 +87,11 @@ class TestConsolidate(_Base):
     def test_nap_archives_long_stale_blocked_goals(self):
         o = objectives.add(self.cfg, "Old parked thing", "something abandoned", tick=1)
         objectives.block(self.cfg, o["id"], reason="dead end")
+        # a block earns the archive only AFTER exposure (belief-refutation guard); simulate a
+        # prior re-test that stayed stuck, then archive.
+        data = objectives._load(self.cfg)
+        objectives._by_id(data, o["id"])["exposures"] = 1
+        objectives._save(self.cfg, data)
         rep = objectives.consolidate(self.cfg, tick=2 + objectives.STALE_ARCHIVE_TICKS)
         self.assertIn(o["id"], rep["archived"])
         self.assertEqual(objectives._by_id(objectives._load(self.cfg), o["id"])["state"], "dead")
@@ -109,7 +114,7 @@ class TestConsolidate(_Base):
         objectives.add(self.cfg, "Alpha task", "do alpha", tick=1)
         objectives.add(self.cfg, "Beta work", "handle beta", tick=2)
         rep = objectives.consolidate(self.cfg, tick=5)
-        self.assertEqual(rep, {"merged": [], "archived": []})
+        self.assertEqual(rep, {"merged": [], "archived": [], "exposed": []})
 
 
 if __name__ == "__main__":

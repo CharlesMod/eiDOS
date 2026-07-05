@@ -111,7 +111,22 @@ def _new(title: str, why: str, priority: int, tick: int, oid: Optional[str] = No
         "created_tick": tick,
         "last_progress_tick": tick,
         "last_active_tick": tick,
+        "exposures": 0,          # times thawed from a block — an "impossibility" belief RE-TESTED
     }
+
+
+def _thaw(o: dict, tick: int) -> None:
+    """Re-activate a blocked objective for another attempt (exposure). A block is a belief — 'I
+    can't make progress here' — and a belief earns its keep by being TESTED, not avoided. Each thaw
+    counts as one exposure and tags the objective so the gate can recognise a REFUTATION (a
+    formerly-blocked goal that then makes progress = the belief was wrong, a maximally-informative
+    event that deserves surprise)."""
+    o["state"] = "active"
+    o["frustration"] = max(0, int(o.get("frustration", 0)) - FRUST_RELIEF)   # cooldown credit
+    o["exposures"] = int(o.get("exposures", 0)) + 1
+    o["_thawed_from_block"] = True
+    o["ticks_since_progress"] = 0
+    o["last_active_tick"] = tick
 
 
 def _by_id(data: dict, oid: Optional[str]) -> Optional[dict]:
@@ -251,23 +266,33 @@ def consolidate(config, tick: int = 0) -> dict:
             o["blocked_reason"] = f"merged into '{hit['title']}'"
             merged.append(o["id"])
 
+        exposed = []
         for o in objs:
             if o.get("state") == "blocked" and o["id"] not in merged:
                 idle = tick - int(o.get("last_progress_tick", tick))
-                if idle >= STALE_ARCHIVE_TICKS:
+                if idle < STALE_ARCHIVE_TICKS:
+                    continue
+                # A belief may not be BURIED untested. A stale block that was never re-tested
+                # (exposures == 0) gets force-thawed at the nap instead of archived — exposure
+                # therapy: "you've avoided this for a long time; wake and test it." Only a block
+                # that HAS been re-tested and stayed stuck (exposures ≥ 1) earns the archive.
+                if int(o.get("exposures", 0)) < 1:
+                    _thaw(o, tick)
+                    exposed.append(o["id"])
+                else:
                     o["state"] = "dead"
                     o["blocked_reason"] = f"archived: {idle} ticks without progress (revivable)"
                     archived.append(o["id"])
 
-        if merged or archived:
+        if merged or archived or exposed:
             act = _by_id(data, data.get("active_id"))
             if act is None or act.get("state") == "dead":
                 nxt = next((o for o in objs if o.get("state") == "active"), None)
                 data["active_id"] = nxt["id"] if nxt else None
             _save(config, data)
-        return {"merged": merged, "archived": archived}
+        return {"merged": merged, "archived": archived, "exposed": exposed}
     except Exception:  # noqa: BLE001 - hygiene must never wound the nap boundary
-        return {"merged": [], "archived": []}
+        return {"merged": [], "archived": [], "exposed": []}
 
 
 def _resolve(data: dict, key: str) -> Optional[dict]:
@@ -381,13 +406,13 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
         nxt = _pick_next(data, exclude_id=(active["id"] if active else "")) or _thaw_candidate(data, tick_number)
         if nxt:
             if nxt["state"] == "blocked":
-                nxt["state"] = "active"
-                nxt["frustration"] = max(0, nxt["frustration"] - FRUST_RELIEF)  # cooldown credit
+                _thaw(nxt, tick_number)             # exposure: re-test the belief
             nxt["ticks_since_progress"] = 0
             nxt["last_active_tick"] = tick_number
             data["active_id"] = nxt["id"]
             _save(config, data)
-            return {"rotated": True, "parked": False, "escalate": False, "active": nxt}
+            return {"rotated": True, "parked": False, "escalate": False, "active": nxt,
+                    "refuted_block": None}
         esc = _maybe_escalate(data, tick_number)
         _save(config, data)
         return {"rotated": False, "parked": False, "escalate": esc, "active": None}
@@ -396,7 +421,14 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
     active["attempts"] += 1
 
     # Update frustration from this tick's outcome.
+    refuted_block = None
     if made_progress:
+        # REFUTATION: a goal thawed from a block that then makes progress means the "I can't do
+        # this" belief was WRONG — the most valuable outcome (maximally surprising). Report it so
+        # the loop can feed the surprise to curiosity (strongly encoding the correction).
+        if active.pop("_thawed_from_block", False):
+            refuted_block = {"title": active["title"],
+                             "reason": str(active.get("blocked_reason") or "")}
         active["frustration"] = max(0, active["frustration"] - FRUST_RELIEF)
         active["ticks_since_progress"] = 0
         active["last_progress_tick"] = tick_number
@@ -418,8 +450,7 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
         if nxt is None:
             nxt = _thaw_candidate(data, tick_number)
             if nxt:
-                nxt["state"] = "active"
-                nxt["frustration"] = max(0, nxt["frustration"] - FRUST_RELIEF)
+                _thaw(nxt, tick_number)             # exposure: re-test the belief
         if nxt:
             nxt["ticks_since_progress"] = 0
             nxt["last_active_tick"] = tick_number
@@ -444,4 +475,4 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
 
     _save(config, data)
     return {"rotated": rotated, "parked": parked, "escalate": escalate,
-            "active": _by_id(data, data["active_id"])}
+            "active": _by_id(data, data["active_id"]), "refuted_block": refuted_block}

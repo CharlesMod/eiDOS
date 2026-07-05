@@ -2482,6 +2482,31 @@ def run_loop(config: Config, persona=None, wal=None):
                 print(f"{pfx} Gate: rotated focus → {_gate['active']['title']}")
             if _gate.get("escalate"):
                 print(f"{pfx} Gate: whole backlog blocked — surfacing to Boss once")
+            # BELIEF REFUTED: a goal the creature had declared blocked ("I can't do this") just
+            # made progress — the "confident-wrong is gold" case. Fire a near-maximal surprise so
+            # curiosity encodes the correction strongly (it competes with the stale false belief),
+            # and record it as knowledge so avoidance can never quietly re-form the same wall.
+            _ref = _gate.get("refuted_block")
+            if _ref:
+                print(f"{pfx} Belief refuted: '{_ref['title']}' was NOT blocked after all.")
+                if nervous_curiosity is not None:
+                    try:
+                        from nervous.worldmodel import SURPRISE_MAX as _SMAX
+                        nervous_curiosity.observe(_SMAX)     # maximal novelty → strong encoding
+                    except Exception:  # noqa: BLE001
+                        pass
+                try:
+                    import knowledge as _kn
+                    _kn.store_entry(
+                        config,
+                        f"REFUTED a block on '{_ref['title']}': I had believed \"{_ref['reason']}\" "
+                        f"but progress proved it wrong. When something seems impossible, TEST it "
+                        f"before concluding — a wall I avoid is not a wall I verified.",
+                        tags=["refuted", "belief", "self-diagnosis", "exposure"],
+                        category="reflections", confidence="verified",
+                        source_tick=tick_number)
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception as _e:  # noqa: BLE001
             logger.warning("objective gate failed: %s", _e)
 
