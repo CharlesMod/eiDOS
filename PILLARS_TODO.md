@@ -431,3 +431,11 @@ existing pressure to the domain that lacked it — no hardcoding.
   near-dup now SUPERSEDES in place (ranked confidence; unknown labels sit MID so they can't be
   downgraded). This is the platform-level version of the manual correction done earlier.
 - Both memory changes reviewed (no high/med bugs; two low edges fixed: no-downgrade, step-primacy).
+- ✅ **Semantic recall ON — embeddings in spare VRAM** (`2d3a5d8`, `91cff30`) — recall was BM25-only
+  (shared-words), so "how do I author a tool" missed the `create_skill`/ToolResult facts. Now a
+  dedicated `eidos-embed.service` (llama.cpp `--embedding`, nomic-embed-text-v1.5, 768-dim, ~0.4 GB)
+  runs resident alongside the mind on :8082 (NOT llama-swap — it keeps one model resident). The
+  hybrid recall (BM25 ⊕ semantic RRF) is now live: verified on the 295-entry store — "how do I make
+  a new tool" surfaces a tool-building reflection by MEANING (0.69). Chose HTTP-to-llama.cpp over
+  the legacy ONNX path (onnxruntime uninstalled + Blackwell CUDA-EP gamble). Client truncates/batches;
+  server `-b/-ub 2048` (a pooled embedding must fit one micro-batch — 512 500'd on long entries).

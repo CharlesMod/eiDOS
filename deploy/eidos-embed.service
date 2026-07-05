@@ -1,0 +1,30 @@
+[Unit]
+Description=eidos-embed — resident llama.cpp embedding server for eiDOS semantic recall (Sprinter)
+Documentation=https://github.com/ggml-org/llama.cpp
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=cmod
+Group=cmod
+WorkingDirectory=/home/cmod/llm
+# CUDA 13 runtime libs for the sm_120 (Blackwell RTX 5080) llama-server build.
+Environment=LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64
+# A SMALL embedding model (nomic-embed-text-v1.5, 768-dim, ~140 MB Q8_0) held resident on the
+# GPU ALONGSIDE the mind. It runs on its OWN port (8082), NOT through llama-swap: llama-swap keeps
+# only one model resident at a time, so routing embeddings through it would swap out the mind.
+# Full offload (-ngl 99) — the model is tiny, it costs ~0.3 GB of the 16 GB and never competes
+# with gemma. --embedding restricts the server to the embedding use case.
+ExecStart=/home/cmod/llm/src/llama.cpp/build/bin/llama-server \
+  -m /home/cmod/llm/models/nomic-embed-text-v1.5.Q8_0.gguf \
+  --embedding --pooling mean --embd-normalize 2 \
+  --host 127.0.0.1 --port 8082 -ngl 99 -c 2048 -b 2048 -ub 2048 --threads 2
+# -b/-ub = 2048 (= context): a pooled embedding must fit in ONE micro-batch, so the physical batch
+# must cover the longest input (a 512-token ubatch 500'd on ~650-token entries). The batch buffer
+# for a 768-dim model is a few MB — trivial against the 16 GB.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
