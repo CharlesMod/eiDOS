@@ -1158,10 +1158,29 @@ def _assemble_briefing(
 
     # Pillars 5.1 (dark): the System's quest window — the distinct terse register, unmistakably
     # external authority, rendered at the decision point. Flag off → never built.
+    # 4.3: the window also carries ONE standing line (LV/XP/unmet gates or suspension) — growth
+    # proprioception in the System's own register. Before it, the creature's level machinery was
+    # entirely invisible in-context: it was being graded on gates it could not feel.
     if getattr(config, "pillars_quests_enabled", False):
         try:
             import quests as _quests
+            _standing = ""
+            if getattr(config, "pillars_mastery_gates_enabled", False):
+                try:
+                    import level_gates as _lg
+                    import persona as _persona
+                    _standing = _lg.render_standing(_persona.load_persona(config.workspace), config)
+                except Exception:  # noqa: BLE001
+                    _standing = ""
             _qw = _quests.render_active(_quests.QuestStore(config).active())
+            if _qw and _standing:
+                # ride inside the same box: insert the standing line after the header rule
+                _head, _rest = _qw.split("\n", 1)
+                _qw = f"{_head}\n║ {_standing}\n{_rest}"
+            elif _standing and not _qw:
+                _qw = "\n".join(["╔══ SYSTEM ══════════════════════════════════════",
+                                 f"║ {_standing}",
+                                 "╚════════════════════════════════════════════════"])
             if _qw:
                 situation.append(_qw)
         except Exception:  # noqa: BLE001
