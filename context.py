@@ -139,6 +139,32 @@ def _build_relevant_recall(config: Config, exclude_ids: set) -> str:
         if line and not line.startswith("#"):
             step = line
             break
+    # Broaden the recall query beyond the plan line (Concern 3: the creature re-DERIVED facts it
+    # had already stored — e.g. the ToolResult signature — because a plan line like "create a
+    # status skill" never lexically matched a stored "ToolResult requires ..." fact). Fold in the
+    # active objective (goal-relevant priors) and the tools it has been USING (so procedural
+    # knowledge about a tool surfaces exactly when it is working with that tool). BM25 ranks by
+    # overlap, so these extra terms lift the right priors without displacing a strong step match.
+    _extra = []
+    try:
+        import objectives as _obj
+        _ao = _obj.get_active(config)
+        if _ao:
+            _extra.append(f"{_ao.get('title', '')} {_ao.get('why', '')}")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from memory import read_recent_observations as _rro
+        _seen = []
+        for _o in _rro(config, max_count=8):
+            _t = _o.get("tool")
+            if _t and _t not in _seen:
+                _seen.append(_t)
+        if _seen:
+            _extra.append(" ".join(_seen[:4]))
+    except Exception:  # noqa: BLE001
+        pass
+    step = " ".join([step] + [e for e in _extra if e.strip()]).strip()
     if not step:
         return ""
     # Hybrid retrieval (phase 7a, "BM25+semantic"): lexical BM25 catches exact term overlap,

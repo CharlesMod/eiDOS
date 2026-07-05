@@ -151,6 +151,52 @@ def ensure_dirs(config: Config) -> None:
         (config.knowledge_dir / cat).mkdir(parents=True, exist_ok=True)
 
 
+# Confidence as a rank, so a CORRECTION can outrank the belief it fixes. Free-string values map to
+# the nearest rung; anything unknown is treated as the tentative floor.
+_CONF_RANK = {"tentative": 0, "hypothesis": 0, "guess": 0, "unsure": 0,
+              "likely": 1, "probable": 1, "plausible": 1,
+              "confident": 2, "high": 2,
+              "verified": 3, "certain": 3, "confirmed": 3}
+
+
+def _conf_rank(c: str) -> int:
+    return _CONF_RANK.get((c or "").strip().lower(), 0)
+
+
+def _supersede_entry(config: Config, entry_id: str, content: str, tags: list[str],
+                     confidence: str) -> bool:
+    """Overwrite an existing entry's content/confidence/tags in place (the CORRECTION path). A mind
+    must be able to fix a wrong memory; the dedup guard used to return the stale entry unchanged,
+    so a higher-confidence correction was silently swallowed (a 'verified: X was never true' could
+    not replace a 'tentative: X'). Rewrites the .md and the index entry, keeps the id/created."""
+    index = load_index(config)
+    for item in index:
+        if item.get("id") != entry_id:
+            continue
+        cat = item.get("category", "facts")
+        path = config.knowledge_dir / cat / f"{entry_id}.md"
+        merged_tags = sorted(set(item.get("tags", [])) | set(tags))
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        meta = {"id": entry_id, "category": cat, "tags": merged_tags, "confidence": confidence,
+                "source_goal": item.get("source_goal", ""), "source_tick": item.get("source_tick", 0),
+                "created": item.get("created", now), "updated": now}
+        try:
+            ensure_dirs(config)
+            fd, tmp = tempfile.mkstemp(dir=str(config.knowledge_dir / cat), prefix=".kn_", suffix=".tmp")
+            with os.fdopen(fd, "w") as f:
+                f.write(_render_entry(meta, content))
+            replace_with_retry(tmp, str(path))
+        except Exception:  # noqa: BLE001 - a failed correction must not corrupt the store
+            return False
+        item.update({"tags": merged_tags, "confidence": confidence, "updated": now,
+                     "content_preview": content[:1500]})
+        _write_index(config, index)
+        _invalidate_bm25_cache()
+        logger.info("superseded knowledge entry %s → confidence=%s", entry_id, confidence)
+        return True
+    return False
+
+
 def store_entry(
     config: Config,
     content: str,
@@ -170,10 +216,16 @@ def store_entry(
 
     # Reject near-duplicates at the source (token-similarity, not just exact). The store bloated to
     # 265 entries for one small LAN because the agent kept re-writing the same fact in different words
-    # (7+ "MQTT broker at .25" restatements). If a near-identical entry exists, return it unchanged so
-    # the knowledge count only rises on GENUINELY new facts — which is also the goal-tension signal.
+    # (7+ "MQTT broker at .25" restatements). If a near-identical entry exists we DON'T grow the store
+    # — but a higher-CONFIDENCE near-dup is a CORRECTION, not a restatement: overwrite the stale entry
+    # in place so a mind can fix its own memory (else 'verified: X was never locked' was swallowed by
+    # the 'tentative: X is locked' it meant to replace). Same-or-lower confidence → return unchanged.
     sim, sid = most_similar(config, content)
     if sid and sim >= float(config.knowledge_dedup_threshold):
+        existing = next((e for e in load_index(config) if e.get("id") == sid), None)
+        if existing is not None and _conf_rank(confidence) > _conf_rank(existing.get("confidence")):
+            if _supersede_entry(config, sid, content, tags, confidence):
+                return sid
         return sid
 
     entry_id = _make_id(content, category)
