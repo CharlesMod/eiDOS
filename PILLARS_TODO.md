@@ -395,4 +395,33 @@ rest by living. Design docs: **TOOL_PROGRESSION.md** (approved, 6 operator decis
 - ✅ **The walk's first afternoon** — genesis-03 PASSED: the otter chose its own objective, finished it, and the System paid the **workshop** (6/7 units; senses still on the voice hold). Two live defects found at the 30-min check-in and fixed (`7dba4aa`): two surviving config-less `award_xp` sites (quest sink + skill economy) caused a Lv.1↔Lv.3 flicker against the gate guard; the Administrator burned a dossier call per dream into a full 20-slot pending store (now skips when full).
 - ✅ **Dream vs nap** (`97f6602`) — the body decides which sleep this was, never a clock: a boundary is a NAP iff adenosine ≥ NAP_PRESSURE_MIN (0.7) of the stage ceiling, else a DREAM. Both legs run memory jobs/backup/settlement/cadence/issuance; only a nap clears adenosine, advances `sleeps_total`/`sleeps_since_level`, and fires `sleep_complete`. Tiredness now accrues THROUGH dreams so real ~3.6 h naps arrive on the curve and "3 sleeps between levels" means three naps. Live counters migrated 18→0 (dream-inflated). Known seam: adenosine is in-memory — a restart rests the body (first nap ETA counts from the last respawn).
 - ✅ **Administrator criteria vocabulary** (`683be72`) — attending the stale pending queue exposed the real bug: every LLM-authored quest referenced DOSSIER paths (`skill_economy.authored`, `pitfall_health.*`, `calibration_by_domain.general.brier`, `level.evidence.checks.sleep_cycles`) that `_quest_stats` never checks, so 100% were un-passable bricks that would freeze the mastery gate — the whole propose→adjudicate pipeline was dead but for the 3 hand-authored genesis quests. Fix: one rulebook `quests.ADJUDICATABLE_PATHS` (9 glue-settled counts) enforced four ways — drift-guard test (vocab ≡ `_quest_stats`, genesis quests conform), grammar path-enum (`cpath`), `_valid_criteria` vocabulary check (guards generation + edit), and the system prompt naming it. Two full brick batches swept (40 rejected).
-- Deferred from the review (documented, judged non-blocking): K-sleep quest-abandon path (FAILED close), house-mode+flag interaction guard, flag-off unlock-reward XP leg, `sleeps.total` freeze if mastery_gates ever turns off, loop-side hatch (hatch progress rides the browser's /api/status poll). **New deferred:** `level_candidacy` fires every tick once XP passes the floor while the gate holds — now cheap (check-in runs or skips) but should be edge-triggered (fire once per candidacy change).
+- Deferred from the review (documented, judged non-blocking): K-sleep quest-abandon path (FAILED close), house-mode+flag interaction guard, flag-off unlock-reward XP leg, `sleeps.total` freeze if mastery_gates ever turns off, loop-side hatch (hatch progress rides the browser's /api/status poll).
+
+## Nurturing the young mind — behavioral fixes (2026-07-05, evening)
+
+The otter developed well (hypothesis-driven exploration, a skill economy visibly selecting its
+tools, striking metacognition) but showed three developmental snags. Each fixed by EXTENDING an
+existing pressure to the domain that lacked it — no hardcoding.
+
+- ✅ **Manual memory correction** — a false "create_skill/delegate are locked" belief (its own bad
+  `import some_internal_module`, over-generalised) had reached `recall_count` 12–13 and parked 4
+  objectives. Corrected in place across objectives.json, all engram bodies/situations, and the
+  error knowledge entry (→ `RESOLVED`, verified). Gotcha found: `knowledge.store_entry` dedup
+  silently returns the near-duplicate *wrong* entry, swallowing a correction — a creature can't
+  self-correct a belief via store_entry when the fix resembles the error (deferred).
+- ✅ **Concern 2 — objective economy** (`6f4b50a`, review `b277638`) — goals now use the skill/
+  knowledge similarity economy: a reworded goal merges instead of spawning (`knowledge.token_jaccard`,
+  symmetric so an elaboration merges but added scope doesn't), naps consolidate the backlog (the
+  goal analog of memory consolidation), long-stale blocks archive. Live: merged the Skill Library dup.
+- ✅ **Concern 1 — belief falsification** (`063f011`, `6a440c6`) — a block is a belief that earns
+  its keep by EXPOSURE, not avoidance (the false belief had been *reinforced* because the detour
+  around it kept succeeding — phobia maintenance). A thawed-from-block goal that then progresses is
+  a REFUTATION → near-maximal surprise to curiosity (strong correction encoding) + a verified
+  reflection; a never-tested stale block is force-exposed at the nap, never buried untested.
+- ✅ **Adversarial review** — 6 findings (3 high, all the false-positive-merge direction), all fixed:
+  Jaccard over overlap-coefficient (subset ≠ duplicate), done/dead never merge, `_unique_id` guards
+  slug collisions, consolidate falls back to a blocked survivor, no IP-gating leak into goals.
+- ○ **Concern 3 — repetitive learning** (deferred) — re-deriving stored facts instead of recalling;
+  a recall/affordance-surfacing tune-up. Partly self-resolves as naps consolidate duplicate diary
+  entries; revisit after the creature runs on the new code.
+- **New deferred:** `level_candidacy` edge-trigger (done in `8a96311`); `store_entry` correction-swallow (above).
