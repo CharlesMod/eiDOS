@@ -74,7 +74,7 @@ def _canned_output(qid="adm_t2_first_trusted", tier=2, knob="TRUSTED_PER_TIER") 
             "tier": tier,
             "reward_xp": 40,
             "expiry_hours": 0,
-            "criteria": {"path": "skills.tiers.2.trusted", "op": ">=", "value": 1},
+            "criteria": {"path": "skills.trusted_count", "op": ">=", "value": 1},
         }],
         "weakness_report": "Tier 2 has zero trusted skills; calibration history is thin.",
         "narrator": "The next door does not open for the unproven.",
@@ -296,7 +296,7 @@ class TestFullCycle(unittest.TestCase):
 
         # 5. Glue adjudication passes it → XP settles through the reward sink.
         xp_before = self.persona.get("xp", 0)
-        stats = {"skills": {"tiers": {"2": {"trusted": 1}}}}   # the drill's typed evidence
+        stats = {"skills": {"trusted_count": 1}}   # the adjudicatable evidence _quest_stats builds
         result = sysm.check(active, stats)
         self.assertTrue(result["passed"])
         self.assertEqual(self.persona["xp"], xp_before + 40)
@@ -466,7 +466,7 @@ class TestLadderLint(unittest.TestCase):
         return json.dumps({
             "quests": [{"id": qid, "directive": directive, "tier": 2, "reward_xp": 40,
                         "expiry_hours": 0,
-                        "criteria": {"path": "skills.tiers.2.trusted", "op": ">=", "value": 1}}],
+                        "criteria": {"path": "skills.trusted_count", "op": ">=", "value": 1}}],
             "weakness_report": "w", "narrator": "n", "tuning_flags": [],
         })
 

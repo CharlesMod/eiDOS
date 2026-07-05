@@ -89,6 +89,43 @@ _OPS: dict[str, Callable[[Any, Any], bool]] = {
 }
 
 
+# The adjudicatable criteria vocabulary — the ONLY stat paths a quest's success_criteria may
+# reference, because these are the ONLY paths the engine actually checks against: eidos._quest_stats
+# builds exactly this dict from glue-settled, monotonic FACTS (a manifest/ledger/store count, never
+# a tools_used attempt — §0.5). It is a deliberately THIN rulebook, NOT the rich dossier the
+# Administrator reasons FROM: dossier readouts like skill_economy.authored, pitfall_health.*,
+# level.sleeps_since_level, calibration_by_domain.* are analyst vocabulary and DO NOT resolve here,
+# so a criterion naming one can never pass — it sits ACTIVE forever and bricks the mastery gate
+# (this was live: every LLM-authored Administrator quest was un-adjudicatable). A drift guard
+# (tests/test_admin_criteria_vocab) asserts every path here resolves in a real _quest_stats dict, so
+# the rulebook and the referee can never diverge again.
+ADJUDICATABLE_PATHS: dict[str, str] = {
+    "skills.live_count":       "skills currently LIVE in the manifest",
+    "skills.trusted_count":    "skills promoted to TRUSTED",
+    "expectations.total":      "predictions ever placed (the calibration ledger)",
+    "sleeps.total":            "completed NAP cycles ever (dreams do not count)",
+    "quests.passed":           "quests adjudicated PASS ever",
+    "persona.xp":              "current XP",
+    "persona.level":           "current level",
+    "persona.goals_completed": "self-chosen objectives finished",
+    "persona.total_ticks":     "lifetime ticks lived",
+}
+
+
+def criteria_paths(criteria: Any) -> list[str]:
+    """Every leaf `path` a criteria tree references (walking all_of/any_of), for vocabulary
+    checking. Malformed/None → []. A leaf with a non-string path contributes nothing."""
+    out: list[str] = []
+    if not isinstance(criteria, dict):
+        return out
+    if "all_of" in criteria or "any_of" in criteria:
+        for kid in (criteria.get("all_of") or criteria.get("any_of") or []):
+            out.extend(criteria_paths(kid))
+    elif isinstance(criteria.get("path"), str):
+        out.append(criteria["path"])
+    return out
+
+
 def _dig(stats: dict, path: str) -> Any:
     """Resolve a dotted path into the typed stats dict. Missing → None (a criterion over an absent
     stat simply cannot pass — glue never guesses)."""

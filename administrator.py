@@ -472,8 +472,12 @@ ever sees the System's terse quest windows.
 Each check-in you receive a fresh telemetry dossier. Your job:
  1. QUESTS — propose gap-targeted quests at the UPPER edge of the growth zone (not-coddled): weak
     calibration domains, tiers with no trusted skills, orbited-but-locked doors, stale scars.
-    Success criteria must be glue-checkable predicates (path/op/value over the stats dict) — never
-    self-report. Directives are terse and impersonal: the System's register.
+    Success criteria must be glue-checkable predicates (path/op/value) — never self-report. You
+    REASON from the whole rich dossier, but you may WRITE a criteria `path` ONLY from the small
+    adjudicatable vocabulary listed under ADJUDICATABLE CRITERIA PATHS below — those are the only
+    facts the engine checks. A criterion naming any other path (a dossier readout like
+    skill_economy.authored or level.sleeps_since_level) can NEVER pass and is discarded with the
+    whole proposal. Directives are terse and impersonal: the System's register.
     When the dossier carries `creature_tools`, that list IS eiDOS's whole world: a directive may
     only name tools on it. A tool absent from the list does not exist for eiDOS yet — naming one
     tears the fiction, and such proposals are held, never issued.
@@ -486,6 +490,16 @@ Each check-in you receive a fresh telemetry dossier. Your job:
 Everything you emit is a PROPOSAL routed to the operator's approval seam. Output exactly the JSON
 object the grammar defines — nothing else.
 """
+
+
+def _criteria_vocab_block() -> str:
+    """The adjudicatable-path vocabulary, rendered for the system prompt from the SAME registry the
+    grammar and validator use (quests.ADJUDICATABLE_PATHS) — one source, so the model is told
+    exactly what the engine can check and the three legs can never disagree."""
+    rows = "\n".join(f"  · {p} — {d}" for p, d in quests.ADJUDICATABLE_PATHS.items())
+    return ("=== ADJUDICATABLE CRITERIA PATHS (the ONLY paths a criteria may use) ===\n"
+            "Each is a monotonic, glue-settled count. Reason from the dossier; write criteria from "
+            "these:\n" + rows)
 
 
 # ============================================================================================
@@ -545,8 +559,16 @@ def build_admin_grammar() -> str:
         # exactly {path, op, value} with op drawn from quests._OPS; a compound is all_of/any_of of
         # ≤4 children. parse_admin_output's semantic pass (depth cap, path sanity) still runs.
         'crit ::= leaf | comp',
-        f'leaf ::= "{{" jws {key("path")} bstring "," jws {key("op")} opstr "," jws'
+        # The criteria PATH is drawn from the adjudicatable vocabulary (quests.ADJUDICATABLE_PATHS),
+        # not a free string — the whole propose→adjudicate pipeline was dead because the 12B wrote
+        # criteria against its rich DOSSIER keys (skill_economy.*, pitfall_health.*), none of which
+        # the engine checks, so every quest was an un-passable brick. Constraining the path at the
+        # sampler (§0) makes an un-adjudicatable criterion unrepresentable.
+        f'leaf ::= "{{" jws {key("path")} cpath "," jws {key("op")} opstr "," jws'
         f' {key("value")} sval "}}" jws',
+        'cpath ::= "\\"" ( ' + " | ".join(
+            f'"{p}"' for p in sorted(quests.ADJUDICATABLE_PATHS, key=len, reverse=True))
+        + ' ) "\\"" jws',
         'opstr ::= "\\"" ( ' + " | ".join(
             f'"{op}"' for op in sorted(quests._OPS, key=len, reverse=True)) + ' ) "\\"" jws',
         'sval ::= jstring | jnumber | ( "true" | "false" ) jws | sarr',
@@ -564,8 +586,13 @@ _CRIT_DEPTH_MAX = 3   # declared: criteria nesting cap — a 3-deep predicate tr
 
 
 def _valid_criteria(d: Any, depth: int = 0) -> bool:
-    """A criteria dict must round-trip into a CHECKABLE Criterion: leaf = non-empty path + known op;
-    compound = non-empty all_of/any_of of valid children. quests._OPS is the single op registry."""
+    """A criteria dict must round-trip into an ADJUDICATABLE Criterion: leaf = a path in the
+    engine's checkable vocabulary (quests.ADJUDICATABLE_PATHS — the ONLY paths _quest_stats
+    exposes) + known op; compound = non-empty all_of/any_of of valid children. A path outside the
+    vocabulary is un-checkable — the criterion can never pass and the quest would sit ACTIVE
+    forever, bricking the gate — so it is invalid HERE, at the same choke point that guards both
+    generation (parse_admin_output drops the whole output) and approval (a bad edit is refused).
+    quests._OPS is the single op registry; quests.ADJUDICATABLE_PATHS the single path registry."""
     if not isinstance(d, dict) or depth > _CRIT_DEPTH_MAX:
         return False
     if "all_of" in d or "any_of" in d:
@@ -577,7 +604,7 @@ def _valid_criteria(d: Any, depth: int = 0) -> bool:
     if set(d.keys()) - {"path", "op", "value"}:
         return False
     path = d.get("path")
-    if not isinstance(path, str) or not path.strip():
+    if not isinstance(path, str) or path not in quests.ADJUDICATABLE_PATHS:
         return False
     if d.get("op", ">=") not in quests._OPS:
         return False
@@ -725,7 +752,8 @@ def check_in(config, llm: Callable[[list, str], str], event: Any, *,
         return None
     dossier = compile_dossier(config, persona=persona)
     messages = [
-        {"role": "system", "content": ADMIN_SYSTEM_PROMPT + "\n\n" + fourth_wall_context(config)},
+        {"role": "system", "content": ADMIN_SYSTEM_PROMPT + "\n\n" + _criteria_vocab_block()
+                                      + "\n\n" + fourth_wall_context(config)},
         {"role": "user", "content": f"CHECK-IN EVENT: {kind}\n\nDOSSIER:\n"
                                     + json.dumps(dossier, ensure_ascii=False, indent=1)},
     ]
