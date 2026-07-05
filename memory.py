@@ -338,12 +338,21 @@ def count_observation_chars(config: Config) -> int:
 _OBS_ARCHIVE_MAX_BYTES = 4 * 1024 * 1024   # per archive file; ~weeks of compactions
 
 
-def truncate_observations(config: Config) -> int:
-    """Clear observations.jsonl after successful compaction.
+# Observations kept through a dream: waking with TOTAL amnesia of the present moment (the old
+# clear-to-zero) severed the stream of consciousness every dream — the creature came to with one
+# line of dream-summary and no idea what it had just been doing. Digestion keeps the last few
+# breaths of the day. (Small: the dream already distilled everything; this is continuity, not recall.)
+_OBS_KEEP_TAIL = 4
 
-    The distilled content now lives in memory/plan, so the raw
-    observations are no longer needed for the loop.  Without this, the
+
+def truncate_observations(config: Config) -> int:
+    """Trim observations.jsonl after successful compaction, KEEPING the last few lines.
+
+    The distilled content now lives in memory/plan, so the bulk of the raw
+    observations is no longer needed for the loop.  Without this, the
     file grows monotonically and should_compact() fires every tick.
+    A short tail (_OBS_KEEP_TAIL) survives so the creature wakes mid-thought,
+    not amnesiac — post-dream continuity of the present moment.
 
     The cleared lines are first appended to a dated archive
     (state/observations_archive_YYYYMM.jsonl) — dream extraction is
@@ -359,7 +368,11 @@ def truncate_observations(config: Config) -> int:
     except FileNotFoundError:
         return 0
 
+    keep = lines[-_OBS_KEEP_TAIL:] if _OBS_KEEP_TAIL > 0 else []
+    lines = lines[:len(lines) - len(keep)]
     removed = len(lines)
+    if removed == 0:
+        return 0
     # Archive before clearing — best-effort: an archive failure must never block compaction.
     try:
         import time as _t
@@ -370,9 +383,11 @@ def truncate_observations(config: Config) -> int:
                 f.writelines(lines)
     except Exception:  # noqa: BLE001 - archive is best-effort
         pass
-    # Atomic rewrite: empty the file
-    with open(config.observations_path, "w", encoding="utf-8") as f:
-        pass
+    # Atomic rewrite: only the kept tail survives the dream
+    tmp = config.observations_path.with_suffix(".jsonl.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.writelines(keep)
+    tmp.replace(config.observations_path)
     return removed
 
 

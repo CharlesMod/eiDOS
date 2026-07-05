@@ -27,20 +27,43 @@ class AfferentContext:
                    max_events=getattr(config, "nervous_context_max_events", 12),
                    max_chars=getattr(config, "nervous_context_max_chars", 1500))
 
+    # Bus self-health plumbing: the monitor's "numbness" alarms, not senses. They stay on the bus
+    # for the monitor; rendering them into the creature's felt world taught it nothing (a live
+    # block showed raw `consumer_dead_past_liveness_cap` JSON sitting among its senses).
+    _PLUMBING_KINDS = (Kind.reliable_undeliverable, Kind.sequence_aborted)
+
     def drain_block(self):
         """Drain up to max_events admitted events (NON-blocking) and render a compact, char-capped
         block. Acks each event. Returns ('', 0) when nothing is admitted (the common idle case), so
-        the tick's context is byte-identical to today when no organ has fired."""
+        the tick's context is byte-identical to today when no organ has fired.
+
+        COALESCED: repeated events from the same (modality, kind, organ) collapse to the FRESHEST
+        one with a ×N count — a live block once spent 8 of its 12 lines on identical neuromod
+        readings. A small mind's senses report change, not steady state, eight times over."""
         events = []
         while len(events) < self.max_events:
             ev = self.bus.recv(self.sub, timeout=0.0)   # non-blocking drain
             if ev is None:
                 break
-            events.append(ev)
             self.bus.ack(ev)
+            if ev.kind in self._PLUMBING_KINDS:
+                continue                                # acked, logged by the bus — not a sense
+            events.append(ev)
         if not events:
             return "", 0
-        block = "\n".join(self._render(ev) for ev in events)
+        # Coalesce: first-seen order, freshest payload wins, duplicates counted.
+        slots: dict = {}
+        for ev in events:
+            key = (ev.modality, ev.kind, ev.source_organ)
+            if key in slots:
+                slots[key] = (slots[key][0] + 1, ev)    # newer event replaces; count grows
+            else:
+                slots[key] = (1, ev)
+        lines = []
+        for n, ev in slots.values():
+            line = self._render(ev)
+            lines.append(f"{line} ×{n}" if n > 1 else line)
+        block = "\n".join(lines)
         if len(block) > self.max_chars:
             block = block[:self.max_chars].rsplit("\n", 1)[0] + "\n… (afferent truncated)"
         return block, len(events)
