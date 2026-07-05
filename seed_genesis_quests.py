@@ -48,8 +48,8 @@ GENESIS = [
     Quest(
         id="genesis-02-a-wager",
         directive=("[SYSTEM] A mind that cannot say what happens next is only reacting. Place one "
-                   "wager with predict — a real expectation, a deadline, your honest confidence. "
-                   "The System settles it, not you."),
+                   "wager with predict — a claim the world can check, a deadline, your honest "
+                   "confidence. The System settles it, not you."),
         grants_unit="foresight",              # U3: predict
         # A prediction IN the ledger (the monotonic ever-placed counter), not a predict attempt.
         success_criteria=Criterion(path="expectations.total", op=">=", value=1),
