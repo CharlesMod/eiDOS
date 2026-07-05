@@ -161,13 +161,44 @@ def is_loaded() -> bool:
 # Embedding
 # ---------------------------------------------------------------------------
 
-def embed_texts(texts: list[str]) -> Optional["np.ndarray"]:
-    """Embed a list of texts using the loaded model.
+def _embed_http(config: Config, texts: list[str], is_query: bool) -> Optional["np.ndarray"]:
+    """Embed via a resident llama.cpp --embedding server (Sprinter's spare-VRAM route). POSTs to
+    {endpoint}/v1/embeddings (OpenAI-compatible) and returns L2-normalised (N, D) vectors, or None
+    on any failure (recall degrades to BM25, never crashes). Uses stdlib urllib — no `requests`
+    dependency (a known trap). An asymmetric model (nomic) wants a task prefix per side: queries get
+    embedding_query_prefix, stored documents get embedding_doc_prefix."""
+    import urllib.request
+    prefix = (config.embedding_query_prefix if is_query else config.embedding_doc_prefix) or ""
+    payload = {"input": [prefix + t for t in texts], "model": config.embedding_model}
+    try:
+        req = urllib.request.Request(
+            config.embedding_endpoint.rstrip("/") + "/v1/embeddings",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        rows = data.get("data") or []
+        if len(rows) != len(texts):
+            logger.warning("embedding http: expected %d vectors, got %d", len(texts), len(rows))
+            return None
+        vecs = np.array([r["embedding"] for r in rows], dtype=np.float32)
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True).clip(min=1e-9)
+        return vecs / norms
+    except Exception as exc:  # noqa: BLE001 - embedding faults must never wound recall
+        logger.warning("embedding http backend failed (%s): %s", config.embedding_endpoint, exc)
+        return None
 
-    Returns numpy array of shape (N, 384) or None if model not loaded.
-    Uses the ONNX model's built-in tokenizer (expects input_ids, attention_mask,
-    token_type_ids inputs).
+
+def embed_texts(texts: list[str], config: Config = None,
+                is_query: bool = False) -> Optional["np.ndarray"]:
+    """Embed a list of texts → L2-normalised (N, D) vectors, or None.
+
+    Backend order: an HTTP embedding server (config.embedding_endpoint, Sprinter's resident
+    llama.cpp in spare VRAM) takes precedence; otherwise the in-process ONNX model. `is_query`
+    selects the task-prefix side for asymmetric models (query vs stored document).
     """
+    if config is not None and getattr(config, "embedding_endpoint", ""):
+        return _embed_http(config, texts, is_query)
     if _model_session is None:
         return None
 
@@ -308,11 +339,11 @@ def embed_and_store(config: Config, entry_ids: list[str] = None) -> int:
         texts.append(text)
         ids.append(entry["id"])
 
-    # Get embeddings
+    # Get embeddings (stored knowledge = the DOCUMENT side for asymmetric models)
     if config.mock_mode:
         vectors = mock_embed_texts(texts)
     else:
-        vectors = embed_texts(texts)
+        vectors = embed_texts(texts, config=config, is_query=False)
         if vectors is None:
             logger.info("embedding: model not available, skipping embed_and_store")
             return 0
@@ -320,6 +351,12 @@ def embed_and_store(config: Config, entry_ids: list[str] = None) -> int:
     # Merge with existing vectors if we're appending specific entries
     if entry_ids is not None:
         existing_vectors, existing_ids = _load_vectors(config)
+        # Dimension change (e.g. a swapped embedding model) makes the old store incompatible —
+        # a vstack would raise. Drop the stale store and let it rebuild from this batch onward.
+        if existing_vectors is not None and existing_vectors.shape[1] != vectors.shape[1]:
+            logger.warning("embedding: stored dim %d != model dim %d — rebuilding vector store",
+                           existing_vectors.shape[1], vectors.shape[1])
+            existing_vectors, existing_ids = None, []
         if existing_vectors is not None:
             # Remove any existing vectors for these IDs (re-embed)
             keep_mask = [eid not in id_set for eid in existing_ids]
@@ -348,7 +385,7 @@ def embed_query(config: Config, text: str) -> Optional["np.ndarray"]:
         return None
     if config.mock_mode:
         return mock_embed_texts([text])[0]
-    vecs = embed_texts([text])
+    vecs = embed_texts([text], config=config, is_query=True)   # recall queries are the query side
     return None if vecs is None else vecs[0]
 
 
@@ -389,11 +426,11 @@ def semantic_search(
     if not query_text.strip():
         return []
 
-    # Embed the query
+    # Embed the query (the QUERY side for asymmetric models)
     if config.mock_mode:
         query_vec = mock_embed_texts([query_text])[0]
     else:
-        vecs = embed_texts([query_text])
+        vecs = embed_texts([query_text], config=config, is_query=True)
         if vecs is None:
             return []
         query_vec = vecs[0]
@@ -401,6 +438,12 @@ def semantic_search(
     # Load stored vectors
     stored_vectors, stored_ids = _load_vectors(config)
     if stored_vectors is None or len(stored_ids) == 0:
+        return []
+    # Dimension guard: a store built with a different embedding model can't be dotted with this
+    # query vector — degrade to no-semantic (BM25 carries recall) until the store is rebuilt.
+    if stored_vectors.shape[1] != query_vec.shape[0]:
+        logger.warning("embedding: stored dim %d != query dim %d — skipping semantic search",
+                       stored_vectors.shape[1], query_vec.shape[0])
         return []
 
     # Cosine similarity (vectors are already L2-normalised)

@@ -19,12 +19,14 @@ A bare `kill`/`pkill` of these processes **does nothing lasting** — systemd re
 |---|---|---|---|---|
 | **`eidos-dashboard.service`** | `dashboard.py` — which itself spawns/watchdogs the `eidos.py` tick loop as a **child** | dashboard **:8099** | always, 10 s | There is **no separate eidos.service**; the dashboard *is* the supervisor. `WorkingDirectory=/home/cmod/Documents/Software/eiDOS`, runs the repo venv. `EIDOS_SUPERVISED` deliberately unset → the dashboard Start button restarts the tick loop *in place*; `systemctl restart` is what hot-reloads `dashboard.py` itself. |
 | **`llama-swap.service`** | `llama-swap` (:8080), which boots a `llama-server` **child on demand** | swap **:8080**, child on a dynamic port (e.g. 5801) | always, 5 s | Lazy: loads NO model at startup; first `/v1/chat/completions` for a model boots it. `LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64`. |
+| **`eidos-embed.service`** | a dedicated `llama-server --embedding` | embeddings **:8082** | always, 5 s | Semantic recall. `nomic-embed-text-v1.5.Q8_0.gguf` (768-dim, ~140 MB), full offload, **resident in spare VRAM alongside the mind** (~0.4 GB). **NOT** in llama-swap: llama-swap keeps one model resident, so routing embeddings through it would swap out gemma. `embedding.py` POSTs to `:8082/v1/embeddings`; enabled via `[knowledge] embedding_enabled=true` in `config.local.toml`. Unit template: `/home/cmod/llm/deploy/eidos-embed.service`. |
 
 ### Process topology
 ```
 systemd(1)
  ├─ eidos-dashboard.service → dashboard.py (:8099, the watchdog) ──spawns──▶ eidos.py (the tick loop, child)
- └─ llama-swap.service      → llama-swap  (:8080, router)         ──spawns──▶ llama-server (one model, dynamic port)
+ ├─ llama-swap.service      → llama-swap  (:8080, router)         ──spawns──▶ llama-server (one model, dynamic port)
+ └─ eidos-embed.service     → llama-server (:8082, --embedding, nomic 768-dim, resident in spare VRAM)
 ```
 eiDOS reaches the model **directly at `http://127.0.0.1:8080`** (set in `config.local.toml`, overriding
 `config.toml`'s `:8088`). The Windows-era **monitor tap (:8088), voice (:8098), and IDE (:8100) are NOT

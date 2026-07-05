@@ -230,6 +230,14 @@ class Config:
     knowledge_embedding_enabled: bool = False   # Phase 5: semantic search
     knowledge_embedding_cohost: bool = False    # keep model in RAM between dream cycles
     embedding_model_dir: str = "models/all-MiniLM-L6-v2"
+    # HTTP embedding backend (Sprinter: a resident llama.cpp --embedding server in spare VRAM). When
+    # embedding_endpoint is set, embed_texts POSTs to {endpoint}/v1/embeddings instead of the ONNX
+    # path — the robust route on a Blackwell GPU where onnxruntime's CUDA EP is a gamble but the
+    # CUDA-built llama.cpp already serves the mind. Empty endpoint → ONNX/mock, unchanged.
+    embedding_endpoint: str = ""                 # e.g. "http://127.0.0.1:8082"
+    embedding_model: str = "nomic-embed"         # payload "model" field (llama-server ignores it)
+    embedding_query_prefix: str = ""             # nomic wants "search_query: " on queries
+    embedding_doc_prefix: str = ""               # ...and "search_document: " on stored documents
 
     # Planning model (hot-swap for subgoal generation)
 
@@ -654,6 +662,10 @@ def load_config(path: str = "config.toml") -> Config:
         config.knowledge_embedding_enabled = knowledge.get("embedding_enabled", config.knowledge_embedding_enabled)
         config.knowledge_embedding_cohost = knowledge.get("embedding_cohost", config.knowledge_embedding_cohost)
         config.embedding_model_dir = knowledge.get("embedding_model_dir", config.embedding_model_dir)
+        config.embedding_endpoint = knowledge.get("embedding_endpoint", config.embedding_endpoint)
+        config.embedding_model = knowledge.get("embedding_model", config.embedding_model)
+        config.embedding_query_prefix = knowledge.get("embedding_query_prefix", config.embedding_query_prefix)
+        config.embedding_doc_prefix = knowledge.get("embedding_doc_prefix", config.embedding_doc_prefix)
 
         dlg = data.get("delegate", {})
         config.delegate_enabled = dlg.get("enabled", config.delegate_enabled)
