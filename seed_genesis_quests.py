@@ -73,10 +73,34 @@ def main() -> int:
     path = sys.argv[sys.argv.index("--config") + 1] if "--config" in sys.argv else "config.toml"
     cfg = config_mod.load_config(path)
     system = System(cfg)
+    # System.propose de-dups by id and RETURNS THE EXISTING ROW UNCHANGED — so re-seeding over a
+    # store that holds STALE genesis rows (older criteria/bindings) used to be a silent no-op
+    # that could deadlock the whole ladder (a pre-ladder genesis-01 with no grants_unit and an
+    # unmeetable criterion sits ACTIVE forever, and quest_line_closed bricks every level-up).
+    # A still-QUEUED stale row is safely replaceable: nothing has been issued or paid on it.
+    # A row already ACTIVE/closed is the creature's LIFE — never rewrite it; warn loudly.
+    from quests import OFFERED, QuestStore
+    store = QuestStore(cfg)
+    existing = {q.id: q for q in store.load()}
+    seeded = replaced = kept = 0
     for q in GENESIS:
-        system.propose(q)
-    print(f"seeded {len(GENESIS)} genesis quests (queued; the first issues after the first sleep)")
-    return 0
+        old = existing.get(q.id)
+        if old is None:
+            system.propose(q)
+            seeded += 1
+        elif old.state == OFFERED and old.to_dict() != q.to_dict():
+            rows = store.load()
+            store.save([q if r.id == q.id else r for r in rows])
+            replaced += 1
+        elif old.state != OFFERED:
+            print(f"  !! {q.id} is {old.state} — part of a lived life, NOT touched. "
+                  f"If this store predates the ladder, run reset_eidos.py for a clean slate.")
+            kept += 1
+        else:
+            kept += 1   # identical queued row — genuinely idempotent
+    print(f"genesis questline: {seeded} seeded, {replaced} stale rows replaced, {kept} kept "
+          f"(queued; the first issues after the first sleep)")
+    return 0 if kept + seeded + replaced == len(GENESIS) else 1
 
 
 if __name__ == "__main__":

@@ -146,9 +146,14 @@ def write_phenotype(config, g, stage: str) -> bool:
         }
         p = Path(config.workspace) / PHENOTYPE_FILENAME
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(p)
+        import os
+        import tempfile
+        # Unique temp (persona.py's respawn-race lesson) — overlapping processes never rename
+        # each other's temp away.
+        fd, tmpname = tempfile.mkstemp(dir=str(p.parent), prefix=".phenotype-", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=2)
+        Path(tmpname).replace(p)
         return True
     except Exception:  # noqa: BLE001 - the artifact is derived state; it can always be rewritten
         return False

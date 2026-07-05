@@ -51,8 +51,11 @@ the observation stream (system_window / body-fact turns).
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from quests import Criterion
@@ -237,15 +240,19 @@ class UnlockState:
         try:
             self.config.state_dir.mkdir(parents=True, exist_ok=True)
             p = self._path()
-            tmp = p.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps({
-                "v": STATE_VERSION,
-                "granted": self.granted,
-                "pending": self.pending,
-                "announced": self.announced,
-                "log": self.log[-LOG_MAX:],
-            }, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(p)
+            # UNIQUE temp name (persona.py's lesson): a watchdog respawn briefly overlapping the
+            # dying process must never rename the other's temp away mid-save.
+            fd, tmpname = tempfile.mkstemp(dir=str(self.config.state_dir),
+                                           prefix=".unlocks-", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({
+                    "v": STATE_VERSION,
+                    "granted": self.granted,
+                    "pending": self.pending,
+                    "announced": self.announced,
+                    "log": self.log[-LOG_MAX:],
+                }, f, ensure_ascii=False)
+            Path(tmpname).replace(p)
         except Exception:  # noqa: BLE001 - best-effort persistence (GateState's contract)
             pass
 
@@ -392,12 +399,11 @@ def seed_from_evidence(config, evidence: Optional[dict]) -> list[str]:
 # ============================================================================================
 # The felt moment — one-shot announcement queue (rendered-flags persisted)
 # ============================================================================================
-def pop_unannounced(config) -> list[dict]:
-    """Drain the announcement queue: every granted-but-unrendered unit with a non-empty announce,
-    in canonical order, as {"unit", "register", "text"}. One-shot — popped units are flagged in
-    the persisted books (atomic), so a reload never replays a rendered moment, and a crash between
-    grant and this call never eats one (the grant persisted first). The caller renders each entry
-    into its register's stream the same tick."""
+def peek_unannounced(config) -> list[dict]:
+    """The announcement queue WITHOUT consuming it: every granted-but-unrendered unit with a
+    non-empty announce, canonical order, as {"unit", "register", "text"}. The caller renders each
+    entry into its register's stream, then calls mark_announced(unit) — render-then-mark, so a
+    crash mid-window re-announces (a rare duplicate) rather than eating the moment forever."""
     if config is None:
         return []
     try:
@@ -405,12 +411,30 @@ def pop_unannounced(config) -> list[dict]:
     except Exception:  # noqa: BLE001 - fail-open: nothing to announce over broken books
         return []
     rendered = set(state.announced)
-    out: list[dict] = []
-    for u in UNITS:
-        if u.id in state.granted and u.announce and u.id not in rendered:
-            out.append({"unit": u.id, "register": u.register, "text": u.announce})
-    if out:
-        for entry in out:
-            state.announced.append(entry["unit"])
-        state.save()
+    return [{"unit": u.id, "register": u.register, "text": u.announce}
+            for u in UNITS
+            if u.id in state.granted and u.announce and u.id not in rendered]
+
+
+def mark_announced(config, unit_id: str) -> None:
+    """Flag one unit's felt moment as rendered (persisted, atomic). Idempotent."""
+    if config is None:
+        return
+    try:
+        state = UnlockState(config)
+        if unit_id not in state.announced:
+            state.announced.append(unit_id)
+            state.save()
+    except Exception:  # noqa: BLE001 - best-effort books (a re-announce beats a crash)
+        pass
+
+
+def pop_unannounced(config) -> list[dict]:
+    """Drain the announcement queue in one step (peek + mark-all). Prefer the two-phase
+    peek_unannounced/mark_announced pair when rendering into a stream: this one marks BEFORE the
+    caller renders, so a crash in that window loses the moment; the pair merely risks a rare
+    duplicate. Kept for callers that only need the drain semantics."""
+    out = peek_unannounced(config)
+    for entry in out:
+        mark_announced(config, entry["unit"])
     return out

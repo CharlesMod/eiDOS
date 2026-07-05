@@ -659,6 +659,7 @@ class _Pillars:
                                      # process-memoized voice probe (_probe_service)
         self._stage_seen = None      # stage-transition memo: skip the genome read while the
                                      # derived stage hasn't moved (ground truth stays the genome)
+        self._unlock_books_checked = False   # load-or-birth migration runs once per process
         self._aden_mark = time.monotonic()   # wake-time accounting anchor for adenosine (2.4)
         self._last_anomaly_sig = ""  # 4.4 anomaly source de-dup (report by exception, once per streak)
         c = config
@@ -1204,6 +1205,26 @@ class _Pillars:
             logger.warning("pillars quest issuance notice failed: %s", e)
 
     # --- TOOL_PROGRESSION: the growing body (milestones, the felt moment, stage expression) ------
+    def _unlock_evidence(self, persona) -> dict:
+        """The migration evidence dict (unlocks.EVIDENCE_KEYS): every count an ADJUDICATED record —
+        the same stores _quest_stats reads, plus the lived tools_used facts for organ use that
+        predates the ladder. Fail-open per key: missing store = no evidence, never a crash."""
+        ev: dict = {}
+        stats = {}
+        try:
+            stats = self._quest_stats(persona)
+        except Exception:  # noqa: BLE001
+            pass
+        ev["sleeps"] = int((stats.get("sleeps") or {}).get("total", 0) or 0)
+        ev["live_skills"] = int((stats.get("skills") or {}).get("live_count", 0) or 0)
+        ev["predictions"] = int((stats.get("expectations") or {}).get("total", 0) or 0)
+        used = (persona or {}).get("tools_used", {}) or {}
+        ev["spoke_or_saw"] = int(used.get("speak", 0) or 0) + int(used.get("vision", 0) or 0) \
+            + int(used.get("see", 0) or 0)
+        ev["objectives"] = int(used.get("objective_add", 0) or 0)
+        ev["delegate_jobs"] = int(used.get("delegate", 0) or 0)
+        return ev
+
     def _unlock_probe_fn(self):
         """The I8 organ-reachability probe handed to unlocks.adjudicate: the injected test seam
         (self.unlock_probe) when present, else the process-memoized voice probe — bounded ~1s,
@@ -1221,6 +1242,25 @@ class _Pillars:
             return
         try:
             import unlocks as _unlocks
+            # Load-or-birth migration (TOOL_PROGRESSION): a creature that LIVED before the ladder
+            # (ticks on the clock, no books) keeps every organ its record evidences — flipping
+            # the flag must never amputate a lived body. Fresh books on a fresh creature stay
+            # newborn. Runs once per process; seeding is silent (no felt moment for history).
+            if not self._unlock_books_checked:
+                self._unlock_books_checked = True
+                books = self.config.state_dir / _unlocks.STATE_NAME
+                if not books.exists() and int((persona or {}).get("total_ticks", 0) or 0) > 0:
+                    _unlocks.seed_from_evidence(self.config, self._unlock_evidence(persona))
+            # Self-heal the issuance-grant crash window: a quest persisted ACTIVE before its
+            # grant committed would otherwise stand as a window naming a tool that doesn't
+            # exist — permanently (the issue seam never re-fires for an already-active quest).
+            # grant() is idempotent, so reconciling the active quest's unit here on every call
+            # makes that wedge impossible to keep.
+            if self.quests is not None:
+                active = self.quests.store.active()
+                unit_id = str(getattr(active, "grants_unit", "") or "") if active else ""
+                if unit_id:
+                    _unlocks.grant(self.config, unit_id, f"quest_issue:{active.id}")
             _unlocks.adjudicate(self.config, self._quest_stats(persona),
                                 probe=self._unlock_probe_fn())
         except Exception as e:  # noqa: BLE001
@@ -1234,14 +1274,16 @@ class _Pillars:
         Register "body" → the plain-notice kind ("dream"), which the history thread renders as a
         bracketed body-fact user turn exactly like the sleep notice — a maturation, felt, never a
         payment. The unit's bracketed text is unwrapped so it reads as the notice's own clause.
-        The queue's rendered-flags persist in the books, so a crash never replays or eats one."""
+        Render-then-mark (peek/mark two-phase): a crash between the write and the flag merely
+        re-announces once — a rare duplicate beats a moment eaten forever."""
         if not getattr(self.config, "pillars_tool_unlocks_enabled", False):
             return
         try:
             import unlocks as _unlocks
-            for note in _unlocks.pop_unannounced(self.config):
+            for note in _unlocks.peek_unannounced(self.config):
                 text = str(note.get("text") or "")
                 if not text:
+                    _unlocks.mark_announced(self.config, note.get("unit") or "")
                     continue
                 if note.get("register") == _unlocks.REGISTER_SYSTEM:
                     append_observation(self.config, {"tick": tick, "tool": "system_window",
@@ -1250,6 +1292,7 @@ class _Pillars:
                     append_observation(self.config, {"tick": tick, "tool": "dream",
                                                      "success": True,
                                                      "output": text.strip("[]")})
+                _unlocks.mark_announced(self.config, note.get("unit") or "")
         except Exception as e:  # noqa: BLE001
             logger.warning("pillars unlock announcement failed: %s", e)
 
@@ -1294,10 +1337,20 @@ class _Pillars:
         if self.quests is not None:
             try:
                 active = self.quests.store.active()
-                ep = self.quests.expire_if_due(self._quest_stats(persona))
-                if ep is not None:
-                    self._on_quest_closed({"expired": True, "episode": ep, "quest": active},
-                                          persona, tick=tick)
+                if active is not None:
+                    # Adjudicate BEFORE the expiry path: expire_if_due passes an already-met
+                    # quest internally and returns None, which used to settle it SILENTLY —
+                    # no [SYSTEM] QUEST PASSED window, no digestion reset, an invisible payout.
+                    # Routing the pass through the same closure path as after_outcome keeps
+                    # every settlement on-screen (the System pays on-screen, always).
+                    r = self.quests.check(active, self._quest_stats(persona))
+                    if r.get("passed") or r.get("expired"):
+                        self._on_quest_closed(r, persona, tick=tick)
+                    else:
+                        ep = self.quests.expire_if_due(self._quest_stats(persona))
+                        if ep is not None:
+                            self._on_quest_closed({"expired": True, "episode": ep,
+                                                   "quest": active}, persona, tick=tick)
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars quest expiry failed: %s", e)
         report = None

@@ -601,15 +601,20 @@ class Genome:
         self.save()
 
     def save(self) -> bool:
-        """Atomic temp+replace (house convention); best-effort — an unwritable workspace degrades
-        to an in-memory genome rather than a crash."""
+        """Atomic UNIQUE-temp+replace (persona.py's respawn-race lesson: two briefly-overlapping
+        processes must never rename each other's temp away); best-effort — an unwritable
+        workspace degrades to an in-memory genome rather than a crash. Saving also refreshes the
+        module read-cache, so an allele expressed at a stage crossing reaches the very next
+        gene() read in THIS process — not just the next process."""
         try:
+            import tempfile
             p = _path(self.config)
             p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(self.snapshot(), ensure_ascii=False, indent=2),
-                           encoding="utf-8")
-            tmp.replace(p)
+            fd, tmpname = tempfile.mkstemp(dir=str(p.parent), prefix=".genome-", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self.snapshot(), f, ensure_ascii=False, indent=2)
+            Path(tmpname).replace(p)
+            _cache[str(p)] = self
             return True
         except Exception:  # noqa: BLE001 - the genome must never break a birth
             return False
