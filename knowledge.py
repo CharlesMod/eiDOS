@@ -74,10 +74,11 @@ def is_novel(config, content: str, threshold: float = 0.65) -> bool:
 
 
 def text_overlap(a: str, b: str) -> float:
-    """Overlap coefficient over content tokens of two free-text strings — the ONE similarity
-    notion the knowledge/skill economies use, exposed so other economies (objectives) price
-    'is this a near-duplicate?' the same way instead of inventing a second definition. Subject
-    (IP) gating applies: two strings naming different IPs never overlap. 0.0 when either is empty."""
+    """Overlap COEFFICIENT over content tokens (|A∩B| / min(|A|,|B|)) — the containment-style
+    similarity the knowledge/skill economies use, where a short fact fully inside a longer one IS
+    a duplicate. Subject (IP) gating: two strings naming different IPs never overlap. 0.0 when
+    either is empty. NOTE: this scores 1.0 for any subset, so it is WRONG for 'are these the same
+    commitment?' (a subset title is often a smaller/different goal) — use token_jaccard for that."""
     ta, tb = _content_toks(a), _content_toks(b)
     if not ta or not tb:
         return 0.0
@@ -85,6 +86,19 @@ def text_overlap(a: str, b: str) -> float:
     if ia and ib and not (ia & ib):
         return 0.0
     return len(ta & tb) / min(len(ta), len(tb))
+
+
+def token_jaccard(a: str, b: str) -> float:
+    """Jaccard (|A∩B| / |A∪B|) over content tokens — the SYMMETRIC similarity, using the same one
+    tokenizer. Unlike the overlap coefficient it PENALISES divergent scope: extra tokens in either
+    string lower the score, so an elaboration of a goal ('Skill Library' vs 'Skill Library
+    Foundation' = 0.67) stays high while a distinct larger commitment ('Skill Library' vs 'Skill
+    Library Governance Board' = 0.5) drops below a merge bar. No IP gating — goals rarely denote
+    hosts, and a dotted-quad version string must not force two goals apart. 0.0 when either empty."""
+    ta, tb = _content_toks(a), _content_toks(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
 
 
 # ---------------------------------------------------------------------------

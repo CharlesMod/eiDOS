@@ -59,6 +59,18 @@ def _slug(title: str) -> str:
     return ("obj_" + s)[:40] or "obj"
 
 
+def _unique_id(data: dict, base: str) -> str:
+    """A slug is title-derived, so re-articulating a title that matches a DONE/DEAD goal would
+    collide (two objectives sharing an id — _by_id returns the wrong one). Suffix until unique."""
+    existing = {o["id"] for o in data.get("objectives", [])}
+    if base not in existing:
+        return base
+    n = 2
+    while f"{base}_{n}" in existing:
+        n += 1
+    return f"{base}_{n}"
+
+
 # --- Seed backlog ------------------------------------------------------------------
 # Each pillar of the goal becomes a pursuable commitment WITH ITS WHY. A rich backlog means the
 # gate always has somewhere worthwhile to rotate to instead of tunnelling on one dead end.
@@ -173,25 +185,24 @@ def take_rotation(config) -> Optional[dict]:
 # commitment reworded — so it merges instead of spawning. This is the pressure that stops
 # backlog sprawl (the creature spun up "Skill Library" / "Skill Library Foundation" /
 # "Utility Skill Suite" as three distinct goals). No hardcoded list; the glue decides.
-MERGE_OVERLAP = 0.5     # ≥ this similarity → the same objective reworded (merge, don't spawn)
-TITLE_TRUST = 0.66      # a title ≥2/3 shared IS the goal's identity — trust it over a diverging
-                        # 'why'; below this, require the full text to corroborate (so a single
-                        # shared word like "skill" never merges two genuinely different goals)
+MERGE_SIM = 0.6         # ≥ this Jaccard similarity → the same objective reworded (merge, don't
+                        # spawn). Jaccard, NOT overlap-coefficient: a subset title ('Skill Library'
+                        # ⊂ 'Skill Library Governance Board') must NOT merge a distinct larger goal.
 STALE_ARCHIVE_TICKS = 400   # a blocked/parked objective with no progress this long auto-archives
                             # (revivable) — the holding-cost that mirrors skill auto-retire
 
 
 def _overlap(existing: dict, title: str, why: str) -> float:
-    """Goal similarity on the ONE token-overlap notion the skill/knowledge economies use. The
-    TITLE carries the goal's identity, the WHY only elaborates: a near-identical title is trusted
-    even when the why was reworded, but a weak title match must be corroborated by the full text.
-    (The creature's dupes had identical titles under differently-worded whys — 'Skill Library' vs
-    'Skill Library Foundation' — which pure title+why overlap missed.)"""
+    """Goal similarity: symmetric Jaccard over the same content-token tokenizer the skill/knowledge
+    economies use, scored on the TITLE (the goal's identity) OR the full title+why, whichever binds
+    them tighter. Jaccard penalises divergent scope, so an elaboration ('Skill Library Foundation')
+    merges with 'Skill Library' but a distinct larger commitment ('Skill Library Governance Board')
+    does not — the false-positive direction (destroying a real goal) is the one to guard."""
     try:
-        from knowledge import text_overlap
-        t = text_overlap(existing["title"], title)
-        f = text_overlap(f"{existing['title']} {existing.get('why','')}", f"{title} {why}")
-        return max(t, f) if t >= TITLE_TRUST else f
+        from knowledge import token_jaccard
+        t = token_jaccard(existing["title"], title)
+        f = token_jaccard(f"{existing['title']} {existing.get('why','')}", f"{title} {why}")
+        return max(t, f)
     except Exception:  # noqa: BLE001 - a similarity fault must never block goal creation
         return 0.0
 
@@ -200,17 +211,25 @@ def _overlap(existing: dict, title: str, why: str) -> float:
 def add(config, title: str, why: str, priority: int = 5, tick: int = 0) -> dict:
     data = _load(config)
     o = _new(title, why, priority, tick)
-    # 1. exact-title dedup (cheap, unchanged)
-    for x in data["objectives"]:
+    # Dedup/merge only against LIVE goals (active/blocked). A DONE or DEAD goal is history — a
+    # re-articulation ("Map the LAN again") is a fresh commitment, never folded into a finished one
+    # (which _pick_next could never work again — it selects only active).
+    live = [x for x in data["objectives"] if x.get("state") in ("active", "blocked")]
+    # 1. exact-title dedup among live (a re-raised parked goal thaws)
+    for x in live:
         if x["title"].lower() == o["title"].lower():
+            if x.get("state") == "blocked":
+                x["state"] = "active"
+                x["blocked_reason"] = None
+                x["frustration"] = max(0, int(x.get("frustration", 0)) - FRUST_RELIEF)
+                x["last_active_tick"] = tick
+                _save(config, data)
             return x
     # 2. similarity merge — a reworded goal folds into the nearest LIVE one. Re-articulating a
-    #    PARKED goal is a signal it still matters, so the merge THAWS it (frustration eased) and
-    #    absorbs any genuinely new 'why'. Dead objectives are ignored (a fresh take is allowed).
-    live = [x for x in data["objectives"] if x.get("state") != "dead"]
+    #    PARKED goal is a signal it still matters, so the merge THAWS it and absorbs any new 'why'.
     ranked = sorted(((_overlap(x, o["title"], o["why"]), x) for x in live),
                     key=lambda t: t[0], reverse=True)
-    if ranked and ranked[0][0] >= MERGE_OVERLAP:
+    if ranked and ranked[0][0] >= MERGE_SIM:
         keeper = ranked[0][1]
         if o["why"] and o["why"].lower() not in (keeper.get("why") or "").lower():
             keeper["why"] = ((keeper.get("why") or "") + " / " + o["why"]).strip(" /")[:400]
@@ -224,7 +243,8 @@ def add(config, title: str, why: str, priority: int = 5, tick: int = 0) -> dict:
             data["active_id"] = keeper["id"]
         _save(config, data)
         return keeper
-    # 3. genuinely new
+    # 3. genuinely new — ensure the id is unique (a done/dead goal may own this title's slug)
+    o["id"] = _unique_id(data, o["id"])
     data["objectives"].append(o)
     if not data.get("active_id"):
         data["active_id"] = o["id"]
@@ -255,7 +275,7 @@ def consolidate(config, tick: int = 0) -> dict:
         survivors: list[dict] = []
         for o in sorted(live, key=momentum, reverse=True):
             hit = next((s for s in survivors
-                        if _overlap(s, o["title"], o.get("why", "")) >= MERGE_OVERLAP), None)
+                        if _overlap(s, o["title"], o.get("why", "")) >= MERGE_SIM), None)
             if hit is None:
                 survivors.append(o)
                 continue
@@ -287,7 +307,10 @@ def consolidate(config, tick: int = 0) -> dict:
         if merged or archived or exposed:
             act = _by_id(data, data.get("active_id"))
             if act is None or act.get("state") == "dead":
-                nxt = next((o for o in objs if o.get("state") == "active"), None)
+                # Prefer an active goal; else a workable BLOCKED survivor (record_tick thaws it) —
+                # only null the pointer when nothing is workable, never while a survivor exists.
+                nxt = (next((o for o in objs if o.get("state") == "active"), None)
+                       or next((o for o in objs if o.get("state") == "blocked"), None))
                 data["active_id"] = nxt["id"] if nxt else None
             _save(config, data)
         return {"merged": merged, "archived": archived, "exposed": exposed}

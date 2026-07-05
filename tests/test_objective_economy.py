@@ -33,14 +33,21 @@ class _Base(unittest.TestCase):
 
 
 class TestSharedSimilarity(unittest.TestCase):
-    def test_one_notion_of_similar(self):
-        # rewordings of one goal overlap high; unrelated goals low
-        hi = knowledge.text_overlap("build a skill library foundation",
-                                    "skill library foundation skills")
-        lo = knowledge.text_overlap("map the holt directory structure",
-                                    "place three calibration wagers")
-        self.assertGreater(hi, 0.5)
-        self.assertLess(lo, 0.3)
+    def test_jaccard_separates_elaboration_from_distinct_goal(self):
+        # An elaboration merges; a distinct LARGER commitment sharing the title's words does NOT
+        # (the false-positive direction the review flagged — subset ≠ duplicate).
+        elaboration = knowledge.token_jaccard("Skill Library", "Skill Library Foundation")
+        distinct = knowledge.token_jaccard("Skill Library", "Skill Library Governance Board")
+        self.assertGreaterEqual(elaboration, objectives.MERGE_SIM)     # 2/3 ≈ 0.67
+        self.assertLess(distinct, objectives.MERGE_SIM)               # 2/4 = 0.5
+        # unrelated goals stay far apart
+        self.assertLess(knowledge.token_jaccard("Map the holt", "Place calibration wagers"), 0.2)
+
+    def test_version_strings_do_not_force_goals_apart(self):
+        # IP gating must NOT leak into goals: two goals citing different dotted-quad versions
+        # still compare on their words (the medium finding).
+        self.assertGreater(knowledge.token_jaccard("Upgrade release 2.0.0.1 build",
+                                                   "Upgrade release 5.6.7.8 build"), 0.5)
 
 
 class TestMergeOnAdd(_Base):
@@ -55,6 +62,21 @@ class TestMergeOnAdd(_Base):
         objectives.add(self.cfg, "Map the holt directory", "understand my filesystem", tick=1)
         objectives.add(self.cfg, "Place calibration wagers", "improve my foresight", tick=2)
         self.assertEqual(len(self._titles()), 2)
+
+    def test_larger_commitment_sharing_title_words_is_not_swallowed(self):
+        # The review's dangerous case: a distinct larger goal must NOT fold into the small one.
+        a = objectives.add(self.cfg, "Skill Library", "build the skill store", tick=1)
+        b = objectives.add(self.cfg, "Skill Library Governance Board",
+                           "an oversight body for how skills are approved", tick=2)
+        self.assertNotEqual(a["id"], b["id"])
+        self.assertEqual(len(self._titles()), 2)
+
+    def test_reraising_a_finished_goal_creates_fresh(self):
+        o = objectives.add(self.cfg, "Map the LAN", "see the network", tick=1)
+        objectives.mark_done(self.cfg, o["id"])
+        again = objectives.add(self.cfg, "Map the LAN", "map it again, fully", tick=9)
+        self.assertNotEqual(again["id"], o["id"])          # a done goal is history, not a merge target
+        self.assertEqual(again["state"], "active")
 
     def test_rearticulating_a_parked_goal_thaws_it(self):
         o = objectives.add(self.cfg, "Skill Library", "reusable skills", tick=1)
@@ -109,6 +131,21 @@ class TestConsolidate(_Base):
         objectives.consolidate(self.cfg, tick=10)
         act = objectives.get_active(self.cfg)
         self.assertTrue(act is None or act.get("state") != "dead")
+
+    def test_active_falls_back_to_blocked_survivor_not_none(self):
+        # Review medium: survivor is BLOCKED and the active pointer was the merged loser — must
+        # point at the blocked survivor, not go None.
+        import json
+        surv = objectives._new("Skill Library", "reusable skills", 5, 1)
+        surv["state"] = "blocked"; surv["last_progress_tick"] = 500
+        lose = objectives._new("Skill Library Foundation", "foundation reusable skills", 5, 1)
+        lose["last_progress_tick"] = 0
+        p = objectives._path(self.cfg)
+        p.write_text(json.dumps({"active_id": lose["id"], "objectives": [surv, lose]}),
+                     encoding="utf-8")
+        objectives.consolidate(self.cfg, tick=600)
+        data = objectives._load(self.cfg)
+        self.assertEqual(data["active_id"], surv["id"])    # points at the workable blocked survivor
 
     def test_consolidate_is_a_noop_when_nothing_similar(self):
         objectives.add(self.cfg, "Alpha task", "do alpha", tick=1)
