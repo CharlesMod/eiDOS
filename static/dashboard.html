@@ -1246,17 +1246,6 @@ function toggleVoice(){
         <div class="dream-list" id="dream-list"></div>
     </div>
 
-    <!-- Causal Ledger: the pressure field that produced a tick (Pillars 0.3) -->
-    <div class="panel">
-        <div class="panel-title">Causal Ledger — why? <span id="why-status" style="float:right;font-size:10px;color:#555;"></span></div>
-        <div style="margin-bottom:6px;">
-            <input id="why-tick" type="number" min="1" placeholder="tick #" style="width:90px;"
-                   onkeydown="if(event.key==='Enter')loadWhy();">
-            <button onclick="loadWhy()" title="Show the pressure field that produced this tick">Show field</button>
-        </div>
-        <pre id="why-field" style="font-size:11px;white-space:pre-wrap;word-break:break-word;color:#9c9;margin:0;"></pre>
-    </div>
-
     <!-- Operator Chat: full width -->
     <div class="panel" style="grid-column: 1 / -1;">
         <div class="panel-title">Operator Chat
@@ -1775,37 +1764,6 @@ function renderKnowledge(entries) {
     }).join('');
 }
 
-async function loadWhy() {
-    // Causal ledger (Pillars 0.3): fetch the pressure field that produced a given tick.
-    let statusEl = document.getElementById('why-status');
-    let fieldEl = document.getElementById('why-field');
-    let tick = (document.getElementById('why-tick').value || '').trim();
-    let url = tick ? ('/api/why?tick=' + encodeURIComponent(tick)) : '/api/why';
-    try {
-        let resp = await fetch(url);
-        let data = await resp.json();
-        if (statusEl) statusEl.textContent = data.enabled ? '' : 'ledger off';
-        if (tick) {
-            if (data.field) {
-                fieldEl.textContent = JSON.stringify(data.field, null, 2);
-            } else {
-                fieldEl.textContent = data.enabled
-                    ? ('No field logged for tick ' + tick + '.')
-                    : 'Causal ledger is off (pillars_causal_ledger_enabled).';
-            }
-        } else {
-            let recent = (data.recent || []);
-            fieldEl.textContent = recent.length
-                ? ('Recent ticks logged: ' + recent.map(function(f){return f.tick;}).join(', ')
-                   + '\nEnter a tick # above to see its field.')
-                : (data.enabled ? 'No fields logged yet.'
-                                : 'Causal ledger is off (pillars_causal_ledger_enabled).');
-        }
-    } catch(e) {
-        if (fieldEl) fieldEl.textContent = 'error: ' + e;
-    }
-}
-
 async function loadDreams() {
     try {
         let resp = await fetch('/api/dreams');
@@ -2294,7 +2252,6 @@ loadChat();
 loadKnowledge();
 loadDreams();
 loadThoughts();
-loadWhy();   // Causal ledger (0.3): show which ticks have a logged field; query-driven thereafter.
 setInterval(poll, {{INTERVAL_MS}});
 setInterval(spawnParticle, 3000);
 // Kick off activity polling (self-scheduling: fast when active, slow when idle)
