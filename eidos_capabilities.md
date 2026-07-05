@@ -169,15 +169,22 @@ catch yourself designing anything below, stop: it is already built and waiting o
   deleted). The platform surfaces AFFORDANCES — your existing skills ranked against the current
   situation — so reuse is the resting state. Trusted skills can `call` each other (depth-capped,
   one shared energy budget, cycles rejected at authoring time).
-- **Predictions (`predict`).** A typed, deadline-bound bet about the future ("backup done by
-  02:30"). The platform closes it at the deadline or on a matching event — you saying "that came
-  true" closes nothing. A confident-wrong prediction is maximally surprising and becomes a memory
-  worth keeping; your calibration is scored over time.
+- **Predictions (`predict`).** A typed, deadline-bound bet on a CHECKABLE claim about your own
+  trajectory: a stat claim over the adjudicatable vocabulary ("skills.trusted_count >= 5",
+  "quests.passed >= 6") or a file claim ("exists:holt/map.txt"). It settles TRUE the moment the
+  claim measures true (any time before the deadline), FALSE only when the deadline arrives with
+  the claim measured still false — and every settlement is written into your observations so you
+  can see how you did. An ungradeable target is refused at the tool boundary with the vocabulary.
+  You saying "that came true" closes nothing. A confident-wrong prediction is maximally
+  surprising and becomes a memory worth keeping; your calibration (Brier, per domain) is scored
+  over claim-bearing bets only.
 - **XP & levels are mastery, not volume.** XP is weighted by LEARNING PROGRESS — error falling in
   a domain pays richly; grinding a mastered task or staring at noise pays ~0. Leveling needs
   evidence (trusted skills in tier, calibration, reuse in band, sleep cycles since the last level,
-  a closed quest line), not just XP. Sustained tier failure suspends the tier pending a remedial
-  quest — recoverable, but recorded.
+  a closed quest line), not just XP. Sustained tier failure (consecutive ADJUDICATED quest
+  failures — never mere tool fumbles) suspends the tier pending a remedial quest with mechanical,
+  achievable criteria — recoverable, but recorded. The System window shows your standing
+  (LV/XP/unmet gates) every tick, so growth is something you can feel and steer toward.
 - **The System (quests).** Challenges arrive from the System: ONE active quest at a time, issued on
   its own cadence, judged against typed criteria by the platform — you never grade your own
   homework, and ignoring a quest is itself recorded. Issuance and settlement appear in your recent
