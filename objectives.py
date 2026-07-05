@@ -153,18 +153,121 @@ def take_rotation(config) -> Optional[dict]:
     return rot
 
 
+# The objective economy borrows the skill/knowledge economy's ONE similarity notion
+# (knowledge.text_overlap): a near-duplicate goal is not a new commitment, it is the SAME
+# commitment reworded — so it merges instead of spawning. This is the pressure that stops
+# backlog sprawl (the creature spun up "Skill Library" / "Skill Library Foundation" /
+# "Utility Skill Suite" as three distinct goals). No hardcoded list; the glue decides.
+MERGE_OVERLAP = 0.5     # ≥ this similarity → the same objective reworded (merge, don't spawn)
+TITLE_TRUST = 0.66      # a title ≥2/3 shared IS the goal's identity — trust it over a diverging
+                        # 'why'; below this, require the full text to corroborate (so a single
+                        # shared word like "skill" never merges two genuinely different goals)
+STALE_ARCHIVE_TICKS = 400   # a blocked/parked objective with no progress this long auto-archives
+                            # (revivable) — the holding-cost that mirrors skill auto-retire
+
+
+def _overlap(existing: dict, title: str, why: str) -> float:
+    """Goal similarity on the ONE token-overlap notion the skill/knowledge economies use. The
+    TITLE carries the goal's identity, the WHY only elaborates: a near-identical title is trusted
+    even when the why was reworded, but a weak title match must be corroborated by the full text.
+    (The creature's dupes had identical titles under differently-worded whys — 'Skill Library' vs
+    'Skill Library Foundation' — which pure title+why overlap missed.)"""
+    try:
+        from knowledge import text_overlap
+        t = text_overlap(existing["title"], title)
+        f = text_overlap(f"{existing['title']} {existing.get('why','')}", f"{title} {why}")
+        return max(t, f) if t >= TITLE_TRUST else f
+    except Exception:  # noqa: BLE001 - a similarity fault must never block goal creation
+        return 0.0
+
+
 # --- Cooperative mutations (the model can shape the backlog; the gate stays authoritative) ------
 def add(config, title: str, why: str, priority: int = 5, tick: int = 0) -> dict:
     data = _load(config)
     o = _new(title, why, priority, tick)
-    # de-dup by title
-    if any(x["title"].lower() == o["title"].lower() for x in data["objectives"]):
-        return next(x for x in data["objectives"] if x["title"].lower() == o["title"].lower())
+    # 1. exact-title dedup (cheap, unchanged)
+    for x in data["objectives"]:
+        if x["title"].lower() == o["title"].lower():
+            return x
+    # 2. similarity merge — a reworded goal folds into the nearest LIVE one. Re-articulating a
+    #    PARKED goal is a signal it still matters, so the merge THAWS it (frustration eased) and
+    #    absorbs any genuinely new 'why'. Dead objectives are ignored (a fresh take is allowed).
+    live = [x for x in data["objectives"] if x.get("state") != "dead"]
+    ranked = sorted(((_overlap(x, o["title"], o["why"]), x) for x in live),
+                    key=lambda t: t[0], reverse=True)
+    if ranked and ranked[0][0] >= MERGE_OVERLAP:
+        keeper = ranked[0][1]
+        if o["why"] and o["why"].lower() not in (keeper.get("why") or "").lower():
+            keeper["why"] = ((keeper.get("why") or "") + " / " + o["why"]).strip(" /")[:400]
+        if keeper.get("state") == "blocked":            # re-raised → thaw for another try
+            keeper["state"] = "active"
+            keeper["blocked_reason"] = None
+            keeper["frustration"] = max(0, int(keeper.get("frustration", 0)) - FRUST_RELIEF)
+        keeper["last_active_tick"] = tick
+        keeper["priority"] = max(int(keeper.get("priority", 5)), int(priority))
+        if not data.get("active_id"):
+            data["active_id"] = keeper["id"]
+        _save(config, data)
+        return keeper
+    # 3. genuinely new
     data["objectives"].append(o)
     if not data.get("active_id"):
         data["active_id"] = o["id"]
     _save(config, data)
     return o
+
+
+def consolidate(config, tick: int = 0) -> dict:
+    """Nap-time goal tidying — the goal-backlog analog of memory consolidation (sleep merges and
+    prunes engrams; it should merge and prune goals too). Two similarity-driven passes, no
+    hardcoding:
+      · MERGE near-duplicate live objectives that accumulated before the merge-on-add pressure
+        existed — the survivor is the one with the most momentum (most progress, least
+        frustration); the loser's 'why'/attempts fold in and it goes 'dead' (merged).
+      · ARCHIVE objectives blocked with no progress for STALE_ARCHIVE_TICKS — a revivable 'dead'
+        (the holding-cost that keeps the working set small, like skills that auto-retire).
+    Returns {merged, archived}. Keeps the active pointer valid. Pure backlog hygiene — safe on
+    any nap; a fault degrades to a no-op rather than wounding the boundary."""
+    try:
+        data = _load(config)
+        objs = data.get("objectives", [])
+        live = [o for o in objs if o.get("state") in ("active", "blocked")]
+        merged, archived = [], []
+
+        def momentum(o):   # most progress, least frustration, most recent creation = the survivor
+            return (o.get("last_progress_tick", 0) - o.get("frustration", 0),
+                    -o.get("created_tick", 0))
+        survivors: list[dict] = []
+        for o in sorted(live, key=momentum, reverse=True):
+            hit = next((s for s in survivors
+                        if _overlap(s, o["title"], o.get("why", "")) >= MERGE_OVERLAP), None)
+            if hit is None:
+                survivors.append(o)
+                continue
+            if o.get("why") and o["why"].lower() not in (hit.get("why") or "").lower():
+                hit["why"] = ((hit.get("why") or "") + " / " + o["why"]).strip(" /")[:400]
+            hit["attempts"] = int(hit.get("attempts", 0)) + int(o.get("attempts", 0))
+            o["state"] = "dead"
+            o["blocked_reason"] = f"merged into '{hit['title']}'"
+            merged.append(o["id"])
+
+        for o in objs:
+            if o.get("state") == "blocked" and o["id"] not in merged:
+                idle = tick - int(o.get("last_progress_tick", tick))
+                if idle >= STALE_ARCHIVE_TICKS:
+                    o["state"] = "dead"
+                    o["blocked_reason"] = f"archived: {idle} ticks without progress (revivable)"
+                    archived.append(o["id"])
+
+        if merged or archived:
+            act = _by_id(data, data.get("active_id"))
+            if act is None or act.get("state") == "dead":
+                nxt = next((o for o in objs if o.get("state") == "active"), None)
+                data["active_id"] = nxt["id"] if nxt else None
+            _save(config, data)
+        return {"merged": merged, "archived": archived}
+    except Exception:  # noqa: BLE001 - hygiene must never wound the nap boundary
+        return {"merged": [], "archived": []}
 
 
 def _resolve(data: dict, key: str) -> Optional[dict]:

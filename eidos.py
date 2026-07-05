@@ -1397,6 +1397,17 @@ class _Pillars:
                 _lg.record_sleep_cycle(c)        # flag-gated internally (4.3); NAPS only
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars record_sleep_cycle failed: %s", e)
+            try:
+                # Goal-backlog consolidation is the objective analog of memory consolidation:
+                # a nap merges near-duplicate goals and archives long-stale ones (the same
+                # similarity economy skills/knowledge use), so the working set stays small.
+                import objectives as _obj
+                _rep = _obj.consolidate(c, tick=tick)
+                if _rep.get("merged") or _rep.get("archived"):
+                    logger.info("nap: goal consolidation merged %d, archived %d",
+                                len(_rep["merged"]), len(_rep["archived"]))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars goal consolidation failed: %s", e)
         if self.quests is not None:
             try:
                 self._set_sleeps_since_close(self.sleeps_since_close() + 1)

@@ -73,6 +73,20 @@ def is_novel(config, content: str, threshold: float = 0.65) -> bool:
     return most_similar(config, content)[0] < threshold
 
 
+def text_overlap(a: str, b: str) -> float:
+    """Overlap coefficient over content tokens of two free-text strings — the ONE similarity
+    notion the knowledge/skill economies use, exposed so other economies (objectives) price
+    'is this a near-duplicate?' the same way instead of inventing a second definition. Subject
+    (IP) gating applies: two strings naming different IPs never overlap. 0.0 when either is empty."""
+    ta, tb = _content_toks(a), _content_toks(b)
+    if not ta or not tb:
+        return 0.0
+    ia, ib = _ips(a), _ips(b)
+    if ia and ib and not (ia & ib):
+        return 0.0
+    return len(ta & tb) / min(len(ta), len(tb))
+
+
 # ---------------------------------------------------------------------------
 # Entry data helpers
 # ---------------------------------------------------------------------------
