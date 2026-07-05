@@ -161,27 +161,44 @@ def is_loaded() -> bool:
 # Embedding
 # ---------------------------------------------------------------------------
 
+# The embedding server has a fixed context (-c 2048 tokens); an input past it 500s. Cap each text
+# well under that (~2000 chars ≈ 500 tokens) and send in small batches so a big startup sync of the
+# whole knowledge base doesn't overflow n_batch in one request.
+_MAX_EMBED_CHARS = 2000
+_EMBED_BATCH = 16
+
+
+def _post_embeddings(config: Config, inputs: list[str]) -> Optional[list]:
+    import urllib.request
+    payload = {"input": inputs, "model": config.embedding_model}
+    req = urllib.request.Request(
+        config.embedding_endpoint.rstrip("/") + "/v1/embeddings",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    rows = data.get("data") or []
+    return rows if len(rows) == len(inputs) else None
+
+
 def _embed_http(config: Config, texts: list[str], is_query: bool) -> Optional["np.ndarray"]:
     """Embed via a resident llama.cpp --embedding server (Sprinter's spare-VRAM route). POSTs to
     {endpoint}/v1/embeddings (OpenAI-compatible) and returns L2-normalised (N, D) vectors, or None
     on any failure (recall degrades to BM25, never crashes). Uses stdlib urllib — no `requests`
     dependency (a known trap). An asymmetric model (nomic) wants a task prefix per side: queries get
-    embedding_query_prefix, stored documents get embedding_doc_prefix."""
-    import urllib.request
+    embedding_query_prefix, stored documents get embedding_doc_prefix. Inputs are truncated to the
+    server's context and sent in small batches so neither a long query nor a whole-store sync 500s."""
     prefix = (config.embedding_query_prefix if is_query else config.embedding_doc_prefix) or ""
-    payload = {"input": [prefix + t for t in texts], "model": config.embedding_model}
+    inputs = [prefix + (t or "")[:_MAX_EMBED_CHARS] for t in texts]
     try:
-        req = urllib.request.Request(
-            config.embedding_endpoint.rstrip("/") + "/v1/embeddings",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        rows = data.get("data") or []
-        if len(rows) != len(texts):
-            logger.warning("embedding http: expected %d vectors, got %d", len(texts), len(rows))
-            return None
-        vecs = np.array([r["embedding"] for r in rows], dtype=np.float32)
+        all_rows: list = []
+        for i in range(0, len(inputs), _EMBED_BATCH):
+            rows = _post_embeddings(config, inputs[i:i + _EMBED_BATCH])
+            if rows is None:
+                logger.warning("embedding http: vector count mismatch in batch at %d", i)
+                return None
+            all_rows.extend(rows)
+        vecs = np.array([r["embedding"] for r in all_rows], dtype=np.float32)
         norms = np.linalg.norm(vecs, axis=1, keepdims=True).clip(min=1e-9)
         return vecs / norms
     except Exception as exc:  # noqa: BLE001 - embedding faults must never wound recall

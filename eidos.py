@@ -1528,11 +1528,15 @@ def run_loop(config: Config, persona=None, wal=None):
     if config.knowledge_embedding_enabled and not config.mock_mode:
         try:
             import embedding as _emb
-            if _emb.model_available(config) and _emb.load_model(config):
+            # HTTP backend (Sprinter's resident :8082) needs no local model load; the ONNX backend
+            # loads a model into this process. Either path then syncs the knowledge vectors.
+            _ready = bool(getattr(config, "embedding_endpoint", "")) or (
+                _emb.model_available(config) and _emb.load_model(config))
+            if _ready:
                 _nsync = _emb.sync_knowledge_vectors(config)
-                print(f"{pfx} Embedding model loaded; synced {_nsync} knowledge vector(s)")
+                print(f"{pfx} Semantic recall online; synced {_nsync} knowledge vector(s)")
             else:
-                logger.info("embedding enabled but model unavailable — recall stays lexical-only")
+                logger.info("embedding enabled but no backend available — recall stays lexical-only")
         except Exception as _emb_e:  # noqa: BLE001 - semantic recall is additive, never blocks boot
             logger.warning("embedding init failed: %s", _emb_e)
 
