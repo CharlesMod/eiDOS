@@ -83,7 +83,19 @@ class TestCorrection(_Base):
     def test_conf_rank_ordering(self):
         self.assertGreater(knowledge._conf_rank("verified"), knowledge._conf_rank("tentative"))
         self.assertGreater(knowledge._conf_rank("confident"), knowledge._conf_rank("likely"))
-        self.assertEqual(knowledge._conf_rank("nonsense-value"), 0)   # unknown → floor
+        # An unknown label sits MID, not at the floor — a "likely" dup must not downgrade it.
+        self.assertEqual(knowledge._conf_rank("some-weird-label"), knowledge._CONF_UNKNOWN)
+        self.assertEqual(knowledge._conf_rank("some-weird-label"), knowledge._conf_rank("likely"))
+
+    def test_unknown_label_not_downgraded_by_likely(self):
+        # A de-facto-strong belief stored with a non-vocabulary label must not be superseded by a
+        # merely-"likely" restatement (the review's downgrade edge).
+        eid = knowledge.store_entry(self.cfg, "the octoprint api base path is slash api slash v1 "
+                                    "confirmed by probing", tags=["printer"], confidence="validated")
+        knowledge.store_entry(self.cfg, "the octoprint api base path is slash api slash v1 "
+                              "probably", tags=["printer"], confidence="likely")
+        # 'validated' is known-high (3); even if it were unknown it's mid (1) ≥ likely (1) → no swap
+        self.assertIn("confirmed", self._entry(eid)["content_preview"])
 
 
 if __name__ == "__main__":

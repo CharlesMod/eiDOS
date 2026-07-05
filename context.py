@@ -164,23 +164,41 @@ def _build_relevant_recall(config: Config, exclude_ids: set) -> str:
             _extra.append(" ".join(_seen[:4]))
     except Exception:  # noqa: BLE001
         pass
-    step = " ".join([step] + [e for e in _extra if e.strip()]).strip()
-    if not step:
+    broad = " ".join([step] + [e for e in _extra if e.strip()]).strip()
+    if not step and not broad:
         return ""
-    # Hybrid retrieval (phase 7a, "BM25+semantic"): lexical BM25 catches exact term overlap,
-    # semantic catches the same MEANING in different words. When embeddings are live, fuse the two
-    # ranked lists (reciprocal-rank fusion); otherwise this is BM25-only, byte-for-byte as before.
-    bm25 = search_bm25(config, step, top_k=config.knowledge_recall_top_k)
-    merged = bm25
-    if config.knowledge_embedding_enabled:
-        try:
-            from embedding import semantic_search
-            sem = semantic_search(config, step, top_k=config.knowledge_recall_top_k)
-            if sem:
-                merged = _rrf_blend(bm25, sem, top_k=config.knowledge_recall_top_k)
-        except Exception:  # noqa: BLE001 - semantic is additive; never break BM25 recall
-            merged = bm25
-    results = [r for r in merged if r.get("id") not in exclude_ids]
+
+    def _bm25(q):
+        if not q:
+            return []
+        hits = search_bm25(config, q, top_k=config.knowledge_recall_top_k)
+        if config.knowledge_embedding_enabled:
+            try:
+                from embedding import semantic_search
+                sem = semantic_search(config, q, top_k=config.knowledge_recall_top_k)
+                if sem:
+                    return _rrf_blend(hits, sem, top_k=config.knowledge_recall_top_k)
+            except Exception:  # noqa: BLE001 - semantic is additive; never break BM25 recall
+                pass
+        return hits
+
+    # Merge with STEP PRIMACY, so broadening only adds and never makes recall worse (the review's
+    # noise-floor edge — a strong augmented hit raising the floor and pruning a genuine step match):
+    # guarantee the single best step-only hit, then let the broadened query (goal + tools) fill the
+    # remaining budget. When step == broad this reduces to the plain broadened ranking.
+    step_hits = _bm25(step)
+    broad_hits = _bm25(broad) if broad != step else step_hits
+    merged, seen = [], set()
+    if step_hits:                              # protect the top step match from the broadening
+        merged.append(step_hits[0])
+        seen.add(step_hits[0].get("id"))
+    for r in broad_hits:
+        if len(merged) >= config.knowledge_recall_top_k:
+            break
+        if r.get("id") not in seen:
+            merged.append(r)
+            seen.add(r.get("id"))
+    results = [r for r in merged if r.get("id") not in exclude_ids][:config.knowledge_recall_top_k]
     if not results:
         return ""
     return format_recalled(results, max_chars=max(300, config.context_intelligence_max_chars // 2))

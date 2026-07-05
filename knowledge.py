@@ -152,15 +152,18 @@ def ensure_dirs(config: Config) -> None:
 
 
 # Confidence as a rank, so a CORRECTION can outrank the belief it fixes. Free-string values map to
-# the nearest rung; anything unknown is treated as the tentative floor.
-_CONF_RANK = {"tentative": 0, "hypothesis": 0, "guess": 0, "unsure": 0,
-              "likely": 1, "probable": 1, "plausible": 1,
-              "confident": 2, "high": 2,
-              "verified": 3, "certain": 3, "confirmed": 3}
+# the nearest rung. An UNKNOWN label ranks at the MIDDLE (1), never the floor: we must not let a
+# merely-"likely" restatement silently downgrade a belief whose (non-vocabulary) label we can't
+# read — only a clearly-higher confidence supersedes it.
+_CONF_RANK = {"tentative": 0, "hypothesis": 0, "guess": 0, "unsure": 0, "low": 0, "weak": 0,
+              "likely": 1, "probable": 1, "plausible": 1, "medium": 1, "moderate": 1,
+              "confident": 2, "high": 2, "strong": 2,
+              "verified": 3, "certain": 3, "confirmed": 3, "validated": 3, "definite": 3}
+_CONF_UNKNOWN = 1   # a label we don't recognise sits mid — supersedable only by a clearly-higher one
 
 
 def _conf_rank(c: str) -> int:
-    return _CONF_RANK.get((c or "").strip().lower(), 0)
+    return _CONF_RANK.get((c or "").strip().lower(), _CONF_UNKNOWN)
 
 
 def _supersede_entry(config: Config, entry_id: str, content: str, tags: list[str],
