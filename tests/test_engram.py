@@ -250,11 +250,12 @@ class TestConfigFlagWiring:
         assert Config().pillars_memory_engram_enabled is False
 
     def test_flag_loads_from_toml(self):
-        # The real config.toml documents the flag (dark); loading it must not error and the flag
-        # must be present + false (nothing in the running system changes with it off).
+        # The real config.toml documents the flag; loading it must not error and the flag must be
+        # present as a real bool. (This test pinned `is False` during the dark era — the pillars
+        # went LIVE 2026-07-05, so the shipped value is a deployment choice, not a test invariant.)
         root = Path(__file__).parent.parent
         toml = root / "config.toml"
         if toml.exists():
             from config import load_config
             cfg = load_config(str(toml))
-            assert cfg.pillars_memory_engram_enabled is False
+            assert isinstance(cfg.pillars_memory_engram_enabled, bool)

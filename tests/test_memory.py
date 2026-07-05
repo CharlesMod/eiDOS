@@ -37,26 +37,48 @@ class TestObservationArchive(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_truncate_archives_then_clears(self):
-        for i in range(3):
+    def test_truncate_archives_then_keeps_a_tail(self):
+        # Post-dream continuity: the last _OBS_KEEP_TAIL observations SURVIVE the dream (the
+        # creature wakes mid-thought, not amnesiac); only the removed bulk is archived.
+        from memory import _OBS_KEEP_TAIL
+        n = _OBS_KEEP_TAIL + 3
+        for i in range(n):
             append_observation(self.config, {"tick": i, "tool": "bash", "success": True,
                                              "output": f"obs {i}"})
         removed = truncate_observations(self.config)
         self.assertEqual(removed, 3)
-        self.assertEqual(count_observation_lines(self.config), 0)
+        self.assertEqual(count_observation_lines(self.config), _OBS_KEEP_TAIL)
         arcs = list(self.config.state_dir.glob("observations_archive_*.jsonl"))
         self.assertEqual(len(arcs), 1)
         rows = [json.loads(ln) for ln in arcs[0].read_text(encoding="utf-8").splitlines()]
-        self.assertEqual([r["tick"] for r in rows], [0, 1, 2])
+        self.assertEqual([r["tick"] for r in rows], [0, 1, 2])   # the bulk, oldest-first
+        live = [json.loads(ln) for ln in
+                open(self.config.observations_path, encoding="utf-8")]
+        self.assertEqual([r["tick"] for r in live], list(range(3, n)))   # the tail lives on
 
     def test_archive_appends_across_compactions(self):
-        append_observation(self.config, {"tick": 1, "tool": "bash", "success": True, "output": "a"})
-        truncate_observations(self.config)
-        append_observation(self.config, {"tick": 2, "tool": "bash", "success": True, "output": "b"})
-        truncate_observations(self.config)
+        # Each dream archives what it removes; the kept tail is archived by the NEXT dream that
+        # removes it (no loss, no duplication).
+        from memory import _OBS_KEEP_TAIL
+        for i in range(_OBS_KEEP_TAIL + 1):
+            append_observation(self.config, {"tick": i, "tool": "bash", "success": True,
+                                             "output": "a"})
+        self.assertEqual(truncate_observations(self.config), 1)
+        for i in range(_OBS_KEEP_TAIL):
+            append_observation(self.config, {"tick": 100 + i, "tool": "bash", "success": True,
+                                             "output": "b"})
+        self.assertEqual(truncate_observations(self.config), _OBS_KEEP_TAIL)
         arcs = list(self.config.state_dir.glob("observations_archive_*.jsonl"))
         self.assertEqual(len(arcs), 1)
-        self.assertEqual(len(arcs[0].read_text(encoding="utf-8").splitlines()), 2)
+        self.assertEqual(len(arcs[0].read_text(encoding="utf-8").splitlines()),
+                         1 + _OBS_KEEP_TAIL)
+
+    def test_small_stream_survives_untouched(self):
+        # Fewer observations than the tail → nothing removed, nothing archived.
+        append_observation(self.config, {"tick": 1, "tool": "bash", "success": True, "output": "x"})
+        self.assertEqual(truncate_observations(self.config), 0)
+        self.assertEqual(count_observation_lines(self.config), 1)
+        self.assertEqual(list(self.config.state_dir.glob("observations_archive_*.jsonl")), [])
 
     def test_empty_observations_no_archive(self):
         self.assertEqual(truncate_observations(self.config), 0)
