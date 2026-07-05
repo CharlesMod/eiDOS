@@ -14,6 +14,12 @@ body {
     line-height: 1.4;
     overflow-x: hidden;
 }
+/* Quiet scrollbars everywhere — a stock white scrollbar is a flashlight in a dark room */
+* { scrollbar-width: thin; scrollbar-color: #1a3a1a #0a0a0a; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: #0a0a0a; }
+*::-webkit-scrollbar-thumb { background: #1a3a1a; border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: #2a5a2a; }
 /* CRT scanline effect */
 body::after {
     content: '';
@@ -566,14 +572,16 @@ body::after {
     border-radius: 12px;
     padding: 8px 12px;
     width: 320px;
-    height: 100px;                /* FIXED so the creature never shifts */
+    height: 150px;                /* FIXED so the creature never shifts; tall enough that
+                                     the fit tiers almost never leave text hidden */
     margin: 0 auto 16px auto;
     /* NO overflow:hidden here — it would clip the tail (::before/::after hang below the
        box). #thought-text does its own clipping, so text stays contained regardless. */
     display: flex;
     flex-direction: column;
     text-align: left;
-    transition: border-color 0.4s, background 0.4s, border-radius 0.4s;
+    /* colors fade; SHAPE snaps — a half-morphed bubble reads as neither kind */
+    transition: border-color 0.4s, background 0.4s;
 }
 #thought-bubble.kind-thought { border-radius: 18px; }
 #thought-bubble.kind-thought #thought-text { font-style: italic; }
@@ -609,7 +617,8 @@ body::after {
 #thought-bubble.kind-action #thought-text { color: #ffd484; }
 #thought-bubble #thought-text.fit-1 { font-size: 12.5px; line-height: 1.5; }
 #thought-bubble #thought-text.fit-2 { font-size: 11.5px; line-height: 1.4; }
-#thought-bubble #thought-text.fit-3 { font-size: 10.5px; line-height: 1.32; }
+#thought-bubble #thought-text.fit-3 { font-size: 10px; line-height: 1.32; }
+#thought-bubble #thought-text.centered { display: flex; align-items: center; }
 #thought-bubble #thought-status {
     display: flex; align-items: center; gap: 6px; flex-shrink: 0;
     font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
@@ -1539,9 +1548,13 @@ var _speechLine = null, _speechSeen = null;
 // scrolls and the creature never shifts.
 function setBubbleText(el, text) {
     let t = (text || '').replace(/\s+/g, ' ').trim();
-    if (t.length > 460) t = t.substring(0, 460) + '…';
+    if (t.length > 360) t = t.substring(0, 360) + '…';
     el.textContent = t;
-    el.className = t.length <= 140 ? 'fit-1' : t.length <= 300 ? 'fit-2' : 'fit-3';
+    // Tiers sized to the 150px box, measured against a headless render (thresholds are
+    // deliberately conservative — a clipped last line is worse than a smaller font).
+    // A one-liner also gets vertically centered so the box doesn't look hollow.
+    el.className = (t.length <= 170 ? 'fit-1' : t.length <= 270 ? 'fit-2' : 'fit-3')
+                 + (t.length <= 90 ? ' centered' : '');
 }
 
 // On the workbench the buddy isn't doing house-work — it's standing by to help code.
