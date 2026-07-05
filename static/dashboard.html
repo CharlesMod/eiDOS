@@ -554,21 +554,61 @@ body::after {
     min-height: 50px;
     margin-bottom: 4px;
 }
+/* The dialog box: ONE bubble, three kinds. kind-thought (internal monologue — a soft cloud
+   with puff tail), kind-speech (externalized — crisp balloon, triangle tail), kind-action
+   (doing — angular amber terminal chip, no tail). State classes tint via --bub; text
+   auto-fits the fixed box through .fit-* tiers so it never needs to scroll. */
 #thought-bubble {
+    --bub: #1a3a1a;
     position: relative;
     background: #0d120d;
-    border: 1px solid #1a3a1a;
+    border: 1px solid var(--bub);
     border-radius: 12px;
     padding: 8px 12px;
     width: 320px;
-    height: 96px;                 /* FIXED so the creature never shifts */
-    margin: 0 auto 10px auto;
+    height: 100px;                /* FIXED so the creature never shifts */
+    margin: 0 auto 16px auto;
     overflow: hidden;
     display: flex;
     flex-direction: column;
     text-align: left;
-    transition: border-color 0.4s;
+    transition: border-color 0.4s, background 0.4s, border-radius 0.4s;
 }
+#thought-bubble.kind-thought { border-radius: 18px; }
+#thought-bubble.kind-thought #thought-text { font-style: italic; }
+#thought-bubble.kind-thought::after {         /* cloud tail: two shrinking puffs */
+    content: ''; position: absolute; bottom: -8px; left: 47%;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #0d120d; border: 1px solid var(--bub);
+}
+#thought-bubble.kind-thought::before {
+    content: ''; position: absolute; bottom: -15px; left: 44%;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: #0d120d; border: 1px solid var(--bub);
+}
+#thought-bubble.kind-speech {
+    background: #081218;
+    border-radius: 8px;
+    --bub: #33bbff;
+    box-shadow: 0 0 12px rgba(51,187,255,0.18);
+}
+#thought-bubble.kind-speech #thought-text { color: #d9f2ff; }
+#thought-bubble.kind-speech::after {          /* speech tail: a solid triangle */
+    content: ''; position: absolute; bottom: -9px; left: 50%; transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 7px solid transparent; border-right: 7px solid transparent;
+    border-top: 9px solid var(--bub);
+}
+#thought-bubble.kind-action {
+    background: #120e05;
+    border-radius: 3px;
+    --bub: #8a6a1a;
+    border-left: 3px solid #ffb000;
+}
+#thought-bubble.kind-action #thought-text { color: #ffd484; }
+#thought-bubble #thought-text.fit-1 { font-size: 12.5px; line-height: 1.5; }
+#thought-bubble #thought-text.fit-2 { font-size: 11.5px; line-height: 1.4; }
+#thought-bubble #thought-text.fit-3 { font-size: 10.5px; line-height: 1.32; }
 #thought-bubble #thought-status {
     display: flex; align-items: center; gap: 6px; flex-shrink: 0;
     font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
@@ -609,45 +649,34 @@ body::after {
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #thought-bubble.state-idle {
-    border-color: #2a4a2a;
+    --bub: #2a4a2a;
     color: #556655;
 }
-#thought-bubble::after {
-    content: '';
-    position: absolute;
-    bottom: -8px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 0; height: 0;
-    border-left: 6px solid transparent;
-    border-right: 6px solid transparent;
-    border-top: 8px solid #1a3a1a;
-}
 #thought-bubble.state-thinking {
-    border-color: #00ff41;
+    --bub: #00ff41;
     color: #00ff41;
     text-shadow: 0 0 6px rgba(0,255,65,0.3);
 }
 #thought-bubble.state-dreaming {
-    border-color: #aa88ff;
+    --bub: #aa88ff;
     color: #aa88ff;
     text-shadow: 0 0 6px rgba(170,136,255,0.3);
 }
 #thought-bubble.state-executing {
-    border-color: #ffb000;
+    --bub: #ffb000;
     color: #ffb000;
 }
 #thought-bubble.state-sleeping {
-    border-color: #1a3a1a;
+    --bub: #1a3a1a;
     color: #333;
 }
 #thought-bubble.state-listening {
-    border-color: #33bbff;
+    --bub: #33bbff;
     color: #33bbff;
     text-shadow: 0 0 7px rgba(51,187,255,0.35);
 }
 #thought-bubble.state-error {
-    border-color: #ff4444;
+    --bub: #ff4444;
     color: #ff4444;
 }
 @keyframes pulse-dots {
@@ -1501,6 +1530,19 @@ var _lastActivitySnap = null;
 // Last real snippet from LLM output (populated by loadThoughts)
 var _lastSnippet = '';
 
+// A fresh externalized line (speak / <reply>) holds the bubble in speech shape for a beat —
+// long enough to read, never replayed on page load. Set by loadChat, consumed here.
+var _speechLine = null, _speechSeen = null;
+
+// Fit the text to the FIXED bubble: tiered font sizes + a hard clamp, so the box never
+// scrolls and the creature never shifts.
+function setBubbleText(el, text) {
+    let t = (text || '').replace(/\s+/g, ' ').trim();
+    if (t.length > 460) t = t.substring(0, 460) + '…';
+    el.textContent = t;
+    el.className = t.length <= 140 ? 'fit-1' : t.length <= 300 ? 'fit-2' : 'fit-3';
+}
+
 // On the workbench the buddy isn't doing house-work — it's standing by to help code.
 // Compose a line in its own voice from persona (stage/traits/titles/level) + history
 // (current goal). Rotates every ~26s so it feels alive without flickering each poll.
@@ -1577,12 +1619,12 @@ function updateThoughtBubble(activity) {
     // Workbench: the buddy is standing by to help, not running the house. Override the
     // bubble with a persona-voiced "ready to jump in" line (the listening hold is engaged).
     if (document.body.classList.contains('wb')) {
-        bubble.className = ''; bubble.classList.add('state-listening');
+        bubble.className = 'kind-thought state-listening';
         let gE = document.getElementById('thought-glyph'), sE = document.getElementById('thought-state');
         const focus = window.wbFocus && window.wbFocus();   // watching the task you're viewing?
         if (gE) { gE.textContent = focus ? '◉' : '⚒'; gE.className = 'tb-pulse'; gE.style.color = '#9cf0b6'; }
         if (sE) sE.textContent = focus ? 'watching' : 'ready to help';
-        textEl.textContent = focus || wbStandbyLine();
+        setBubbleText(textEl, focus || wbStandbyLine());
         if (elapsedEl) elapsedEl.textContent = '';
         return;
     }
@@ -1593,16 +1635,29 @@ function updateThoughtBubble(activity) {
     let glyphEl = document.getElementById('thought-glyph');
     let stateEl = document.getElementById('thought-state');
 
-    bubble.className = '';
-    let g, label, anim, gcol;
-    if (state === 'thinking') {
+    // The bubble's KIND \u2014 what this moment IS: a fresh externalized line wins (speech),
+    // then live tool work (action), else the inner monologue (thought).
+    if (_speechLine && Date.now() >= _speechLine.until) _speechLine = null;
+    let kind = _speechLine ? 'speech' : (state === 'executing' ? 'action' : 'thought');
+
+    bubble.className = 'kind-' + kind;
+    let g, label, anim, gcol, text;
+    if (kind === 'speech') {
+        g = _speechLine.spoken ? '\ud83d\udd0a' : '\ud83d\udcac';
+        label = _speechLine.spoken ? 'speaking aloud' : 'telling Charlie';
+        anim = 'tb-pulse'; gcol = '#33bbff';
+        text = _speechLine.text;
+    } else if (kind === 'action') {
+        bubble.classList.add('state-executing');
+        g='\u2699'; label='running ' + (detail || 'tool'); anim='tb-spin'; gcol='#ffb000';
+        let lt = (activity && activity.last_tool) || null;
+        text = (detail || 'tool') + (lt && lt.summary ? '  \u00b7  ' + lt.summary : '');
+    } else if (state === 'thinking') {
         bubble.classList.add('state-thinking'); g='\u273a'; label='thinking'; anim='tb-pulse'; gcol='#00ff41';
-    } else if (state === 'executing') {
-        bubble.classList.add('state-executing'); g='\u2699'; label='running ' + (detail || 'tool'); anim='tb-spin'; gcol='#ffb000';
     } else if (state === 'dreaming') {
         bubble.classList.add('state-dreaming'); g='\u2726'; label='dreaming'; anim='tb-pulse'; gcol='#aa88ff';
     } else if (state === 'listening') {
-        bubble.classList.add('state-listening'); g='\ud83d\udc42'; label='listening to Dean'; anim='tb-pulse'; gcol='#33bbff';
+        bubble.classList.add('state-listening'); g='\ud83d\udc42'; label='listening to Charlie'; anim='tb-pulse'; gcol='#33bbff';
     } else {
         bubble.classList.add(_hasGoal ? 'state-idle' : 'state-sleeping'); g='\u00b7'; label='idle'; anim=''; gcol='#557755';
     }
@@ -1610,7 +1665,9 @@ function updateThoughtBubble(activity) {
     if (stateEl) stateEl.textContent = label;
 
     // Stable: last COMPLETE thought, no jittery raw-token streaming (that lives on :9100)
-    textEl.textContent = _lastSnippet || (state === 'sleeping' && !_hasGoal ? 'resting' : '\u2026');
+    if (text === undefined)
+        text = _lastSnippet || (state === 'sleeping' && !_hasGoal ? 'resting' : '\u2026');
+    setBubbleText(textEl, text);
 
     // Elapsed in the current state — so a long tool run reads "running bash 14s", not frozen
     if (since > 0 && state !== 'sleeping') {
@@ -2060,8 +2117,30 @@ async function loadChat() {
         if (resp.ok) {
             let data = await resp.json();
             renderChat(data.messages || []);
+            watchForSpeech(data.messages || []);
         }
     } catch(e) {}
+}
+
+// A NEW outgoing line from the creature (speak or <reply>) flips the dialog box into its
+// speech shape for a reading-length beat. First sight baselines silently — a reload never
+// replays history — and stale lines (>90s) don't count as "just said".
+function watchForSpeech(messages) {
+    let inc = messages.filter(m => m.direction !== 'outgoing');
+    if (!inc.length) { if (_speechSeen === null) _speechSeen = ''; return; }
+    let last = inc[inc.length - 1];
+    let key = (last.ts || '') + '|' + (last.text || '').substring(0, 40);
+    if (_speechSeen === null) { _speechSeen = key; return; }
+    if (key === _speechSeen) return;
+    _speechSeen = key;
+    let age = Date.now() - Date.parse(last.ts || '');
+    if (isNaN(age) || age > 90000) return;
+    _speechLine = {
+        text: last.text || '',
+        spoken: !!last.spoken,
+        until: Date.now() + Math.min(16000, 5000 + (last.text || '').length * 55),
+    };
+    updateThoughtBubble(_lastActivity);
 }
 
 function renderChat(messages) {
