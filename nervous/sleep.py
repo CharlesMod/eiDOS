@@ -553,11 +553,17 @@ def default_sleep_engine(*, decay: float = STRENGTH_DECAY_PER_SLEEP,
     ])
 
 
-def run_sleep(ctx: "SleepContext", *, engine: Optional[SleepEngine] = None) -> SleepReport:
-    """Run one full sleep pass and CLEAR adenosine (the creature wakes rested). This is the clean
-    function a later eidos.py cutover will call from inside the sleep window; it does NOT touch the
-    tick loop. Adenosine is cleared AFTER the jobs run so a job that inspects sleep pressure still sees
-    the pre-sleep value; the clear is unconditional (even a partially-failed sleep still rests the body).
+def run_sleep(ctx: "SleepContext", *, engine: Optional[SleepEngine] = None,
+              clear_adenosine: bool = True) -> SleepReport:
+    """Run one full sleep pass and (for a NAP) clear adenosine — the creature wakes rested. This is
+    the clean function eidos.py calls from inside the sleep window; it does NOT touch the tick loop.
+    Adenosine is cleared AFTER the jobs run so a job that inspects sleep pressure still sees the
+    pre-sleep value; when it clears, it clears unconditionally (even a partially-failed sleep still
+    rests the body).
+
+    `clear_adenosine=False` is the DREAM leg of the dream-vs-nap split: a context-compaction doze
+    runs the memory jobs but does NOT rest the body — tiredness keeps accruing through dreams, so
+    real naps still arrive on the nap curve instead of being reset every few minutes.
 
     DARK by config: with `pillars_sleep_engine_enabled` off (the default) this is a logged no-op
     returning an empty report — even an accidental early wiring changes nothing in the running system."""
@@ -567,6 +573,6 @@ def run_sleep(ctx: "SleepContext", *, engine: Optional[SleepEngine] = None) -> S
     engine = engine or default_sleep_engine()
     report = engine.run(ctx)
     nm = ctx.neuromod
-    if nm is not None and getattr(nm, "adenosine", None) is not None:
+    if clear_adenosine and nm is not None and getattr(nm, "adenosine", None) is not None:
         nm.adenosine.clear()
     return report

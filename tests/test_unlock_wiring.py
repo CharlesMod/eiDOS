@@ -334,6 +334,9 @@ class TestMilestonesAndProbe:
                           pillars_memory_engram_enabled=True, pillars_mastery_gates_enabled=True)
         from nervous.neuromod import Adenosine
         nm = types.SimpleNamespace(adenosine=Adenosine())
+        # The dream-vs-nap split: only a NAP advances sleeps.total, and U1 rides the first
+        # nap's wake — so this boundary must arrive with real accumulated wake pressure.
+        nm.adenosine.accumulate(nm.adenosine.max_wake_hours)
         hub = eidos._Pillars(cfg, neuromod=nm)
         hub.unlock_probe = lambda s: False
         report = hub.sleep_window(tick=2, persona={"level": 1, "xp": 0}, observations=[])

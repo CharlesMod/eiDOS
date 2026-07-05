@@ -1353,6 +1353,22 @@ class _Pillars:
                                                    "quest": active}, persona, tick=tick)
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars quest expiry failed: %s", e)
+        # DREAM vs NAP — the body decides, never a clock. This window is a NAP only when real
+        # wake pressure had accumulated by the boundary (NAP_PRESSURE_MIN of the stage ceiling);
+        # otherwise it is a DREAM: a context-compaction doze. Both run the memory jobs and keep
+        # the System responsive (quest settlement above, cadence + issuance below). Only a NAP
+        # rests the body (adenosine clear), advances the gates' sleep counters and the ladder's
+        # sleeps.total, and wakes the Administrator — an infant that dozes every few minutes
+        # must still get genuinely tired, genuinely nap, and genuinely digest between levels.
+        # No adenosine organ → NAP (fail-open to the pre-split semantics).
+        nap = True
+        try:
+            from nervous.neuromod import NAP_PRESSURE_MIN as _nap_min
+            _aden = getattr(self.neuromod, "adenosine", None)
+            if _aden is not None:
+                nap = float(_aden.pressure()) >= _nap_min
+        except Exception:  # noqa: BLE001 - classification failure must never skip a sleep
+            nap = True
         report = None
         try:
             from nervous.sleep import SleepContext, run_sleep
@@ -1360,18 +1376,19 @@ class _Pillars:
             ctx = SleepContext(config=c, consolidator=cons, neuromod=self.neuromod,
                                organ_registry=self.organ_registry, llm=self._live_llm(),
                                observations=list(observations or []))
-            report = run_sleep(ctx)      # clears the adenosine accumulator after the jobs (2.4)
+            report = run_sleep(ctx, clear_adenosine=nap)   # a dream does NOT rest the body (2.4)
             self._aden_mark = time.monotonic()   # wake-time accounting restarts at the boundary
         except Exception as e:  # noqa: BLE001
             logger.warning("pillars sleep engine failed: %s", e)
             return None
         if report is None or not getattr(report, "results", None):
             return report
-        try:
-            import level_gates as _lg
-            _lg.record_sleep_cycle(c)            # flag-gated internally (4.3)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("pillars record_sleep_cycle failed: %s", e)
+        if nap:
+            try:
+                import level_gates as _lg
+                _lg.record_sleep_cycle(c)        # flag-gated internally (4.3); NAPS only
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars record_sleep_cycle failed: %s", e)
         if self.quests is not None:
             try:
                 self._set_sleeps_since_close(self.sleeps_since_close() + 1)
@@ -1379,14 +1396,15 @@ class _Pillars:
                 logger.warning("pillars cadence advance failed: %s", e)
             self._issue_next(persona, tick=tick)
         # TOOL_PROGRESSION milestones at the boundary (same guarded pattern as the organ hooks):
-        # sleeps.total just advanced, so U1 lands on the first wake and the senses hold retries —
-        # the first felt moment arrives WITH the waking, not a tick later.
+        # on a nap sleeps.total just advanced, so U1 lands on the first wake; on a dream this
+        # still retries the senses service hold — the probe answers whenever the organ comes up.
         if getattr(c, "pillars_tool_unlocks_enabled", False):
             try:
                 self._unlock_milestones(persona, tick=tick)
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars unlock milestones failed: %s", e)
-        self._event("sleep_complete", persona)
+        if nap:
+            self._event("sleep_complete", persona)
         return report
 
     def _consolidator(self):

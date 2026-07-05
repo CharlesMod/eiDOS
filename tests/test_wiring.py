@@ -232,11 +232,12 @@ def test_all_flags_on_coupled_tick(tmp_path):
     persona = {"level": 1, "xp": 0}
     _drive_tick(hub, cfg, tick=1, persona=persona)
     _drive_tick(hub, cfg, tick=2, success=False, persona=persona)
-    nm.adenosine.accumulate(3.0)
+    # Dream-vs-nap split: a boundary only rests the body when it arrives genuinely tired.
+    nm.adenosine.accumulate(nm.adenosine.max_wake_hours)
     report = hub.sleep_window(tick=3, persona=persona,
                               observations=[{"tool": "bash", "success": True, "output": "hi"}])
     assert report is not None and report.results
-    assert nm.adenosine.level_hours == 0.0     # run_sleep cleared it — the creature wakes rested
+    assert nm.adenosine.level_hours == 0.0     # the NAP cleared it — the creature wakes rested
     hub.on_presence()
 
 
@@ -474,7 +475,8 @@ def test_sleep_window_advances_gates_and_cadence(tmp_path):
     from nervous.neuromod import Adenosine
     nm = types.SimpleNamespace(adenosine=Adenosine())
     hub = eidos._Pillars(cfg, neuromod=nm)
-    nm.adenosine.accumulate(5.0)
+    # Dream-vs-nap split: the gates' counters advance only at a NAP — arrive genuinely tired.
+    nm.adenosine.accumulate(nm.adenosine.max_wake_hours)
     report = hub.sleep_window(tick=6, persona={"level": 1, "xp": 0}, observations=[])
     assert report is not None and report.results
     assert nm.adenosine.level_hours == 0.0

@@ -129,6 +129,15 @@ def _wake_budget_gene(config) -> float:
     return max(0.9, min(1.1, g))
 
 
+# The dream-vs-nap split: a sleep window counts as a NAP — the biological bout that advances
+# level gates, unlock milestones, and the Administrator's sleep check-in — only when the body
+# had actually accumulated this fraction of its stage ceiling in wake pressure at the boundary.
+# Below it, the window is a DREAM (context digestion): the memory jobs run, tiredness stays.
+# 0.7 rather than 1.0 because a creature nods off BEFORE the hard limit (the soft approach band
+# in NeuromodulatoryState); 1.0 would make every nap a collapse.
+NAP_PRESSURE_MIN = 0.7
+
+
 class Adenosine:
     """The sleep-pressure accumulator (pitfall #2). Grows monotonically with wake time via
     `accumulate(dt_hours)`, is cleared to zero by `clear()` (which sleep calls), and reports its
