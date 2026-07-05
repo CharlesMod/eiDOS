@@ -335,59 +335,66 @@ body::after {
     font-style: italic;
 }
 /* Buddy Thoughts expanded list */
+/* Buddy Thoughts: a journal, not a log table. Prose first — a quiet time gutter (shown only
+   when the minute changes), no per-row chrome, soft separators, gap dividers where the loop
+   went quiet (naps, mostly). Long entries clamp to 3 lines and open on click. */
 .thoughts-list {
     max-height: 460px;
     overflow-y: auto;
-    font-size: 12.5px;
+    font-size: 13px;
 }
 .thought-entry {
-    border-bottom: 1px solid #1a3a1a;
-    cursor: pointer;
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    padding: 6px 4px;
     transition: background 0.15s;
 }
-.thought-entry:hover {
-    background: #111;
-}
-.thought-header {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    padding: 6px 4px;
-}
-.thought-tick {
-    color: #555;
+.thought-entry + .thought-entry { border-top: 1px solid #0f1f0f; }
+.thought-entry:hover { background: #0d140d; }
+.thought-entry:first-child .thought-text { color: #d2f0d2; }  /* the freshest thought, a shade brighter */
+.thought-gutter {
+    color: #4a5f4a;
     font-size: 10px;
+    min-width: 34px;
     flex-shrink: 0;
-    min-width: 40px;
+    text-align: right;
 }
-.thought-time {
-    color: #444;
-    font-size: 10px;
-    flex-shrink: 0;
-}
-.thought-preview {
-    color: #8fcf8f;
+.thought-text {
+    color: #b6e3b6;
     flex: 1;
-    white-space: normal;
-    overflow: visible;
+    line-height: 1.65;
+    white-space: pre-wrap;
     word-break: break-word;
-    line-height: 1.55;
+}
+.thought-text code {
+    color: #86c7e8;
+    background: #0d1a22;
+    border-radius: 3px;
+    padding: 0 4px;
+    font-size: 12px;
+}
+.thought-entry.long { cursor: pointer; }
+.thought-entry.long:not(.expanded) .thought-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.thought-entry.expanded { background: #0f1a0f; }
+.thought-more { color: #557755; font-size: 10px; flex-shrink: 0; }
+.thought-entry.expanded .thought-more { transform: rotate(180deg); display: inline-block; }
+.thought-gap {
+    text-align: center;
+    color: #2e4a2e;
+    font-size: 10px;
+    padding: 8px 0 4px;
+    letter-spacing: 2px;
 }
 .thought-elapsed {
     color: #444;
     font-size: 10px;
     flex-shrink: 0;
-}
-.thought-body {
-    display: none;
-    padding: 4px 8px 10px 52px;
-    line-height: 1.5;
-}
-.thought-entry.expanded .thought-body {
-    display: block;
-}
-.thought-entry.expanded {
-    background: #0f1a0f;
 }
 .thought-seg-thinking {
     color: #aaddaa;
@@ -1787,6 +1794,18 @@ function thoughtToolVerb(name) {
         'bg_run': '\u2699 starting something',
         'bg_check': '\ud83d\udc41 checking',
         'objective_done': '\u2728 done!',
+        'note_append': '\u270d jotting a note',
+        'note_read': '\ud83d\udc41 rereading a note',
+        'note_list': '\ud83d\udc41 flipping through notes',
+        'note_close': '\u270d closing a note',
+        'check_tools': '\ud83d\udc40 taking stock',
+        'create_skill': '\u2692 forging a skill',
+        'edit_skill': '\u2692 reworking a skill',
+        'predict': '\ud83c\udfb2 placing a bet',
+        'objective_add': '\u2691 setting a goal',
+        'speak': '\ud83d\udde3 speaking aloud',
+        'vision': '\ud83d\udc41 looking at something',
+        'delegate': '\ud83e\udd1d handing work off',
     };
     return verbs[name] || name;
 }
@@ -1819,6 +1838,11 @@ function renderThoughtSegments(segments) {
     }).join('');
 }
 
+// Inline `code` spans read better set off — escape first, then dress the backticks.
+function fmtThought(text) {
+    return escapeHtml(text).replace(/`([^`\n]{1,80})`/g, '<code>$1</code>');
+}
+
 function renderThoughts(thoughts) {
     let el = document.getElementById('thoughts-list');
     let statusEl = document.getElementById('thoughts-status');
@@ -1828,24 +1852,37 @@ function renderThoughts(thoughts) {
         if (statusEl) statusEl.textContent = '';
         return;
     }
-    if (statusEl) statusEl.textContent = thoughts.length + ' ticks';
+    if (statusEl) statusEl.textContent = 'last ' + thoughts.length;
 
-    el.innerHTML = thoughts.map(function(t) {
-        let ts = (t.ts || '');
-        if (ts.length > 16) ts = ts.substring(11, 16);
-        let elapsed = t.elapsed_s ? t.elapsed_s.toFixed(1) + 's' : '';
-        let preview = t.preview || '...';
-
-        return '<div class="thought-entry" onclick="this.classList.toggle(\'expanded\')">' +
-            '<div class="thought-header">' +
-                '<span class="thought-tick">t' + (t.tick || 0) + '</span>' +
-                '<span class="thought-time">' + ts + '</span>' +
-                '<span class="thought-preview">' + escapeHtml(preview) + '</span>' +
-                '<span class="thought-elapsed">' + elapsed + '</span>' +
-            '</div>' +
-            '<div class="thought-body">' + renderThoughtSegments(t.segments || []) + '</div>' +
-        '</div>';
-    }).join('');
+    // Newest first. The time gutter only speaks when the minute changes; a quiet stretch
+    // between ticks (>3 min — usually a nap) gets its own soft divider.
+    let html = [], prevHm = null;
+    thoughts.forEach(function(t, i) {
+        let iso = t.ts || '';
+        let hm = iso.length > 16 ? iso.substring(11, 16) : '';
+        if (i > 0) {
+            let newer = Date.parse(thoughts[i - 1].ts || '');
+            let older = Date.parse(iso);
+            if (!isNaN(newer) && !isNaN(older) && newer - older > 3 * 60 * 1000) {
+                let mins = Math.round((newer - older) / 60000);
+                html.push('<div class="thought-gap">· · ·&nbsp;&nbsp;' + mins + ' min&nbsp;&nbsp;· · ·</div>');
+                prevHm = null;   // after a gap, the clock speaks again
+            }
+        }
+        let full = t.preview || '…';
+        let segs = t.segments || [];
+        let multi = segs.length > 1 || (segs.length === 1 && segs[0].type !== 'thinking');
+        let long = multi || full.length > 220 || full.indexOf('\n') >= 0;
+        let body = multi ? renderThoughtSegments(segs) : fmtThought(full);
+        html.push('<div class="thought-entry' + (long ? ' long" onclick="this.classList.toggle(\'expanded\')"' : '"') +
+            ' title="tick ' + (t.tick || 0) + (iso.length > 19 ? ' · ' + iso.substring(11, 19) : '') + '">' +
+            '<span class="thought-gutter">' + (hm !== prevHm ? hm : '') + '</span>' +
+            '<div class="thought-text">' + body + '</div>' +
+            (long ? '<span class="thought-more">⌄</span>' : '') +
+        '</div>');
+        prevHm = hm;
+    });
+    el.innerHTML = html.join('');
 }
 
 function spawnParticle() {
