@@ -466,6 +466,19 @@ def test_quest_stats_sections_are_adjudicated_facts(tmp_path):
     assert stats["drills"] == {} and stats["remedial"] == {}
 
 
+def test_level_candidacy_is_edge_triggered_once_per_level(tmp_path):
+    """5.2 cadence: the candidacy EVENT fires once per level crossing, not every tick the XP
+    floor stays crossed — the per-tick flood had the Administrator drafting 18 quests an hour."""
+    cfg = _mk_config(tmp_path, pillars_mastery_gates_enabled=True)
+    hub = eidos._Pillars(cfg)
+    events = []
+    hub._event = lambda kind, persona: events.append(kind)
+    persona = {"level": 1, "xp": 10_000, "goals_completed": 0}   # far past every floor; gate holds
+    for t in range(1, 6):
+        _drive_tick(hub, cfg, tick=t, persona=persona)
+    assert events.count("level_candidacy") == 1
+
+
 def test_sleep_window_advances_gates_and_cadence(tmp_path):
     """2.4 + 4.3 + 5.1 at the boundary: a completed sleep clears adenosine, advances the mastery
     gate's sleep counter, and advances the quest digestion counter."""

@@ -58,12 +58,20 @@ _REPO_ROOT = Path(__file__).resolve().parent
 
 # --- Declared knobs (§0.4: each a labeled design knob with its one-line justification) -----------
 STATE_NAME = "administrator.json"   # one small state_dir file: marker + pending store + autonomy books
-MAX_QUESTS_PER_CHECKIN = 3      # declared: one check-in may propose at most 3 quests — the creature
-                                # runs ONE active quest; a flood of proposals is noise, not training
+MAX_QUESTS_PER_CHECKIN = 1      # declared: one check-in may propose at most ONE quest — the System
+                                # speaks one directive at a time; scarcity is what makes a directive
+                                # an event (operator: "reserved and mysterious", 2026-07-05)
 MAX_FLAGS_PER_CHECKIN = 4       # declared: at most 4 tuning flags per check-in — a flag is a pointed
                                 # finding, not a config review; more than this is an unread report
-PENDING_MAX = 20                # declared: bound on the pending-proposal store — unreviewed backlog
-                                # past this means the operator loop is broken; drop-with-log, not grow
+PENDING_MAX = 3                 # declared: bound on the pending-proposal store — the shelf holds
+                                # THREE. The operator must be able to read the whole queue at a
+                                # glance and trust that each entry earned its place; 20 was a
+                                # backlog nobody reads (it filled twice in an afternoon)
+ADMIN_OPS = (">=", ">")         # declared: the ONLY ops an Administrator criterion may use — every
+                                # adjudicatable path is a monotonic count, so an eventually-true
+                                # threshold is dependable while == can be skipped over forever
+                                # (live: an approved `expectations.total == 10` can never close if
+                                # two bets land between checks). Hand-authored quests keep _OPS.
 RESOLVED_KEEP = 20              # declared: resolved proposals kept for audit before pruning — enough
                                 # to see the recent decision pattern, bounded like every store (§M-3)
 AUTONOMY_APPROVAL_THRESHOLD = 0.8   # declared: a tier auto-issues once ≥80% of its recent proposals
@@ -470,14 +478,18 @@ You know eiDOS is an LLM being raised toward competence; eiDOS does not know you
 ever sees the System's terse quest windows.
 
 Each check-in you receive a fresh telemetry dossier. Your job:
- 1. QUESTS — propose gap-targeted quests at the UPPER edge of the growth zone (not-coddled): weak
-    calibration domains, tiers with no trusted skills, orbited-but-locked doors, stale scars.
+ 1. QUESTS — SILENCE IS YOUR DEFAULT. An empty quests array is the correct output for most
+    check-ins: the System speaks rarely, and scarcity is what makes a directive an event. Propose
+    a quest (at most ONE) only when the dossier shows one clear gap that the creature's own life
+    is not already closing — weak calibration, a tier with no trusted skills, a stale scar. Never
+    propose what will happen anyway (sleep happens on its own; a quest to sleep is noise). Never
+    re-propose a gap that already has a pending or recently-rejected proposal (see last_checkin).
     Success criteria must be glue-checkable predicates (path/op/value) — never self-report. You
     REASON from the whole rich dossier, but you may WRITE a criteria `path` ONLY from the small
     adjudicatable vocabulary listed under ADJUDICATABLE CRITERIA PATHS below — those are the only
-    facts the engine checks. A criterion naming any other path (a dossier readout like
-    skill_economy.authored or level.sleeps_since_level) can NEVER pass and is discarded with the
-    whole proposal. Directives are terse and impersonal: the System's register.
+    facts the engine checks, and the op is >= or > only (every path is a monotonic count; an ==
+    can be skipped over and never close). Directives are terse and impersonal: the System's
+    register — reserved, a little mysterious, never chatty, never explaining itself.
     When the dossier carries `creature_tools`, that list IS eiDOS's whole world: a directive may
     only name tools on it. A tool absent from the list does not exist for eiDOS yet — naming one
     tears the fiction, and such proposals are held, never issued.
@@ -536,7 +548,10 @@ def build_admin_grammar() -> str:
         f' {key("weakness_report")} mstring "," jws'
         f' {key("narrator")} mstring "," jws'
         f' {key("tuning_flags")} flagarr "}}" jws',
-        f'questarr ::= "[" jws ( quest ( "," jws quest ){{0,{q_more}}} )? "]" jws',
+        # With MAX_QUESTS_PER_CHECKIN == 1 the tail repetition vanishes entirely (a bare
+        # `{0,0}` is degenerate GBNF): the array is empty or exactly one quest.
+        (f'questarr ::= "[" jws ( quest )? "]" jws' if q_more <= 0 else
+         f'questarr ::= "[" jws ( quest ( "," jws quest ){{0,{q_more}}} )? "]" jws'),
         f'quest ::= "{{" jws {key("id")} bstring "," jws'
         f' {key("directive")} bstring "," jws'
         f' {key("tier")} jint "," jws'
@@ -570,7 +585,7 @@ def build_admin_grammar() -> str:
             f'"{p}"' for p in sorted(quests.ADJUDICATABLE_PATHS, key=len, reverse=True))
         + ' ) "\\"" jws',
         'opstr ::= "\\"" ( ' + " | ".join(
-            f'"{op}"' for op in sorted(quests._OPS, key=len, reverse=True)) + ' ) "\\"" jws',
+            f'"{op}"' for op in sorted(ADMIN_OPS, key=len, reverse=True)) + ' ) "\\"" jws',
         'sval ::= jstring | jnumber | ( "true" | "false" ) jws | sarr',
         'sarr ::= "[" jws ( sval ( "," jws sval )* )? "]" jws',
         f'comp ::= "{{" jws ( {key("all_of")} | {key("any_of")} )'
@@ -606,7 +621,7 @@ def _valid_criteria(d: Any, depth: int = 0) -> bool:
     path = d.get("path")
     if not isinstance(path, str) or path not in quests.ADJUDICATABLE_PATHS:
         return False
-    if d.get("op", ">=") not in quests._OPS:
+    if d.get("op", ">=") not in ADMIN_OPS:
         return False
     return not isinstance(d.get("value"), (dict,))   # thresholds are scalars/lists, never objects
 

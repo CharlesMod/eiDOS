@@ -110,6 +110,27 @@ class TestGrammar:
         # a dossier path must NOT be emittable
         assert '"skill_economy.authored"' not in g
 
+    def test_ops_are_monotonic_safe_only(self):
+        # Every adjudicatable path is a monotonic count: >= and > are eventually-true and
+        # dependable; == can be skipped over forever (live: `expectations.total == 10`).
+        g = administrator.build_admin_grammar()
+        opline = next(l for l in g.splitlines() if l.startswith("opstr ::="))
+        assert '">="' in opline and '">"' in opline
+        for banned in ('"=="', '"!="', '"contains"', '"in"', '"<="', '"<"'):
+            assert banned not in opline, f"{banned} must not be emittable"
+        assert not administrator._valid_criteria(
+            {"path": "expectations.total", "op": "==", "value": 10})
+
+    def test_scarcity_one_quest_max(self):
+        # The System speaks one directive at a time (MAX_QUESTS_PER_CHECKIN == 1): the quest
+        # array is empty or a single quest — no comma-joined tail is representable.
+        assert administrator.MAX_QUESTS_PER_CHECKIN == 1
+        g = administrator.build_admin_grammar()
+        qline = next(l for l in g.splitlines() if l.startswith("questarr ::="))
+        assert '( quest )?' in qline and '","' not in qline
+        # and the shelf holds three: the operator can read the whole queue at a glance
+        assert administrator.PENDING_MAX == 3
+
 
 # =================================================================================================
 class TestPrompt:

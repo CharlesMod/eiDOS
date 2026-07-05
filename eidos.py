@@ -655,6 +655,9 @@ class _Pillars:
         self.injected = []           # engrams this tick's recall injected (the bet slate, 2.3)
         self._persona = None         # the live persona dict, refreshed each after_outcome
         self._level_snapshot = None  # 4.3: the gate-authoritative level (only apply_level_up moves it)
+        self._candidacy_fired_for = None   # 5.2: level_candidacy is EDGE-triggered — once per level
+                                           # crossing, not every tick past the floor (18 proposal
+                                           # bricks/hour came from the level-triggered flood)
         self.unlock_probe = None     # I8 TEST SEAM: inject a callable(service)->bool; None = the
                                      # process-memoized voice probe (_probe_service)
         self._stage_seen = None      # stage-transition memo: skip the genome read while the
@@ -975,7 +978,12 @@ class _Pillars:
                                                   "surprise": 2.0}, "quest")
                             except Exception:  # noqa: BLE001
                                 pass
-                    self._event("level_candidacy", persona)
+                    # EDGE-triggered (once per level crossing): the floor stays crossed for
+                    # hours while the gate holds, and a per-tick event had the Administrator
+                    # drafting 18 quests an hour. The crossing is the event; the state isn't.
+                    if self._candidacy_fired_for != cur:
+                        self._candidacy_fired_for = cur
+                        self._event("level_candidacy", persona)
                 self._level_snapshot = int(persona.get("level", 1) or 1)
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars level gate failed: %s", e)
