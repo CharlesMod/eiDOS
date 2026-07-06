@@ -249,6 +249,9 @@ news_max_items = 20               # 4.4 bound on queued news (eviction/expiry pa
 mastery_gates_enabled = true      # 4.3 levels = glue-checked mastery evidence; XP is just the progress bar
 min_sleeps_per_level = 3          # 4.3 mandatory digestion between levels (spacing effect as a hard floor)
 administrator_enabled = true      # 5.2 the System-LLM: dossier → grammar-constrained proposals, event-driven check-ins
+administrator_autonomy = "full"   # 5.2 STANDING operator grant (Charlie, 2026-07-05): valid, leak-free quests auto-issue —
+                                  # the vocabulary/grammar/leak rails make bad quests unrepresentable, so approval added only
+                                  # latency. The panel is now an audit trail; /api/admin/revoke stays the ban-hammer.
 shadows_enabled = false           # 6 scripted CPU workers: trusted skill + event loop + budget + dead-man lease
 shadow_capacity = 1               # 6 concurrent shadow slots at unlock; grows on demonstrated stewardship
 generals_enabled = false          # 7 delegated LLM minds on mission contracts (slot-sharing substrate)

@@ -187,6 +187,21 @@ class AdminState:
         return (sum(dec) / len(dec)) >= AUTONOMY_APPROVAL_THRESHOLD
 
 
+def _tier_autonomous(config, state: "AdminState", tier: int) -> bool:
+    """Whether a tier's proposals auto-issue. The REVOKE ban-hammer is absolute in both modes.
+    Mode "full" (config.pillars_administrator_autonomy) is a STANDING operator grant: every valid,
+    leak-free proposal ships without the approval seam — the panel becomes an audit trail. The
+    grant exists because the earned ladder's books live in workspace state and die with a wipe:
+    trust in the ADMINISTRATOR (same model, same validation) is the operator's standing judgment,
+    not something a creature's rebirth should reset. Mode "earned" is the graduated ladder."""
+    a = state.autonomy.get(str(int(tier))) or {}
+    if a.get("revoked"):
+        return False
+    if str(getattr(config, "pillars_administrator_autonomy", "earned")) == "full":
+        return True
+    return state.tier_has_autonomy(tier)
+
+
 # ============================================================================================
 # 1. The dossier compiler — the fresh telemetry report each check-in reads (§7a)
 # ============================================================================================
@@ -247,6 +262,24 @@ def _calibration_section(config) -> Optional[dict]:
     try:
         import expectations
         return expectations.brier_calibration_by_domain(config)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _settlements_section(config, limit: int = 6) -> Optional[list]:
+    """The last few CLOSED bets with their actual verdicts and grounds — the concrete material a
+    calibration quest should coach from (the aggregate Brier says HOW miscalibrated; these say
+    WHAT it bet and WHY each settled). Includes whether the target was a checkable claim: a run
+    of claimless legacy bets is itself the finding."""
+    try:
+        import expectations
+        led = expectations.ExpectationLedger(config)
+        closed = [p for p in led._all_predictions() if p.status == "closed"]
+        closed.sort(key=lambda p: p.closed_tick or 0)
+        return [{"statement": p.statement[:120], "target": p.target[:80],
+                 "confidence": round(float(p.confidence), 2), "came_true": bool(p.outcome),
+                 "checkable": expectations.parse_claim(p.target) is not None}
+                for p in closed[-limit:]] or None
     except Exception:  # noqa: BLE001
         return None
 
@@ -413,6 +446,7 @@ def compile_dossier(config, since_checkin: Optional[str] = None, *,
         "level": level,
         "quests": _quest_section(config),
         "calibration_by_domain": _calibration_section(config),
+        "recent_settlements": _settlements_section(config),
         "error_slopes_by_domain": _error_slope_section(config),
         "skill_economy": _skill_economy_section(config),
         "condition": _condition_section(config),
@@ -768,7 +802,7 @@ def check_in(config, llm: Callable[[list, str], str], event: Any, *,
     kind = event.get("kind") if isinstance(event, dict) else str(event)
     state = AdminState(config)
     if len(state.pending()) >= PENDING_MAX and not any(
-            state.tier_has_autonomy(t) for t in (1, 2, 3)):
+            _tier_autonomous(config, state, t) for t in (1, 2, 3)):
         # The pending store is full and nothing can auto-issue: every proposal this check-in
         # could produce would be dropped on arrival. Skip the whole call — an infant's dream
         # cadence (minutes apart) was burning a full dossier LLM call per dream to feed a
@@ -813,8 +847,8 @@ def check_in(config, llm: Callable[[list, str], str], event: Any, *,
             record["locked_tool_mentions"] = leaks
             logger.info("administrator: proposal %s names locked tools %s — held for the operator",
                         pid, ", ".join(leaks))
-        if state.tier_has_autonomy(p["tier"]) and not leaks:
-            # Graduated autonomy: this tier's recent approval record earned auto-issue (§7).
+        if _tier_autonomous(config, state, p["tier"]) and not leaks:
+            # Autonomy: earned ladder or the operator's standing "full" grant (§7).
             quest = _quest_from_proposal(p, now=now)
             System(config).propose(quest)
             record["status"] = "auto_issued"

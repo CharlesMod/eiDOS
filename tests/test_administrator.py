@@ -396,6 +396,25 @@ class TestApprovalSeamsAndAutonomy(unittest.TestCase):
         self.assertNotIn("adm_after_revoke",
                          [q.id for q in quests.QuestStore(self.cfg).queue()])
 
+    def test_full_autonomy_is_a_standing_grant(self):
+        # Mode "full": a valid, leak-free proposal auto-issues with ZERO decision history — the
+        # operator's standing grant (the earned books die with a workspace wipe; trust in the
+        # Administrator shouldn't).
+        self.cfg.pillars_administrator_autonomy = "full"
+        report = self._propose_one("adm_full_auto")
+        self.assertEqual(report.auto_issued_ids, ["adm_full_auto"])
+        self.assertEqual(report.pending_ids, [])
+        self.assertIn("adm_full_auto", [q.id for q in quests.QuestStore(self.cfg).queue()])
+
+    def test_full_autonomy_still_bows_to_the_ban_hammer(self):
+        # REVOKE is absolute in both modes: a revoked tier pends even under the standing grant.
+        self.cfg.pillars_administrator_autonomy = "full"
+        revoke_autonomy(self.cfg, 2)
+        report = self._propose_one("adm_full_revoked")
+        self.assertEqual(report.auto_issued_ids, [])
+        self.assertEqual(report.pending_ids, ["adm_full_revoked"])
+        self.assertEqual(quests.QuestStore(self.cfg).queue(), [])
+
     def test_rejections_debit_the_rate(self):
         # 2 rejections + 4 approvals = 4/6 < 0.8 → no autonomy (the rate never crosses the bar
         # mid-sequence either: [0,0,1,1,1] at the min sample is 0.6).
