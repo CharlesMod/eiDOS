@@ -304,6 +304,36 @@ class TestHatching(Base):
         self.assertEqual(sum(1 for e in doc["events"] if e["kind"] == "hatched"), 1)
 
 
+class TestLoopSideHatch(Base):
+    """The watchdog's hatch beat: cracks/hatch land with ZERO browser polls — the creature
+    hatches on time even when nobody is looking (the deferred loop-side-hatch seam)."""
+
+    def _doc(self):
+        return json.loads((self.ws / "creature.json").read_text())
+
+    def test_hatch_beat_advances_without_a_poll(self):
+        self._spec(persona={"level": 1, "xp": 0})    # lay the egg once
+        self._persona(level=1, xp=30)                # XP crosses the hatch bar on disk only
+        dashboard._hatch_beat(self.config)           # the watchdog beat — no build_creature_spec
+        doc = self._doc()
+        self.assertTrue(doc["hatched"])
+        self.assertEqual(sum(1 for e in doc["events"] if e["kind"] == "hatched"), 1)
+
+    def test_hatched_beat_is_quiet(self):
+        self._spec(persona={"level": 1, "xp": 0})
+        self._persona(level=1, xp=30)
+        dashboard._hatch_beat(self.config)
+        path = self.ws / "creature.json"
+        mtime = path.stat().st_mtime_ns
+        dashboard._hatch_beat(self.config)           # already hatched → no disk churn
+        self.assertEqual(path.stat().st_mtime_ns, mtime)
+
+    def test_missing_persona_never_raises(self):
+        self._spec(persona={"level": 1, "xp": 0})
+        dashboard._hatch_beat(self.config)           # no persona.json on disk → quiet no-op
+        self.assertFalse(self._doc()["hatched"])
+
+
 class TestMetamorphosis(Base):
 
     def _doc(self):

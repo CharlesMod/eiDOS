@@ -2047,6 +2047,21 @@ def _selfedit_probe(config):
     _watchdog_event(config, f"HEALTH-PROBE ROLLBACK of self-edit {pend.get('id')} -> {prev[:9]} ({why})")
 
 
+def _hatch_beat(config):
+    """Loop-side hatch (deferred seam, closed): hatch progress used to advance ONLY inside
+    build_creature_spec — i.e. on a browser poll — so with no dashboard tab open the creature
+    could cross its hatch XP and never hatch until someone looked. The watchdog beat is the
+    dashboard's own loop, so cracks/hatch land on time with zero viewers. Same single writer
+    (this process, _CREATURE_LOCK inside _update_hatch), idempotent, and it only touches disk
+    on a threshold crossing."""
+    try:
+        doc = _load_or_create_creature(config)
+        if not doc.get("hatched"):
+            _update_hatch(config, doc, _read_json(config.workspace / "persona.json"))
+    except Exception:  # noqa: BLE001 - the hatch beat must never wound the watchdog
+        pass
+
+
 def _watchdog_loop(config):
     """Supervise eiDOS: when it should be running but has died, record why and respawn it.
 
@@ -2058,6 +2073,7 @@ def _watchdog_loop(config):
     stuck_restarts = []   # timestamps of stale-heartbeat restarts (bounded so an external cause can't thrash)
     while True:
         try:
+            _hatch_beat(config)
             # Event-driven (phase 4b): a spawned child's death fires _child_died instantly;
             # the 5s timeout retains every periodic check (should_run, stability re-arm,
             # children from a previous dashboard run that we have no handle for).

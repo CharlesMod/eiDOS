@@ -185,6 +185,59 @@ class TestAdjudicationAndReward(unittest.TestCase):
 
 
 # =================================================================================================
+class TestStallAbandon(unittest.TestCase):
+    """TOOL_PROGRESSION stall handling: zero criterion movement across QUEST_STALL_SLEEPS
+    consecutive sleeps closes the quest FAILED (the reserved abandon path) — pressure, not a
+    timer; any movement resets the count."""
+
+    def setUp(self):
+        import tempfile
+        self.cfg = _cfg(tempfile.mkdtemp())
+        self.sysm = System(self.cfg)
+        self.sysm.propose(_level_quest("q1", level=9))
+        self.q = self.sysm.issue_next(sleeps_since_close=1, condition="STABLE")
+
+    def _sleep(self, level):
+        return self.sysm.abandon_if_stalled({"persona": {"level": level}})
+
+    def test_k_stalled_sleeps_close_failed(self):
+        from quests import FAILED, QUEST_STALL_SLEEPS
+        ep = None
+        # Sleep 0 seeds the probe; K more identical measurements close it.
+        for _ in range(QUEST_STALL_SLEEPS + 1):
+            self.assertIsNone(ep)
+            ep = self._sleep(level=1)
+        self.assertIsNotNone(ep)
+        self.assertEqual(ep["fail_kind"], "quest_abandoned")
+        self.assertIn("stalled", ep["summary"])
+        closed = self.sysm.store.load()[0]
+        self.assertEqual(closed.state, FAILED)
+        self.assertIn("abandoned", closed.outcome)
+        self.assertIsNone(self.sysm.store.active())
+
+    def test_criterion_movement_resets_the_count(self):
+        from quests import QUEST_STALL_SLEEPS
+        for _ in range(QUEST_STALL_SLEEPS):        # seed + K−1 stalled sleeps
+            self.assertIsNone(self._sleep(level=1))
+        self.assertIsNone(self._sleep(level=2))    # the needle MOVED — count resets
+        for _ in range(QUEST_STALL_SLEEPS - 1):    # K−1 more stalls still don't close it
+            self.assertIsNone(self._sleep(level=2))
+        self.assertIsNotNone(self.sysm.store.active())
+
+    def test_stall_state_survives_a_restart(self):
+        from quests import QUEST_STALL_SLEEPS
+        for _ in range(QUEST_STALL_SLEEPS):
+            self.assertIsNone(self._sleep(level=1))
+        reborn = System(self.cfg)                  # fresh engine over the same store
+        ep = reborn.abandon_if_stalled({"persona": {"level": 1}})
+        self.assertIsNotNone(ep)
+
+    def test_no_active_quest_is_a_no_op(self):
+        empty = System(_cfg(__import__("tempfile").mkdtemp()))
+        self.assertIsNone(empty.abandon_if_stalled({"persona": {"level": 1}}))
+
+
+# =================================================================================================
 class TestHidden(unittest.TestCase):
     """§7: a hidden quest stays unrendered until it passes, then reveals."""
 

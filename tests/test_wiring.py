@@ -554,6 +554,45 @@ def test_salience_gate_registered_and_hears_relevance(tmp_path):
     assert hub.salience._relevance, "the published relevance_set never reached the gate"
 
 
+def test_post_tick_phase_dispatches_hooks_once_and_carries_intrinsic(tmp_path):
+    """1.1 seam closed: the tick body dispatches goal-tension + curiosity ONCE through
+    run_post_tick — the hooks read the packed ctx (registration order = old call order) and
+    curiosity's intrinsic bonus rides ctx back out for the learner to consume."""
+    import types as _types
+    from nervous.organs import OrganRegistry
+
+    class _GoalTension:
+        def __init__(self):
+            self.calls = []
+
+        def observe(self, **kw):
+            self.calls.append(kw)
+
+    class _Curiosity:
+        def observe(self, progress):
+            return 0.42                       # the intrinsic bonus the learner must receive
+
+    class _WorldModel:
+        last_progress = 0.9
+
+        def observe(self, prev_sit, prev_act, sit):
+            self.seen = (prev_sit, prev_act, sit)
+
+    reg = OrganRegistry()
+    gt, cur, wm = _GoalTension(), _Curiosity(), _WorldModel()
+    reg.register(gt, name="goal_tension", post_tick=eidos._goaltension_post_tick)
+    reg.register(cur, name="curiosity", post_tick=eidos._curiosity_post_tick)
+    ctx = _types.SimpleNamespace(
+        gate={"active": {"frustration": 3}}, park_at=6, obj=None, temperament=None,
+        goaltension=gt, made_progress=True, worldmodel=wm, wm_prev_sit="a|probe",
+        wm_prev_act="bash", tick_situation="a|scan", curiosity=cur, intrinsic=0.0)
+    reg.run_post_tick(ctx)
+    assert gt.calls == [{"made_progress": True, "open_objective": True,
+                         "frustration_frac": 0.5, "initiative": 0.5}]
+    assert wm.seen == ("a|probe", "bash", "a|scan")
+    assert ctx.intrinsic == 0.42              # curiosity's bonus rode the ctx to the learner
+
+
 def test_administrator_event_driven_with_mock_seam(tmp_path):
     """5.2 wired: a wake event drives one check-in through the INJECTED mock mind (the test seam);
     a non-wake event drives none; and without injection the lazy mind stays None under mock mode

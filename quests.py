@@ -39,6 +39,11 @@ from typing import Any, Callable, Optional
 QUESTS_MAX_BYTES = 1_000_000   # declared: rotate quests.jsonl at ~1 MB — years of quests, not hours
 SLEEPS_REQUIRED = 1            # declared (§7): ≥1 sleep cycle between a close and the next issue —
                                # mandatory digestion, the spacing effect as a hard floor
+QUEST_STALL_SLEEPS = 5         # declared (TOOL_PROGRESSION stall handling — pressure, not script):
+                               # an active quest whose criteria show ZERO movement across this many
+                               # consecutive sleeps closes FAILED (the reserved abandon path),
+                               # unfreezing quest_line_closed so the Administrator's gap-mining can
+                               # propose a smaller re-attack. Never an auto-grant timer.
 _HEALTHY_BLOCK = ("RECOVERY",)  # declared (§7): the ONLY condition that stays the System's hand —
                                # silence is reserved for genuine recovery, never to dodge challenge
 ARCHIVE_PREFIX = "quests_archive_"   # + YYYYMM.jsonl (house monthly-archive convention)
@@ -47,7 +52,7 @@ ARCHIVE_PREFIX = "quests_archive_"   # + YYYYMM.jsonl (house monthly-archive con
 OFFERED = "offered"     # in the queue, not yet promoted
 ACTIVE = "active"       # the one live quest (at most one)
 PASSED = "passed"       # criteria met; reward applied
-FAILED = "failed"       # closed unmet by the model (explicit) — reserved for a later abandon path
+FAILED = "failed"       # closed unmet without reaching expiry — today: the stall-abandon path
 EXPIRED = "expired"     # expiry reached (or ignored) before criteria met → failure-lite
 _TERMINAL = (PASSED, FAILED, EXPIRED)
 
@@ -204,6 +209,10 @@ class Quest:
     created_ts: str = field(default_factory=_now)
     closed_ts: Optional[str] = None
     outcome: Optional[str] = None        # freeform close note (glue-set, not self-report)
+    stall_sleeps: int = 0                # consecutive sleeps with zero criterion movement (K-sleep
+                                         # abandon path); reset whenever any criterion value moves
+    stall_probe: Optional[dict] = None   # the criteria leaf values measured at the last sleep —
+                                         # the movement baseline (glue-measured, never self-report)
 
     def to_dict(self) -> dict:
         return {
@@ -220,6 +229,8 @@ class Quest:
             "created_ts": self.created_ts,
             "closed_ts": self.closed_ts,
             "outcome": self.outcome,
+            "stall_sleeps": self.stall_sleeps,
+            "stall_probe": self.stall_probe,
         }
 
     @staticmethod
@@ -238,6 +249,8 @@ class Quest:
             created_ts=d.get("created_ts") or _now(),
             closed_ts=d.get("closed_ts"),
             outcome=d.get("outcome"),
+            stall_sleeps=int(d.get("stall_sleeps", 0) or 0),
+            stall_probe=d.get("stall_probe"),
         )
 
     def is_expired(self, now: Optional[float] = None) -> bool:
@@ -498,10 +511,35 @@ class System:
             return self._failure_lite_episode(q)
         return None
 
-    def _close(self, quest: "Quest", state: str, *, outcome: str) -> None:
-        quest.state = state
-        quest.closed_ts = _now()
-        quest.outcome = outcome
+    def abandon_if_stalled(self, stats: Optional[dict]) -> Optional[dict]:
+        """The K-sleep abandon path (TOOL_PROGRESSION stall handling): called ONCE per sleep
+        boundary. Measures the active quest's criteria leaf values against the typed stats dict
+        (glue-measured — the same _dig adjudication uses, never self-report) and compares them to
+        the values measured at the LAST sleep. Zero movement → the stall counter advances; any
+        movement → it resets. At QUEST_STALL_SLEEPS consecutive stalled sleeps the quest closes
+        FAILED — the creature is demonstrably not moving this needle, and holding the line frozen
+        just starves the quest line. Returns the failure-lite episode on an abandon, else None."""
+        q = self.store.active()
+        if q is None or stats is None:
+            return None
+        probe = {p: _dig(stats, p) for p in criteria_paths(q.success_criteria.to_dict())}
+        if q.stall_probe is not None and probe == q.stall_probe:
+            q.stall_sleeps += 1
+        else:
+            q.stall_sleeps = 0
+            q.stall_probe = probe
+        if q.stall_sleeps >= QUEST_STALL_SLEEPS:
+            self._close(q, FAILED,
+                        outcome=f"abandoned: zero criterion movement across "
+                                f"{q.stall_sleeps} consecutive sleeps")
+            return self._failure_lite_episode(q, fail_kind="quest_abandoned",
+                                              summary=f"quest abandoned stalled: {q.directive}")
+        self._persist(q)
+        return None
+
+    def _persist(self, quest: "Quest") -> None:
+        """Write a mutated (still-live) quest back to the store — the non-closing sibling of
+        _close, for bookkeeping fields like the stall counters."""
         quests = self.store.load()
         for i, q in enumerate(quests):
             if q.id == quest.id:
@@ -509,7 +547,14 @@ class System:
                 break
         self.store.save(quests)
 
-    def _failure_lite_episode(self, quest: "Quest") -> dict:
+    def _close(self, quest: "Quest", state: str, *, outcome: str) -> None:
+        quest.state = state
+        quest.closed_ts = _now()
+        quest.outcome = outcome
+        self._persist(quest)
+
+    def _failure_lite_episode(self, quest: "Quest", *, fail_kind: str = "quest_expired",
+                              summary: str = "") -> dict:
         """An EPISODE-SHAPED failure-lite record (§7: a failed/ignored quest becomes an episode).
         This engine RETURNS it; it does NOT write episodes itself (episodes.py owns that store).
         Shape mirrors episodes.py's {situation→action→outcome→fix} so the caller can hand it
@@ -520,9 +565,9 @@ class System:
             "step": quest.directive,
             "tool": "quest",
             "sig": quest.id,
-            "fail_kind": "quest_expired",
+            "fail_kind": fail_kind,
             "success": False,
-            "summary": f"quest expired unmet: {quest.directive}",
+            "summary": summary or f"quest expired unmet: {quest.directive}",
             "tier": quest.tier,
             "ts": _now(),
         }

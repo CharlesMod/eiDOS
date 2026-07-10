@@ -560,10 +560,10 @@ def _curiosity_post_tick(ctx):
 #
 # Registry note (1.1): run_pre_tick is invoked here (behind the salience flag — the gate is its
 # only registrant, so single execution is preserved); run_on_sleep runs inside the sleep engine's
-# OrganSleepHooksJob (behind the sleep flag). run_post_tick stays UN-invoked: the goal-tension and
-# curiosity hooks 1.1 registered are verbatim copies of inline blocks that still run in the tick
-# body, so invoking the phase would double-run both organs — the inline dispatch stays
-# authoritative until a dedicated (behavior-touching) refactor retires it.
+# OrganSleepHooksJob (behind the sleep flag). run_post_tick is invoked in the tick body (the
+# deferred seam, closed): the old inline goal-tension/curiosity blocks are retired and the
+# registry's hooks are the ONE dispatch — the loop packs their inputs into a per-tick ctx and
+# curiosity's intrinsic bonus rides that ctx to the (non-migrated) reward learner.
 # ================================================================================================
 _PILLARS_WIRED_FLAGS = (
     "pillars_memory_engram_enabled",     # 2.1 engram economy (consolidator for the sleep jobs)
@@ -1156,6 +1156,8 @@ class _Pillars:
                             if reward.get("kind") == _quests.REWARD_XP
                             else f"REWARD {_quests._reward_str(reward)}")
                     text = f"[SYSTEM] QUEST PASSED — {paid}."
+                elif r.get("abandoned"):
+                    text = "[SYSTEM] QUEST FAILED — STALLED TOO LONG, RELEASED. NOTHING PAID."
                 else:
                     text = "[SYSTEM] QUEST EXPIRED — NOTHING PAID."
                 append_observation(self.config, {"tick": tick, "tool": "system_window",
@@ -1386,6 +1388,14 @@ class _Pillars:
                         if ep is not None:
                             self._on_quest_closed({"expired": True, "episode": ep,
                                                    "quest": active}, persona, tick=tick)
+                        else:
+                            # K-sleep abandon (TOOL_PROGRESSION stall handling): a quest whose
+                            # criteria haven't moved across QUEST_STALL_SLEEPS sleeps closes
+                            # FAILED, unfreezing the quest line for a smaller re-attack.
+                            ep = self.quests.abandon_if_stalled(self._quest_stats(persona))
+                            if ep is not None:
+                                self._on_quest_closed({"abandoned": True, "episode": ep,
+                                                       "quest": active}, persona, tick=tick)
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars quest expiry failed: %s", e)
         # DREAM vs NAP — the body decides, never a clock. This window is a NAP only when real
@@ -2513,6 +2523,7 @@ def run_loop(config: Config, persona=None, wal=None):
         #     structural anti-rabbit-hole: the harness moves focus, the model doesn't keep grinding. ---
         _gate = {}
         _park_at = None
+        _obj = None   # pre-bound: the post-tick ctx below references it even if this gate fails
         try:
             import objectives as _obj
             # DMN temperament feeds the gate's park threshold: a persistent creature grinds a little
@@ -2565,22 +2576,19 @@ def run_loop(config: Config, persona=None, wal=None):
             except Exception as _te:  # noqa: BLE001
                 logger.warning("temperament update failed: %s", _te)
 
-        # --- Goal-tension drive (Ventral Striatum): an OPEN active objective with no progress this tick
-        #     charges the incompletion/regret pressure (a frustrated one harder); progress discharges it.
-        #     Past threshold it raises a bounded arousal floor — the itch that keeps the creature awake
-        #     and acting while work remains, instead of drowsing. Creature mode has no backlog → no
-        #     tension (idle novelty is curiosity's job). Initiative temperament scales how hard it bites. ---
-        if nervous_goaltension is not None:
-            try:
-                _active = _gate.get("active")
-                _open = bool(_active)
-                _frac = (float(_active.get("frustration", 0)) / max(1, (_park_at or _obj.FRUST_PARK))
-                         if _active else 0.0)
-                _init = nervous_temperament.initiative if nervous_temperament is not None else 0.5
-                nervous_goaltension.observe(made_progress=_made_progress, open_objective=_open,
-                                            frustration_frac=_frac, initiative=_init)
-            except Exception as _gte:  # noqa: BLE001
-                logger.warning("goal-tension update failed: %s", _gte)
+        # --- Post-tick organ phase (1.1 — the run_post_tick seam, closed): the goal-tension and
+        #     curiosity hooks the registry holds ARE the old inline blocks; the loop packs their
+        #     inputs into one ctx and dispatches ONCE through the registry (guarded per-hook, I5).
+        #     Goal-tension fires before curiosity (registration order = the old call order), and
+        #     curiosity writes ctx.intrinsic for the (non-migrated) learner to consume below —
+        #     the value flows exactly as it did inline. ---
+        _post_ctx = types.SimpleNamespace(
+            gate=_gate, park_at=_park_at, obj=_obj, temperament=nervous_temperament,
+            goaltension=nervous_goaltension, made_progress=_made_progress,
+            worldmodel=nervous_worldmodel, wm_prev_sit=_wm_prev_sit, wm_prev_act=_wm_prev_act,
+            tick_situation=tick_situation, curiosity=nervous_curiosity, intrinsic=0.0)
+        if organ_registry is not None:
+            organ_registry.run_post_tick(_post_ctx)
 
         # --- Reward learning (the dopaminergic keystone): learn from THIS tick's outcome — compute the
         #     reward (success + real progress + how the felt body changed − strain), update the value
@@ -2588,17 +2596,13 @@ def run_loop(config: Config, persona=None, wal=None):
         #     the felt body + mood itself. Sleep replays the tagged experiences into lessons. Guarded. ---
         if nervous_learner is not None:
             try:
-                # world-model: how much did arriving HERE teach the model — LEARNING PROGRESS, not raw
-                # surprise, so chaos/noise can't drive it (Loop A). Curiosity turns progress into a small
-                # intrinsic-reward bonus + restlessness. (Pre-pivot this also FED the metabolism; post-pivot
-                # food = literal battery power, so learning no longer recharges energy — only curiosity.)
-                _intrinsic = 0.0
+                # world-model + curiosity ran in the post-tick organ phase above (the curiosity hook:
+                # LEARNING PROGRESS, not raw surprise, so chaos/noise can't drive it — Loop A); it
+                # wrote the intrinsic-reward bonus onto the ctx for this learner to consume, exactly
+                # the value the old inline block computed here. (Pre-pivot this also FED the
+                # metabolism; post-pivot food = literal battery power — only curiosity pays.)
+                _intrinsic = float(getattr(_post_ctx, "intrinsic", 0.0) or 0.0)
                 _act_readable = tick_action_label or tick_tool_name or str(_act_sig)
-                if nervous_worldmodel is not None and _wm_prev_sit is not None:
-                    nervous_worldmodel.observe(_wm_prev_sit, _wm_prev_act, tick_situation)
-                    _progress = float(getattr(nervous_worldmodel, "last_progress", 0.0) or 0.0)
-                    if nervous_curiosity is not None:
-                        _intrinsic = nervous_curiosity.observe(_progress)
                 nervous_learner.observe(situation=tick_situation, action=_act_readable,
                                         success=tick_tool_success, made_progress=_made_progress,
                                         strain=_strain_bump, intrinsic=_intrinsic, tick=tick_number)
