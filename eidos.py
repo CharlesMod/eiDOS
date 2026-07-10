@@ -643,6 +643,8 @@ class _Pillars:
         self.organ_registry = organ_registry
         self.curiosity = curiosity
         self.learner = learner
+        self.temperament = None      # DMN Temperament — set by run_loop after construction so the
+                                     # sleep calibration job can apply its bounded caution step
         self.manager = None          # 2.2 MemoryManager
         self.bets = None             # 2.3 BetLedger
         self.news = None             # 4.4 NewsQueue
@@ -1408,7 +1410,8 @@ class _Pillars:
             cons = self.manager.consolidator if self.manager is not None else self._consolidator()
             ctx = SleepContext(config=c, consolidator=cons, neuromod=self.neuromod,
                                organ_registry=self.organ_registry, llm=self._live_llm(),
-                               observations=list(observations or []))
+                               observations=list(observations or []),
+                               temperament=self.temperament)
             report = run_sleep(ctx, clear_adenosine=nap)   # a dream does NOT rest the body (2.4)
             self._aden_mark = time.monotonic()   # wake-time accounting restarts at the boundary
         except Exception as e:  # noqa: BLE001
@@ -1804,6 +1807,7 @@ def run_loop(config: Config, persona=None, wal=None):
             pillars = _Pillars(config, bus=nervous_bus, neuromod=nervous_neuromod,
                                organ_registry=organ_registry, curiosity=nervous_curiosity,
                                learner=nervous_learner)
+            pillars.temperament = nervous_temperament
             print(f"{pfx} pillars wiring up — {pillars.describe()}")
         except Exception as _e:  # noqa: BLE001 - the hub must never break boot (I5)
             print(f"{pfx} pillars wiring init failed (continuing dark): {_e}")

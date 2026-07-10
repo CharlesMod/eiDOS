@@ -105,7 +105,8 @@ class TestEngineOrderAndGuard:
     def test_default_engine_reads_like_a_digestive_tract(self):
         names = [j.name for j in default_sleep_engine().jobs]
         assert names == ["dedup_merge", "strength_decay_prune", "distillation",
-                         "backup_snapshot", "telemetry_rederive", "organ_on_sleep"]
+                         "backup_snapshot", "telemetry_rederive", "skill_retire",
+                         "calibration", "organ_on_sleep"]
 
     def test_jobs_satisfy_the_protocol(self):
         for job in default_sleep_engine().jobs:

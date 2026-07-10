@@ -131,6 +131,16 @@ DISTILL_MAX_FACTS = 32             # declared: bounded distillation output per s
 TELEMETRY_MAX_STEPS = 64           # declared: telemetry re-derivation is bounded work (§2.4 "bounded
                                    # steps") — at most this many declared-derivable constants recomputed
                                    # per sleep, so the job can never run unbounded inside the window.
+CALIBRATION_MIN_CLOSED = 3         # declared: closed claim-bearing bets required before calibration may
+                                   # move disposition — a single bet's Brier is noise, not evidence, and
+                                   # temperament must never swing on one settled wager.
+CALIBRATION_BRIER_NEUTRAL = 0.25   # declared: a coin flip's worth of squared error (expectations.py's
+                                   # own yardstick) — at/below this the creature is calibrated ENOUGH
+                                   # and sleep applies no caution pressure; only genuinely poor
+                                   # calibration (chronic over-confidence) pushes caution up.
+CALIBRATION_CAUTION_STEP_MAX = 0.05  # declared: the per-sleep bound on the caution nudge (pitfall #3:
+                                   # clamp the step — one bad night must not ratchet disposition; the
+                                   # temperament springs relax it back as calibration recovers).
 
 
 # --- The job protocol ----------------------------------------------------------------------------
@@ -158,6 +168,8 @@ class SleepContext:
     `llm`            — a callable (messages, *, grammar=None) -> str for grammar-constrained distillation.
                        Optional: with no llm the distillation job is a clean no-op (no silent drops).
     `observations`   — the raw material to distill (list of dicts, compaction's shape), optional.
+    `temperament`    — the DMN Temperament, so calibration can apply its bounded caution step. Optional:
+                       with none the calibration job reports and moves nothing.
     `scratch`        — a free dict jobs may stash cross-job state in (unused by the built-ins today)."""
     config: Any
     consolidator: Any = None
@@ -166,6 +178,7 @@ class SleepContext:
     organ_registry: Any = None
     llm: Optional[Callable[..., str]] = None
     observations: list = field(default_factory=list)
+    temperament: Any = None
     scratch: dict = field(default_factory=dict)
 
 
@@ -521,6 +534,72 @@ class TelemetryRederiveJob:
         return {"rederived": len(derived), "names": sorted(derived)}
 
 
+class SkillRetireJob:
+    """The skill half of §N-3's job "S": archive skills whose last use is older than the declared
+    retirement window (skills.retire_unused_skills — flag-gated on the skill economy internally,
+    idempotent, recoverable via rollback_skill). Sleep is the right beat for it: retirement is
+    forgetting applied to the procedural store, and it belongs in the same offline pass that decays
+    engrams. Re-SCORING is not faked here — trust promotion/demotion already settles live at each
+    invocation (skills._record_invocation); this job only runs the time-based half."""
+    name = "skill_retire"
+    priority = 60
+
+    def run(self, ctx: "SleepContext") -> dict:
+        try:
+            import skills as _skills
+        except Exception as e:  # noqa: BLE001
+            return {"skipped": f"skills unavailable: {e}"}
+        retired = _skills.retire_unused_skills(ctx.config)
+        return {"retired": len(retired), "names": sorted(retired)}
+
+
+class CalibrationJob:
+    """The Brier→temperament seam expectations.py exposes (§M-4: calibration → caution): score the
+    creature's closed claim-bearing bets per domain, persist the calibration book for the dashboard,
+    and — when the evidence says chronic mis-calibration — apply ONE bounded caution step. The
+    temperament springs (4.3) relax it back toward the congenital baseline as calibration recovers,
+    so this can pressure but never ratchet (pitfall #3)."""
+    name = "calibration"
+    priority = 65
+
+    def __init__(self, *, min_closed: int = CALIBRATION_MIN_CLOSED,
+                 brier_neutral: float = CALIBRATION_BRIER_NEUTRAL,
+                 step_max: float = CALIBRATION_CAUTION_STEP_MAX):
+        self.min_closed = int(min_closed)
+        self.brier_neutral = float(brier_neutral)
+        self.step_max = float(step_max)
+
+    def run(self, ctx: "SleepContext") -> dict:
+        if not getattr(ctx.config, "pillars_expectations_enabled", False):
+            return {"skipped": "expectations dark"}
+        from expectations import brier_calibration_by_domain
+        cal = brier_calibration_by_domain(ctx.config)
+        # Persist the calibration book (dashboard/dossier visibility), whether or not caution moves.
+        try:
+            out = ctx.config.state_dir
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "calibration.json").write_text(
+                json.dumps(cal, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as e:
+            logger.warning("calibration book write failed: %s", e)
+        n = sum(d.get("n", 0) for d in cal.values())
+        if n == 0:
+            return {"domains": 0, "closed": 0, "caution_step": 0.0}
+        # Exposure-weighted mean Brier: a domain with many closed bets carries its weight.
+        brier = sum(d["brier"] * d["n"] for d in cal.values()) / n
+        step = 0.0
+        if (n >= self.min_closed and brier > self.brier_neutral
+                and ctx.temperament is not None):
+            # Excess mis-calibration in [0,1] scales the step, clamped at the declared bound.
+            excess = (brier - self.brier_neutral) / (1.0 - self.brier_neutral)
+            step = self.step_max * max(0.0, min(1.0, excess))
+            t = ctx.temperament
+            t.caution = t._toward(t.caution, 1.0, step)
+            t.save()
+        return {"domains": len(cal), "closed": n, "brier": round(brier, 4),
+                "caution_step": round(step, 4)}
+
+
 class OrganSleepHooksJob:
     """Run every organ's registered `on_sleep` hook (the 1.1 OrganRegistry), LAST, so the organs see the
     settled post-consolidation state. The registry already guards each hook (I5); this job wraps the
@@ -542,13 +621,16 @@ def default_sleep_engine(*, decay: float = STRENGTH_DECAY_PER_SLEEP,
                          confidence_cap: float = DREAMED_CONFIDENCE_CAP,
                          telemetry_derivers: Optional[list] = None) -> SleepEngine:
     """The stock digestive tract: dedup/merge → decay+prune (SHY) → distillation → backup → telemetry
-    → organ on_sleep hooks. Jobs are priority-ordered inside the engine; this just wires the defaults."""
+    → skill retirement → calibration → organ on_sleep hooks. Jobs are priority-ordered inside the
+    engine; this just wires the defaults."""
     return SleepEngine([
         DedupMergeJob(),
         StrengthDecayPruneJob(decay=decay, budget=budget),
         DistillationJob(confidence_cap=confidence_cap),
         BackupSnapshotJob(),
         TelemetryRederiveJob(telemetry_derivers or []),
+        SkillRetireJob(),
+        CalibrationJob(),
         OrganSleepHooksJob(),
     ])
 
