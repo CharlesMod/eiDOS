@@ -71,6 +71,15 @@ journalctl -u eidos-dashboard.service -n 100 --no-pager
 scripts/fresh_slate.sh
 ```
 
+## The pi coding agent (the delegate / workshop limb)
+- **Installed 2026-07-10:** `/usr/bin/pi` (`@earendil-works/pi-coding-agent`, npm -g, Node 22 from
+  NodeSource). The delegate spawns it detached; result returns tagged `[↩ delegate N]`.
+- **Provider:** `~/.pi/agent/models.json` defines the `house` provider → llama-swap
+  `http://127.0.0.1:8080/v1` (OpenAI-compatible), models `gemma4-12b` (default) and `qwen27b`.
+  Telemetry off in `~/.pi/agent/settings.json`.
+- Config: `[delegate]` in config.toml (`pi_provider = "house"`, `pi_model = "gemma4-12b"`,
+  `pi_path = ""` → PATH). Verified end-to-end: tool_delegate → pi → gemma → runnable artifact.
+
 ## Gotchas that will bite you
 - **`Restart=always`**: `kill`/`taskkill`/`pkill` → systemd relaunches in seconds. Use `systemctl stop`.
 - **`pgrep -f "eidos.py --config"` matches your own shell** (the pattern is in your command line) — it

@@ -165,16 +165,16 @@ embedding_model_dir = "models/all-MiniLM-L6-v2"
 # result returns tagged [↩ delegate N]). Brain = same house-ai model, own 32k context.
 enabled = true
 timeout_s = 600
-# Extra roots the delegate may use as cwd. The Kairos repo itself is HARD-DENIED in code
+# Extra roots the delegate may use as cwd. The eiDOS repo itself is HARD-DENIED in code
 # regardless of this list (only the workspace/delegate sandbox inside it is allowed).
-allowed_dirs = ["C:/Users/cmod/llm"]
+allowed_dirs = []
 max_sessions = 12
-# Absolute path so it resolves under the nssm services (LocalSystem has no user PATH).
-pi_path = "C:\\Users\\cmod\\AppData\\Local\\pi-node\\current\\pi.cmd"
-# Route pi through the :8088 monitor tap so delegate tokens show on the :9100 dashboard,
-# same as the mind. Set to "house" for a direct :8081 connection.
-pi_provider = "house-tap"
-pi_model = "house-ai"
+# '' resolves `pi` from PATH (/usr/bin/pi on Sprinter — npm -g @earendil-works/pi-coding-agent).
+pi_path = ""
+# The "house" provider lives in ~/.pi/agent/models.json → llama-swap (:8080, OpenAI-compatible);
+# gemma4-12b is the resident house mind, qwen27b available by name for heavier reasoning.
+pi_provider = "house"
+pi_model = "gemma4-12b"
 
 [ide]
 # Browser mini-IDE over the pi coding agent (EidosCodeIDE service, :8100). Each

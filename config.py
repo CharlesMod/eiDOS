@@ -278,8 +278,8 @@ class Config:
     delegate_allowed_dirs: List[str] = dataclasses.field(default_factory=list)  # extra cwd roots
     delegate_max_sessions: int = 12            # retained job sandboxes (oldest pruned at dispatch)
     delegate_pi_path: str = ""                 # '' = resolve 'pi' from PATH
-    delegate_pi_provider: str = "house"        # pi provider name ("house-tap" routes via :8088 monitor)
-    delegate_pi_model: str = "house-ai"
+    delegate_pi_provider: str = "house"        # pi provider name (~/.pi/agent/models.json → llama-swap :8080)
+    delegate_pi_model: str = "gemma4-12b"
 
     # --- Code IDE (browser GUI over the pi coding agent — interactive pi --mode rpc) ---
     ide_enabled: bool = True

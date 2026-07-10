@@ -32,18 +32,23 @@ from tools import (
 
 REPO_ROOT = Path(__file__).resolve().parent
 
-HOUSE_RULES = """You are a delegated worker for eiDOS, the autonomous house AI on this machine.
+_HOUSE_RULES_COMMON = """You are a delegated worker for eiDOS, the autonomous house AI on this machine.
 Hard rules, in addition to the task you were given:
-- NEVER create, modify, or delete anything under C:/Users/cmod/llm/Kairos except inside
-  your own working directory (a sandbox under .../Kairos/workspace/delegate/).
-- No `git push`. No stopping/restarting/installing services (nssm, Stop-Service,
-  Restart-Service, taskkill against services).
-- Software installs are USER-SCOPE ONLY: pip inside a venv in your cwd, `winget install
-  --scope user`, or portable binaries dropped into your cwd. Never system-wide installs.
-- This is Windows; prefer PowerShell-compatible commands and set PYTHONUTF8=1 for Python.
+- NEVER create, modify, or delete anything under the eiDOS repo ({repo}) except inside
+  your own working directory (a sandbox under its workspace/delegate/).
+- No `git push`. No stopping/restarting/installing system services.
+- Software installs are USER-SCOPE ONLY: pip inside a venv in your cwd, or portable
+  binaries dropped into your cwd. Never system-wide installs, never sudo.
+- {platform_line}
 - End with a concise final summary: what you did, every file you changed, and anything
   you could not verify.
 """
+
+_PLATFORM_LINE = ("This is Windows; prefer PowerShell-compatible commands and set PYTHONUTF8=1 "
+                  "for Python." if os.name == "nt" else
+                  "This is Linux; plain bash. Set PYTHONUTF8=1 for Python.")
+
+HOUSE_RULES = _HOUSE_RULES_COMMON.format(repo=REPO_ROOT, platform_line=_PLATFORM_LINE)
 
 # Appended only in creature mode: the delegate is building software the creature itself will run.
 CREATURE_BUILDER_RULES = """
@@ -51,7 +56,7 @@ CREATURE_BUILDER_RULES = """
 The creature lives in this home and will SEE and RUN what you make — this is its workshop. So:
 - Leave a clear, RUNNABLE result in your working directory: one obvious entry point (e.g. run.sh or
   a single named script) and a one-line note in a README of exactly how to run it.
-- Keep it small and self-contained. The creature has a plain Linux shell (WSL) and runs things with
+- Keep it small and self-contained. The creature has a plain Linux shell and runs things with
   simple commands; prefer a single script or a venv over sprawling structure.
 - Everything outside your working directory is the creature's own home — do not touch it.
 """
