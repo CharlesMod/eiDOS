@@ -52,13 +52,29 @@ LADDER_POINTS = [
     ("newborn", []),
     ("mid", ["memory", "skillcraft"]),
     ("grown", ["memory", "skillcraft", "foresight", "senses", "resolve", "workshop"]),
+    ("commissioned", ["memory", "skillcraft", "foresight", "senses", "resolve", "workshop",
+                      "commission"]),
 ]
 
 
 @pytest.mark.parametrize("label,extra_units", LADDER_POINTS)
 def test_three_surfaces_tell_one_story(tmp_path, label, extra_units):
     cfg = _cfg(tmp_path)
+    if "commission" in extra_units:
+        # The commission verbs are flag-registered builtins (like predict): the fully-grown point
+        # exercises them VISIBLE; the registry is restored in the finally so no test inherits them.
+        cfg.pillars_commission_enabled = True
+        tools_mod.register_commission_tools(cfg)
     _grant_upto(cfg, extra_units)
+    try:
+        _assert_one_story(cfg, label)
+    finally:
+        if "commission" in extra_units:
+            tools_mod.TOOLS.pop("commission_add", None)
+            tools_mod.TOOLS.pop("commission_done", None)
+
+
+def _assert_one_story(cfg, label):
 
     visible = set(tools_mod.visible_tools(cfg).keys())
     granted_units = [u.id for u in unlocks.UNITS if set(u.tools) <= visible]

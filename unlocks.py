@@ -73,6 +73,11 @@ SENSES_SLEEPS_REQUIRED = 2     # ≥2 sleeps — quest-independent so a quest-st
                                # grows senses, but never before the mind has digested twice
 SERVICE_VOICE = "voice"        # the reachability-probe name for the speech/vision organ (I8);
                                # voice :8098 is down on Sprinter today — senses hold PENDING there
+COMMISSION_QUESTS_REQUIRED = 3  # declared (COMMISSION_PLAN.md): standing orders bind a creature
+                                # that has closed the whole genesis line — proven it can be issued
+                                # work, do it, and be adjudicated
+COMMISSION_SLEEPS_REQUIRED = 5  # ≥5 sleeps — a long-horizon order needs a mind that has digested
+                                # more than the senses floor (2); maturity, not eagerness
 
 # Announcement registers — who is speaking when a grant is rendered.
 REGISTER_BODY = "body"         # a maturation, felt (like the sleep notice) — never a System payment
@@ -175,6 +180,22 @@ UNITS: tuple[Unit, ...] = (
         announce="[SYSTEM] PAID: delegate. Capacity 1.",
         register=REGISTER_SYSTEM,
     ),
+    # U7 — the commission (COMMISSION_PLAN.md): standing orders. A MILESTONE grant — a creature
+    # that has closed the genesis line and digested enough sleeps is mature enough to carry a
+    # long-horizon order between the operator's check-ins. Dark unless the commission organ's
+    # flag registers the verbs (register_commission_tools).
+    Unit(
+        id="commission",
+        tools=("commission_add", "commission_done"),
+        criterion=Criterion(all_of=[
+            Criterion(path="quests.passed", op=">=", value=COMMISSION_QUESTS_REQUIRED),
+            Criterion(path="sleeps.total", op=">=", value=COMMISSION_SLEEPS_REQUIRED),
+        ]),
+        requires_service=None,
+        announce="[SYSTEM] GRANTED: commission_add, commission_done. "
+                 "Standing orders may now bind you.",
+        register=REGISTER_SYSTEM,
+    ),
 )
 
 UNIT_IDS: tuple[str, ...] = tuple(u.id for u in UNITS)
@@ -190,6 +211,7 @@ EVIDENCE_KEYS: dict[str, str] = {
     "spoke_or_saw": "senses",      # a past successful speak/vision            → U4
     "objectives": "resolve",       # an objectives store with entries          → U5
     "delegate_jobs": "workshop",   # delegate jobs on record                   → U6
+    "commission_tasks": "commission",  # commission tasks on record            → U7
 }
 _EVIDENCE_BY_UNIT: dict[str, str] = {unit: key for key, unit in EVIDENCE_KEYS.items()}
 

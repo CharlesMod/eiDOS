@@ -593,6 +593,49 @@ def test_post_tick_phase_dispatches_hooks_once_and_carries_intrinsic(tmp_path):
     assert ctx.intrinsic == 0.42              # curiosity's bonus rode the ctx to the learner
 
 
+def test_commission_settles_at_the_after_outcome_beat(tmp_path):
+    """COMMISSION_PLAN.md wired: an operator verdict and a measured claim both settle inside
+    after_outcome — the confirmed task pays XP through the gate-held award path, the System's
+    window states the settlement on-screen, and a rejection reopens with the feedback."""
+    cfg = _mk_config(tmp_path, pillars_commission_enabled=True)
+    hub = eidos._Pillars(cfg)
+    assert hub.commission is not None
+    import commission as _cm
+    import tools as _tools
+    try:
+        # Task 1: operator-judged; task 2: claim-bearing (exists:).
+        hub.commission.add("make the menu feel right")
+        hub.commission.add("ship the entry point", claim="exists:game_run.sh")
+        hub.commission.claim_done(1, evidence="menu.py")
+        _cm.write_verdict(cfg, task_id=1, verdict="confirm", note="plays great")
+        root = _tools._creature_root(cfg)
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "game_run.sh").write_text("#!/bin/sh\n")
+        persona = {"level": 1, "xp": 0}
+        hub.after_outcome(tick=7, tool="bash", args={}, success=True, fail_kind="",
+                          situation="", summary="", event_text="", persona=persona)
+        states = {t.id: t.state for t in hub.commission.load()}
+        assert states == {1: "confirmed", 2: "confirmed"}
+        assert persona["xp"] == 2 * _cm.COMMISSION_XP_CONFIRMED
+        from memory import read_recent_observations
+        window = " ".join(str(o.get("output", "")) for o in
+                          read_recent_observations(cfg, max_chars=4000, max_count=20))
+        assert "COMMISSION TASK #1 CONFIRMED" in window and "PAID" in window
+        # A rejection reopens with the operator's words and pays nothing.
+        hub.commission.add("enemy ai")
+        hub.commission.claim_done(3)
+        _cm.write_verdict(cfg, task_id=3, verdict="reject", note="enemies walk through walls")
+        xp_before = persona["xp"]
+        hub.after_outcome(tick=8, tool="bash", args={}, success=True, fail_kind="",
+                          situation="", summary="", event_text="", persona=persona)
+        t3 = next(t for t in hub.commission.load() if t.id == 3)
+        assert t3.state == "open" and t3.verdict_note == "enemies walk through walls"
+        assert persona["xp"] == xp_before
+    finally:
+        _tools.TOOLS.pop("commission_add", None)     # process-global registry hygiene
+        _tools.TOOLS.pop("commission_done", None)
+
+
 def test_administrator_event_driven_with_mock_seam(tmp_path):
     """5.2 wired: a wake event drives one check-in through the INJECTED mock mind (the test seam);
     a non-wake event drives none; and without injection the lazy mind stays None under mock mode

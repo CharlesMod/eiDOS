@@ -580,6 +580,8 @@ _PILLARS_WIRED_FLAGS = (
     "pillars_tool_unlocks_enabled",      # 5.x TOOL_PROGRESSION ladder: unit grants at the quest
                                          #     seams, milestone adjudication + I8 probe, the felt
                                          #     moment, stage-expressed alleles + phenotype artifact
+    "pillars_commission_enabled",        # COMMISSION_PLAN.md: standing orders — verbs registered,
+                                         #     verdicts/claims settled at the after_outcome beat
 )
 
 
@@ -645,6 +647,8 @@ class _Pillars:
         self.learner = learner
         self.temperament = None      # DMN Temperament — set by run_loop after construction so the
                                      # sleep calibration job can apply its bounded caution step
+        self.metabolism = None       # Metabolism — set by run_loop so a confirmed commission task
+                                     # can feed the reserve (work earns food)
         self.manager = None          # 2.2 MemoryManager
         self.bets = None             # 2.3 BetLedger
         self.news = None             # 4.4 NewsQueue
@@ -698,6 +702,20 @@ class _Pillars:
                 register_predict_tool(c)
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars predict tool registration failed: %s", e)
+
+        # The Commission (COMMISSION_PLAN.md) — the standing-order organ: verbs join the registry
+        # (register_commission_tools is itself flag-gated) and the engine settles verdicts/claims
+        # at the after_outcome beat.
+        self.commission = None
+        if getattr(c, "pillars_commission_enabled", False):
+            try:
+                from tools import register_commission_tools
+                register_commission_tools(c)
+                from commission import Commission
+                self.commission = Commission(c)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars commission init failed: %s", e)
+                self.commission = None
 
         # 1.3 — the salience gate registers with the 1.1 organ registry (pre_tick intake)
         if getattr(c, "pillars_salience_gate_enabled", False) and bus is not None:
@@ -957,6 +975,18 @@ class _Pillars:
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars news ingest failed: %s", e)
 
+        # Commission (COMMISSION_PLAN.md): settle at the same beat quests adjudicate — pending
+        # operator verdicts first (the chat channel), then any checkable claims measured against
+        # the SAME typed stats dict. Payouts go through the existing single writers.
+        if self.commission is not None:
+            try:
+                settlements = self.commission.consume_verdicts()
+                settlements += self.commission.settle_claims(self._quest_stats(persona))
+                for s in settlements:
+                    self._commission_settle(s, persona, tick=tick)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pillars commission settle failed: %s", e)
+
         # 5.1 — adjudicate the active quest against typed stats. Tier standing moves ONLY on
         # quest ADJUDICATIONS (inside _on_quest_closed) — never on a tick's tool-call success.
         # (The old per-tool-call record_tier_outcome here suspended tier 1 after any 5 clumsy
@@ -1122,6 +1152,44 @@ class _Pillars:
         except Exception as e:  # noqa: BLE001
             logger.warning("pillars cadence persist failed: %s", e)
 
+    def _commission_settle(self, s, persona, *, tick: int = 0) -> None:
+        """One commission settlement lands as lived experience: the System's window states what
+        settled (on-screen, always), a CONFIRMED task pays XP through the gate-held award path and
+        feeds the metabolism reserve (work earns food), and the news queue carries it to Charlie's
+        next check-in. A REJECTED task pays nothing — its note already rode the task back to open."""
+        t = s.task
+        if s.outcome == "confirmed":
+            text = f"[SYSTEM] COMMISSION TASK #{t.id} CONFIRMED — {s.note}. PAID {s.xp} XP."
+        elif s.outcome == "rejected":
+            text = f"[SYSTEM] COMMISSION TASK #{t.id} RETURNED — {s.note}."
+        else:
+            text = f"[SYSTEM] COMMISSION TASK #{t.id} WITHDRAWN — {s.note}."
+        try:
+            append_observation(self.config, {"tick": tick, "tool": "system_window",
+                                             "success": s.outcome == "confirmed",
+                                             "output": text})
+        except Exception as e:  # noqa: BLE001
+            logger.warning("commission settlement notice failed: %s", e)
+        if s.xp > 0:
+            try:
+                import persona as _persona
+                _persona.award_xp(persona, int(s.xp), f"commission:{t.id}", config=self.config)
+                _persona.save_persona(self.config.workspace, persona)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("commission XP award failed: %s", e)
+        if s.feed > 0 and self.metabolism is not None:
+            try:
+                self.metabolism.feed(float(s.feed))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("commission feed failed: %s", e)
+        if self.news is not None:
+            try:
+                self.news.ingest({"summary": f"commission task #{t.id} "
+                                             f"{s.outcome}: {t.title}",
+                                  "surprise": 1.0}, "commission")
+            except Exception:  # noqa: BLE001
+                pass
+
     def _on_quest_closed(self, r: dict, persona, *, tick: int = 0) -> None:
         """A quest closed (passed or expired): reset the digestion counter, write the settlement
         into the observation stream (the System pays ON-SCREEN — a lived turn, not bookkeeping),
@@ -1260,6 +1328,11 @@ class _Pillars:
             + int(used.get("see", 0) or 0)
         ev["objectives"] = int(used.get("objective_add", 0) or 0)
         ev["delegate_jobs"] = int(used.get("delegate", 0) or 0)
+        try:
+            ev["commission_tasks"] = (len(self.commission.load())
+                                      if self.commission is not None else 0)
+        except Exception:  # noqa: BLE001
+            ev["commission_tasks"] = 0
         return ev
 
     def _unlock_probe_fn(self):
@@ -1818,6 +1891,7 @@ def run_loop(config: Config, persona=None, wal=None):
                                organ_registry=organ_registry, curiosity=nervous_curiosity,
                                learner=nervous_learner)
             pillars.temperament = nervous_temperament
+            pillars.metabolism = nervous_metabolism
             print(f"{pfx} pillars wiring up — {pillars.describe()}")
         except Exception as _e:  # noqa: BLE001 - the hub must never break boot (I5)
             print(f"{pfx} pillars wiring init failed (continuing dark): {_e}")

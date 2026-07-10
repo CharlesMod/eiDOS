@@ -17,6 +17,7 @@ crash notes, and the source tree via git restore / self-edit apply. Stdlib only 
 import argparse
 import json
 import logging
+import re
 import sys
 import threading
 import time
@@ -764,8 +765,30 @@ def build_status(config: Config) -> dict:
             "tick": wal.get("tick_number", 0),
             "consecutive_failures": wal.get("consecutive_failures", 0),
         },
+        "commission": _commission_status(config),
         "ts": time.time(),
     }
+
+
+def _commission_status(config: Config) -> dict:
+    """The commission at a glance for /api/status (read-only — the eidos engine owns the store).
+    Empty dict when the organ is dark or there is no commission."""
+    if not getattr(config, "pillars_commission_enabled", False):
+        return {}
+    try:
+        import commission as _cm
+        c = _cm.Commission(config)
+        tasks = c.load()
+        live = [t for t in tasks if t.state in ("open", "done_claimed")]
+        return {
+            "brief": bool(_cm.load_brief(config)),
+            "confirmed_total": sum(1 for t in tasks if t.state == "confirmed"),
+            "awaiting": [{"id": t.id, "title": t.title, "evidence": t.evidence}
+                         for t in live if t.state == "done_claimed"],
+            "open": sum(1 for t in live if t.state == "open"),
+        }
+    except Exception:  # noqa: BLE001 — the strip must never kill /api/status
+        return {}
 
 
 def build_ping(config: Config) -> dict:
@@ -1151,6 +1174,15 @@ def _make_handler(config: Config):
                     self._respond(exc.status, "application/json", json.dumps({"error": str(exc)}))
                     return
                 message = payload.message
+                routed = _commission_chat_command(config, message)
+                if routed is not None:
+                    # An operator VERDICT, not a message to the creature: it went to the
+                    # commission verdicts channel; the engine settles it next tick.
+                    self._respond(200 if routed.get("ok") else 400,
+                                  "application/json", json.dumps(routed))
+                    if routed.get("ok"):
+                        control_notify("chat")   # wake eidos — a settlement is waiting
+                    return
                 idir = config.interventions_dir
                 idir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
@@ -2045,6 +2077,37 @@ def _selfedit_probe(config):
         f"{prev[:9]} ({res.get('restored', 0)} files) and restarted you (paused) on the reverted "
         f"code as pid {newpid}. The change is rolled back; review the proposal before retrying.")
     _watchdog_event(config, f"HEALTH-PROBE ROLLBACK of self-edit {pend.get('id')} -> {prev[:9]} ({why})")
+
+
+_COMMISSION_CMD = re.compile(
+    r"^/(?:commission|mission)\s+(done|confirm|reject|drop)\s+#?(\d+)\s*(.*)$",
+    re.IGNORECASE | re.DOTALL)
+
+
+def _commission_chat_command(config, message: str):
+    """Route an operator VERDICT typed into the normal chat box (`/commission done 3 nice work`,
+    `reject`/`drop` likewise; `/mission` is an alias, `done` means confirm). Returns None when the
+    message is ordinary chat (it flows to the creature untouched), else a response dict — the
+    verdict went to the commission channel (commission.write_verdict), which the eidos-side engine
+    settles next tick. The dashboard never touches commission.json itself (single writer)."""
+    text = (message or "").strip()
+    if not text.lower().startswith(("/commission", "/mission")):
+        return None
+    if not getattr(config, "pillars_commission_enabled", False):
+        return {"ok": False, "error": "the commission organ is not enabled"}
+    m = _COMMISSION_CMD.match(text)
+    if not m:
+        return {"ok": False,
+                "error": "usage: /commission done|reject|drop <task-id> [note]"}
+    verb, task_id, note = m.group(1).lower(), int(m.group(2)), m.group(3).strip()
+    try:
+        import commission as _cm
+        _cm.write_verdict(config, task_id=task_id,
+                          verdict={"done": "confirm"}.get(verb, verb), note=note)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "routed": "commission",
+            "echo": f"task #{task_id}: {verb} recorded — settles next tick"}
 
 
 def _hatch_beat(config):

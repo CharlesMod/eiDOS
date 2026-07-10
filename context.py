@@ -933,6 +933,19 @@ def _stable_head_blocks(config: Config, creature: bool) -> list:
     except Exception:  # noqa: BLE001
         pass
 
+    # The Commission (COMMISSION_PLAN.md): Charlie's standing order + the creature's live todo.
+    # §0 leak guard: shown only once the commission unit's verbs exist in the creature's world —
+    # a locked organ is not named, and an uncommissioned creature has no block at all.
+    if (creature and getattr(config, "pillars_commission_enabled", False)
+            and not _tool_locked(config, "commission_add")):
+        try:
+            from commission import Commission
+            block = Commission(config).render_block()
+            if block:
+                head.append("## " + block)
+        except Exception:  # noqa: BLE001 - the commission strip must never break context
+            pass
+
     if not creature:                       # a creature has no mission; the prompt covers its being
         goal = read_goal(config)
         if goal:
@@ -974,6 +987,13 @@ def _stable_head_signature(config: Config, creature: bool) -> str:
         paths.append(config.workspace / "creature.json")
     except Exception:  # noqa: BLE001
         pass
+    if getattr(config, "pillars_commission_enabled", False):
+        # The commission strip re-renders when the operator edits the brief or a task moves.
+        try:
+            paths.append(config.workspace / "commission" / "brief.md")
+            paths.append(config.workspace / "commission" / "commission.json")
+        except Exception:  # noqa: BLE001
+            pass
     try:
         import skills as _sk
         paths.append(_sk._skills_dir(config))      # dir mtime: changes when a skill is added/removed

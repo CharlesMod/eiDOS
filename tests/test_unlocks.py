@@ -34,7 +34,8 @@ from unlocks import (
 _ROOT = Path(__file__).parent.parent
 
 # The canonical ladder (TOOL_PROGRESSION.md) — pinned so a table edit is a conscious act.
-_LADDER = ("body", "memory", "skillcraft", "foresight", "senses", "resolve", "workshop")
+_LADDER = ("body", "memory", "skillcraft", "foresight", "senses", "resolve", "workshop",
+           "commission")
 _NEWBORN = frozenset({"bash", "write_file", "read_file",
                       "note_append", "note_read", "note_list", "note_close", "check_tools"})
 
@@ -201,7 +202,7 @@ class TestAdjudicate:
         cfg = _cfg(tmp_path)
         landed = adjudicate(cfg, _stats(sleeps=99, quests_passed=99),
                             probe=lambda s: True)
-        assert set(landed) == {"memory", "senses"}                 # milestones only
+        assert set(landed) == {"memory", "senses", "commission"}   # milestones only
         for t in ("create_skill", "predict", "objective_add", "delegate"):
             assert t not in granted_tools(cfg)
 

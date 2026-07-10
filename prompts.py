@@ -390,6 +390,14 @@ UNIT_STANZAS: dict[str, str] = {
   Send it back with `delegate {{"continue_job":"clock","task":"make it ..."}}` and it'll tinker
   more. One build at a time.
 """,
+    "commission": """\
+- standing orders — when Charlie leaves you a COMMISSION (it appears in your context), it's
+  long-horizon work you carry between everything else. Break it into tasks with
+  `commission_add {{"title":"...","claim":"exists:<file> (optional)"}}` and, when one is truly
+  finished, `commission_done {{"id":N,"evidence":"what to look at"}}`. Done is a CLAIM — it pays
+  only when a measurement or Charlie confirms it; his rejections come back with feedback, like a
+  coworker's review. Keep your own thinking in `commission_notes.md` in your home.
+""",
 }
 
 

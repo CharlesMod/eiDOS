@@ -184,6 +184,93 @@ class TestOperatorVerdicts:
 
 
 # =================================================================================================
+class TestDashboardChannel:
+    """The operator's side: `/commission done|reject|drop <id> [note]` typed into the normal chat
+    box routes to a verdict file; everything else flows to the creature untouched."""
+
+    def _cfg(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        cfg.pillars_commission_enabled = True
+        return cfg
+
+    def test_plain_chat_is_not_intercepted(self, tmp_path):
+        import dashboard
+        assert dashboard._commission_chat_command(self._cfg(tmp_path),
+                                                  "hey buddy, the game is fun") is None
+
+    def test_done_routes_a_confirm_verdict(self, tmp_path):
+        import dashboard
+        cfg = self._cfg(tmp_path)
+        r = dashboard._commission_chat_command(cfg, "/commission done 3 nice work on the menu")
+        assert r["ok"] and r["routed"] == "commission"
+        files = list(verdicts_dir(cfg).glob("*.json"))
+        assert len(files) == 1
+        v = json.loads(files[0].read_text(encoding="utf-8"))
+        assert v == {"task_id": 3, "verdict": "confirm",
+                     "note": "nice work on the menu", "ts": v["ts"]}
+
+    def test_mission_alias_and_hash_id(self, tmp_path):
+        import dashboard
+        cfg = self._cfg(tmp_path)
+        r = dashboard._commission_chat_command(cfg, "/mission reject #2 enemies clip walls")
+        assert r["ok"]
+        v = json.loads(next(verdicts_dir(cfg).glob("*.json")).read_text(encoding="utf-8"))
+        assert (v["task_id"], v["verdict"], v["note"]) == (2, "reject", "enemies clip walls")
+
+    def test_bad_usage_errors_at_the_operator(self, tmp_path):
+        import dashboard
+        r = dashboard._commission_chat_command(self._cfg(tmp_path), "/commission frobnicate 3")
+        assert not r["ok"] and "usage" in r["error"]
+
+    def test_flag_off_refuses(self, tmp_path):
+        import dashboard
+        cfg = _cfg(tmp_path)
+        cfg.pillars_commission_enabled = False
+        r = dashboard._commission_chat_command(cfg, "/commission done 1")
+        assert not r["ok"]
+
+    def test_status_payload_shape(self, tmp_path):
+        import dashboard
+        cfg = self._cfg(tmp_path)
+        c = Commission(cfg)
+        c.add("a")
+        c.add("b")
+        c.claim_done(2, evidence="look at b.py")
+        s = dashboard._commission_status(cfg)
+        assert s["open"] == 1 and s["confirmed_total"] == 0 and s["brief"] is False
+        assert s["awaiting"] == [{"id": 2, "title": "b", "evidence": "look at b.py"}]
+
+
+class TestUnlockLadder:
+    """U7: the commission unit is a MILESTONE grant — the whole genesis line closed plus real
+    digestion — and its verbs exist only under the flag (register_commission_tools)."""
+
+    def test_milestone_grants_at_maturity(self, tmp_path):
+        import unlocks
+        cfg = _cfg(tmp_path)
+        ripe = {"quests": {"passed": unlocks.COMMISSION_QUESTS_REQUIRED},
+                "sleeps": {"total": unlocks.COMMISSION_SLEEPS_REQUIRED}}
+        green = {"quests": {"passed": unlocks.COMMISSION_QUESTS_REQUIRED - 1},
+                 "sleeps": {"total": unlocks.COMMISSION_SLEEPS_REQUIRED}}
+        u = unlocks.unit("commission")
+        assert u is not None and u.criterion.check(ripe)
+        assert not u.criterion.check(green)
+
+    def test_verbs_register_only_under_the_flag(self, tmp_path):
+        import tools as _tools
+        cfg = _cfg(tmp_path)
+        try:
+            cfg.pillars_commission_enabled = True
+            assert _tools.register_commission_tools(cfg)
+            assert "commission_add" in _tools.TOOLS and "commission_done" in _tools.TOOLS
+            cfg.pillars_commission_enabled = False
+            assert not _tools.register_commission_tools(cfg)
+            assert "commission_add" not in _tools.TOOLS
+        finally:
+            _tools.TOOLS.pop("commission_add", None)
+            _tools.TOOLS.pop("commission_done", None)
+
+
 class TestBriefAndRender:
     def test_brief_is_capped_and_optional(self, tmp_path):
         cfg = _cfg(tmp_path)

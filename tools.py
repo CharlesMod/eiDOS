@@ -435,6 +435,22 @@ class ObjectiveBlockArgs(ObjectiveKeyArgs):
     dead: bool = False
 
 
+class CommissionAddArgs(_ToolArgs):
+    title: str = Field(validation_alias=AliasChoices("title", "task"))
+    detail: str = ""
+    claim: str = Field(default="", validation_alias=AliasChoices("claim", "check"))
+
+    @field_validator("title")
+    @classmethod
+    def _commission_title_not_empty(cls, value: str) -> str:
+        return _present(value, "commission task title")
+
+
+class CommissionDoneArgs(_ToolArgs):
+    id: int = Field(validation_alias=AliasChoices("id", "task_id"))
+    evidence: str = ""
+
+
 class DelegateArgs(_ToolArgs):
     task: Optional[str] = None
     mode: Literal["research", "code"] = "research"
@@ -2391,6 +2407,38 @@ def tool_objective_list(args: dict, config: Config) -> ToolResult:
     return ToolResult(output="\n".join(lines), full_output_path=None, success=True, duration_s=0)
 
 
+def tool_commission_add(args: dict, config: Config) -> ToolResult:
+    """Add a task to the COMMISSION todo — the standing order from Charlie you decompose and work
+    between everything else. Optionally attach a checkable 'claim' (exists:<relpath>,
+    not_exists:<relpath>, or <stat.path> <op> <number>) and the task confirms ITSELF the moment
+    the claim measures true; without one, Charlie judges it when he checks in."""
+    from commission import Commission
+    try:
+        t = Commission(config).add(title=(args.get("title") or args.get("task") or ""),
+                                   detail=args.get("detail") or "",
+                                   claim=args.get("claim") or args.get("check") or "")
+    except ValueError as e:
+        return ToolResult(output=f"Error: {e}", full_output_path=None, success=False, duration_s=0)
+    how = f"self-confirms when `{t.claim}` measures true" if t.claim else "Charlie will judge it"
+    return ToolResult(output=f"Commission task #{t.id} added: '{t.title}' ({how}).",
+                      full_output_path=None, success=True, duration_s=0)
+
+
+def tool_commission_done(args: dict, config: Config) -> ToolResult:
+    """Claim a commission task is DONE. This is a claim, not a payout: the task waits for ground
+    truth — its checkable claim measuring true, or Charlie's verdict at his next check-in. Say in
+    'evidence' what he should look at."""
+    from commission import Commission
+    try:
+        t = Commission(config).claim_done(int(args.get("id") or args.get("task_id") or 0),
+                                          evidence=args.get("evidence") or "")
+    except (ValueError, TypeError) as e:
+        return ToolResult(output=f"Error: {e}", full_output_path=None, success=False, duration_s=0)
+    return ToolResult(output=f"Claimed done: commission task #{t.id} '{t.title}' — awaiting "
+                             "confirmation (a measured claim, or Charlie's check-in).",
+                      full_output_path=None, success=True, duration_s=0)
+
+
 def tool_delegate(args: dict, config: Config) -> ToolResult:
     """HAND OFF a hard multi-step job to your CODING AGENT (a full read/bash/edit/write agent
     running on your own mind, with its own large context). It works in the BACKGROUND for
@@ -2551,6 +2599,22 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
 }
 
 
+def register_commission_tools(config: Config) -> bool:
+    """The Commission (COMMISSION_PLAN.md, DARK by default): register the two commission verbs ONLY
+    when `pillars_commission_enabled` is on. Idempotent; mirrors register_predict_tool — with the
+    flag off the tools are absent from TOOLS, never enter the grammar, and the organ stays dark.
+    Returns True if the verbs are present after the call."""
+    if getattr(config, "pillars_commission_enabled", False):
+        TOOLS.setdefault("commission_add", tool_commission_add)
+        TOOLS.setdefault("commission_done", tool_commission_done)
+        _TOOL_ARG_MODELS.setdefault("commission_add", CommissionAddArgs)
+        _TOOL_ARG_MODELS.setdefault("commission_done", CommissionDoneArgs)
+    else:
+        TOOLS.pop("commission_add", None)
+        TOOLS.pop("commission_done", None)
+    return "commission_add" in TOOLS
+
+
 def register_predict_tool(config: Config) -> bool:
     """Pillars 4.1 (DARK by default): register the grammar-constrained `predict` tool ONLY when
     `pillars_expectations_enabled` is on. Idempotent. Called by the loop wiring once config is loaded;
@@ -2571,8 +2635,9 @@ _BUILTIN_TOOL_NAMES = frozenset(TOOLS)
 
 # Builtins that join TOOLS only AFTER import, behind their own flag — the snapshot above misses
 # them, but they are still PLATFORM tools (lockable units), never a creature's self-authored skill.
-# `predict` registers via register_predict_tool (4.1) and belongs to the foresight unit.
-_FLAG_REGISTERED_BUILTINS = frozenset({"predict"})
+# `predict` registers via register_predict_tool (4.1) and belongs to the foresight unit; the
+# commission verbs register via register_commission_tools and belong to the commission unit.
+_FLAG_REGISTERED_BUILTINS = frozenset({"predict", "commission_add", "commission_done"})
 _EVER_BUILTIN_NAMES = _BUILTIN_TOOL_NAMES | _FLAG_REGISTERED_BUILTINS
 
 # Registry aliases: alias name -> the canonical tool it rides on. An alias exists exactly when its
