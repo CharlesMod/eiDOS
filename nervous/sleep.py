@@ -128,6 +128,12 @@ DREAMED_CONFIDENCE_CAP = 0.4       # declared: pitfall #5 — a distilled ("drea
 DISTILL_MAX_FACTS = 32             # declared: bounded distillation output per sleep — the grammar caps
                                    # the model at this many fact lines so one dream can't flood the store
                                    # (bounded work per sleep, §0).
+DISTILL_MAX_TAGS = 6               # declared: tag-list bound per fact line — an unbounded `tag*` let the
+                                   # sampler loop degenerate tags for hundreds of tokens (2026-07-06
+                                   # console log); a fact needs a handful of recall keys, not a novel.
+DISTILL_TAG_MAX_LEN = 24           # declared: per-tag character cap — same runaway, other axis: without
+                                   # it one "tag" can absorb the whole degenerate emission as a single
+                                   # underscore-glued token. Real tags ("mqtt", "gpu_vram") fit easily.
 TELEMETRY_MAX_STEPS = 64           # declared: telemetry re-derivation is bounded work (§2.4 "bounded
                                    # steps") — at most this many declared-derivable constants recomputed
                                    # per sleep, so the job can never run unbounded inside the window.
@@ -356,8 +362,10 @@ def build_distillation_grammar(*, max_facts: int = DISTILL_MAX_FACTS) -> str:
         f'root ::= "NONE" | line line{{0,{n - 1}}}',
         'line ::= category " [" tags "] : " text "\\n"',
         f"category ::= {cats}",
-        'tags ::= tag ( ", " tag )*',
-        'tag ::= [a-z0-9_]+',
+        # Both tag axes bounded (§0.4 knobs above): a 2026-07-06 dream looped degenerate tags on the
+        # unbounded `tag*` until the line overran and was dropped — the sampler must not have that path.
+        f'tags ::= tag ( ", " tag ){{0,{DISTILL_MAX_TAGS - 1}}}',
+        f'tag ::= [a-z0-9_] [a-z0-9_]{{0,{DISTILL_TAG_MAX_LEN - 1}}}',
         # Fact text: any run of visible characters and spaces up to the newline; no control chars.
         'text ::= [^\\n\\x00-\\x1F] [^\\n\\x00-\\x1F]*',
     ])

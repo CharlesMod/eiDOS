@@ -35,7 +35,7 @@ from nervous.sleep import (
     DedupMergeJob, StrengthDecayPruneJob, DistillationJob, BackupSnapshotJob,
     TelemetryRederiveJob, OrganSleepHooksJob,
     build_distillation_grammar, parse_distillations,
-    DREAMED_CONFIDENCE_CAP, DISTILL_MAX_FACTS,
+    DREAMED_CONFIDENCE_CAP, DISTILL_MAX_FACTS, DISTILL_MAX_TAGS, DISTILL_TAG_MAX_LEN,
 )
 
 
@@ -254,6 +254,19 @@ class TestDistillation:
         assert "line{0,4}" in g                            # at most 5 fact lines per dream
         for cat in ("FACT", "ERROR", "PROCEDURE", "IDENTITY"):
             assert f'"{cat}"' in g
+
+    def test_tag_axes_are_bounded_no_seventh_tag(self):
+        # Regression, 2026-07-06 console log: the unbounded `tag ( ", " tag )*` let a dream loop
+        # degenerate tags for hundreds of tokens until the line overran and was dropped. The grammar
+        # itself must make the runaway unsamplable — both axes bounded, no open-ended repetition.
+        g = build_distillation_grammar()
+        rules = dict(ln.split(" ::= ", 1) for ln in g.splitlines())
+        assert DISTILL_MAX_TAGS == 6                       # the knob this test pins: six tags parse...
+        assert rules["tags"] == 'tag ( ", " tag ){0,5}'    # ...a seventh has no derivation
+        assert rules["tag"] == (                           # and one tag can't absorb the emission
+            f"[a-z0-9_] [a-z0-9_]{{0,{DISTILL_TAG_MAX_LEN - 1}}}")
+        for runaway in ("*", "+"):                         # the open-ended operators stay banished
+            assert runaway not in rules["tags"] and runaway not in rules["tag"]
 
 
 # =================================================================================================
