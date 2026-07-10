@@ -144,6 +144,18 @@ def _write_house_rules(config: Config) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     rules = root / "house_rules.md"
     body = HOUSE_RULES + (CREATURE_BUILDER_RULES if getattr(config, "creature_mode", False) else "")
+    # The standing order rides along (COMMISSION_PLAN.md): a delegated worker building a piece of
+    # the commission should understand the larger goal behind its narrow task — the creature's
+    # task brief says WHAT, the commission brief says WHY. Absent/dark → not a byte changes.
+    if getattr(config, "pillars_commission_enabled", False):
+        try:
+            from commission import load_brief
+            brief = load_brief(config)
+            if brief:
+                body += ("\n--- The standing order this work may serve (context, not your task) ---\n"
+                         + brief + "\n")
+        except Exception:  # noqa: BLE001 - context enrichment must never block a delegation
+            pass
     # Always (re)write — a creature/house mode switch must never leave stale rules behind.
     rules.write_text(body, encoding="utf-8")
     return rules

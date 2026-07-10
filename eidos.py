@@ -533,7 +533,8 @@ def _goaltension_post_tick(ctx):
              if _active else 0.0)
     _init = ctx.temperament.initiative if ctx.temperament is not None else 0.5
     ctx.goaltension.observe(made_progress=ctx.made_progress, open_objective=_open,
-                            frustration_frac=_frac, initiative=_init)
+                            frustration_frac=_frac, initiative=_init,
+                            open_commission=bool(getattr(ctx, "commission_open", False)))
 
 
 def _curiosity_post_tick(ctx):
@@ -707,12 +708,18 @@ class _Pillars:
         # (register_commission_tools is itself flag-gated) and the engine settles verdicts/claims
         # at the after_outcome beat.
         self.commission = None
+        self._commission_open = False        # memo for the goal-tension drive (a fact, not a file)
+        self._commission_claimed_seen: set = set()   # claimed-task ids already announced as news
         if getattr(c, "pillars_commission_enabled", False):
             try:
                 from tools import register_commission_tools
                 register_commission_tools(c)
                 from commission import Commission
                 self.commission = Commission(c)
+                live = self.commission.live()
+                self._commission_open = any(t.state == "open" for t in live)
+                self._commission_claimed_seen = {t.id for t in live
+                                                 if t.state == "done_claimed"}
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars commission init failed: %s", e)
                 self.commission = None
@@ -984,6 +991,19 @@ class _Pillars:
                 settlements += self.commission.settle_claims(self._quest_stats(persona))
                 for s in settlements:
                     self._commission_settle(s, persona, tick=tick)
+                live = self.commission.live()
+                self._commission_open = any(t.state == "open" for t in live)
+                # Newly-claimed tasks ride the news queue ONCE — so the operator's next check-in
+                # says "these await your verdict" instead of the claim quietly going stale (the
+                # reinforcement schedule stays honest even across days away).
+                claimed = {t.id: t for t in live if t.state == "done_claimed"}
+                fresh = sorted(set(claimed) - self._commission_claimed_seen)
+                self._commission_claimed_seen = set(claimed)
+                if fresh and self.news is not None:
+                    ids = ", ".join(f"#{i}" for i in fresh)
+                    self.news.ingest({"summary": f"commission task(s) {ids} claimed done — "
+                                                 "awaiting your verdict (/commission done|reject)",
+                                      "surprise": 1.5}, "commission")
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars commission settle failed: %s", e)
 
@@ -1093,6 +1113,18 @@ class _Pillars:
             stats["quests"] = {"passed": store.passed_count()}
         except Exception:  # noqa: BLE001
             stats["quests"] = {"passed": 0}
+        # commission: settled FACTS from the store (a confirm is glue/operator ground truth —
+        # the creature's own done-claim moves nothing here). Zeros with no store/flag, so a
+        # >=1 criterion can never mistake absence for evidence.
+        try:
+            from commission import Commission as _Commission
+            _tasks = (self.commission or _Commission(self.config)).load()
+            stats["commission"] = {
+                "confirmed_total": sum(1 for t in _tasks if t.state == "confirmed"),
+                "open": sum(1 for t in _tasks if t.state == "open"),
+            }
+        except Exception:  # noqa: BLE001
+            stats["commission"] = {"confirmed_total": 0, "open": 0}
         return stats
 
     def _quest_reward_sink(self, cfg, quest) -> None:
@@ -2660,7 +2692,11 @@ def run_loop(config: Config, persona=None, wal=None):
             gate=_gate, park_at=_park_at, obj=_obj, temperament=nervous_temperament,
             goaltension=nervous_goaltension, made_progress=_made_progress,
             worldmodel=nervous_worldmodel, wm_prev_sit=_wm_prev_sit, wm_prev_act=_wm_prev_act,
-            tick_situation=tick_situation, curiosity=nervous_curiosity, intrinsic=0.0)
+            tick_situation=tick_situation, curiosity=nervous_curiosity, intrinsic=0.0,
+            # An open commission task is an open commitment (COMMISSION_PLAN.md): the hub memoizes
+            # the live count at its settle beat so the drive reads a fact, not a file, every tick.
+            commission_open=bool(pillars is not None
+                                 and getattr(pillars, "_commission_open", False)))
         if organ_registry is not None:
             organ_registry.run_post_tick(_post_ctx)
 

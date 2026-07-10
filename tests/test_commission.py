@@ -271,6 +271,71 @@ class TestUnlockLadder:
             _tools.TOOLS.pop("commission_done", None)
 
 
+class TestCouplings:
+    """The commission is FELT, not just visible: it presses the goal-tension drive, the System
+    reads it in the dossier, the vocabulary can adjudicate it, and the delegated builder is handed
+    the standing order behind its narrow task."""
+
+    def test_open_commission_presses_goal_tension(self):
+        from nervous.goaltension import GoalTensionDrive, COMMISSION_PRESS
+        d = GoalTensionDrive(decay=0.0)      # decay 0: level == this tick's target (pure signal)
+        base = d.observe(made_progress=False, open_objective=False)
+        assert base == 0.0                    # nothing open → no tension (unchanged)
+        pressed = d.observe(made_progress=False, open_objective=False, open_commission=True)
+        assert pressed == COMMISSION_PRESS    # the standing order's steady itch
+        # Progress still discharges — relief beats the itch (the loop, not a ratchet).
+        assert d.observe(made_progress=True, open_objective=False, open_commission=True) == 0.0
+        # A fully-frustrated objective still presses harder than the commission alone.
+        frustrated = d.observe(made_progress=False, open_objective=True,
+                               frustration_frac=1.0, open_commission=True)
+        assert frustrated == 1.0
+
+    def test_vocabulary_adjudicates_commission_stats(self, tmp_path):
+        import quests
+        cfg = _cfg(tmp_path)
+        c = Commission(cfg)
+        c.add("judged by charlie")
+        c.add("measured", claim="exists:x.txt")
+        write_verdict(cfg, task_id=1, verdict="confirm")
+        c.consume_verdicts()
+        stats = {"commission": {"confirmed_total": c.confirmed_total(),
+                                "open": len([t for t in c.live() if t.state == OPEN])}}
+        assert "commission.confirmed_total" in quests.ADJUDICATABLE_PATHS
+        crit = quests.Criterion(path="commission.confirmed_total", op=">=", value=1)
+        assert crit.check(stats)
+        assert quests.Criterion(path="commission.open", op="<=", value=0).check(stats) is False
+
+    def test_dossier_carries_the_commission(self, tmp_path):
+        import administrator
+        cfg = _cfg(tmp_path)
+        cfg.pillars_commission_enabled = True
+        brief_path(cfg).parent.mkdir(parents=True, exist_ok=True)
+        brief_path(cfg).write_text("Build a small terminal game.", encoding="utf-8")
+        c = Commission(cfg)
+        c.add("first system")
+        c.claim_done(1, evidence="see it")
+        c.add("second system")
+        s = administrator._commission_section(cfg)
+        assert s["brief_present"] and "terminal game" in s["brief_head"]
+        assert s["open"] == 1 and s["awaiting_verdict"] == 1 and s["confirmed_total"] == 0
+        assert s["open_tasks"][0]["title"] == "second system"
+        cfg.pillars_commission_enabled = False
+        assert administrator._commission_section(cfg) is None   # dark → key omitted
+
+    def test_delegate_house_rules_carry_the_brief(self, tmp_path):
+        import delegate
+        cfg = _cfg(tmp_path)
+        cfg.creature_mode = True
+        cfg.pillars_commission_enabled = True
+        brief_path(cfg).parent.mkdir(parents=True, exist_ok=True)
+        brief_path(cfg).write_text("Build a small terminal game per spec.", encoding="utf-8")
+        rules = delegate._write_house_rules(cfg).read_text(encoding="utf-8")
+        assert "standing order" in rules and "terminal game" in rules
+        cfg.pillars_commission_enabled = False
+        rules_off = delegate._write_house_rules(cfg).read_text(encoding="utf-8")
+        assert "terminal game" not in rules_off                 # dark → not a byte changes
+
+
 class TestBriefAndRender:
     def test_brief_is_capped_and_optional(self, tmp_path):
         cfg = _cfg(tmp_path)

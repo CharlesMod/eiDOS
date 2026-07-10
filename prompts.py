@@ -396,7 +396,9 @@ UNIT_STANZAS: dict[str, str] = {
   `commission_add {{"title":"...","claim":"exists:<file> (optional)"}}` and, when one is truly
   finished, `commission_done {{"id":N,"evidence":"what to look at"}}`. Done is a CLAIM — it pays
   only when a measurement or Charlie confirms it; his rejections come back with feedback, like a
-  coworker's review. Keep your own thinking in `commission_notes.md` in your home.
+  coworker's review. For any piece bigger than a one-move edit, hand the BUILD to your workshop's
+  deeper builder and spend your own ticks testing and judging what comes back — that pairing is
+  how commissions actually get done. Keep your thinking in `commission_notes.md` in your home.
 """,
 }
 

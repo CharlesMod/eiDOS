@@ -114,6 +114,8 @@ ADJUDICATABLE_PATHS: dict[str, str] = {
     "persona.level":           "current level",
     "persona.goals_completed": "self-chosen objectives finished",
     "persona.total_ticks":     "lifetime ticks lived",
+    "commission.confirmed_total": "commission tasks CONFIRMED ever (operator verdict or measured claim)",
+    "commission.open":         "commission tasks currently open",
 }
 
 

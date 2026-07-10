@@ -416,6 +416,31 @@ def _last_checkin_section(config, state: AdminState) -> dict:
     return lc
 
 
+def _commission_section(config) -> Optional[dict]:
+    """The standing order's state (COMMISSION_PLAN.md), so check-ins can propose quests that
+    ADVANCE the brief — the decomposition seam: a task sitting open across sleeps is exactly the
+    gap the trainer should mine. Flag off → None and compile_dossier omits the key entirely
+    (pre-commission dossiers stay byte-identical)."""
+    if not getattr(config, "pillars_commission_enabled", False):
+        return None
+    try:
+        from commission import Commission, load_brief
+        tasks = Commission(config).load()
+        open_tasks = [t for t in tasks if t.state == "open"]
+        return {
+            "brief_present": bool(load_brief(config)),
+            "brief_head": load_brief(config)[:400],
+            "open": len(open_tasks),
+            "awaiting_verdict": sum(1 for t in tasks if t.state == "done_claimed"),
+            "confirmed_total": sum(1 for t in tasks if t.state == "confirmed"),
+            "open_tasks": [{"id": t.id, "title": t.title,
+                            "feedback": t.verdict_note or None}
+                           for t in open_tasks[:6]],
+        }
+    except Exception:  # noqa: BLE001 - a missing subsystem yields a null section, never a wound
+        return None
+
+
 def _creature_tools_section(config) -> Optional[list]:
     """What exists in the creature's world right now (TOOL_PROGRESSION §0) — so proposals aim at
     the body eiDOS actually has, not the one it might grow. Ladder off → None, and compile_dossier
@@ -457,6 +482,9 @@ def compile_dossier(config, since_checkin: Optional[str] = None, *,
     creature_tools = _creature_tools_section(config)
     if creature_tools is not None:
         dossier["creature_tools"] = creature_tools
+    commission = _commission_section(config)
+    if commission is not None:
+        dossier["commission"] = commission
     return dossier
 
 

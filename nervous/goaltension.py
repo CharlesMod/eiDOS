@@ -24,6 +24,12 @@ import time
 from .event import NervousEvent, Kind, Modality, Delivery, SCHEMA_VERSION
 
 
+COMMISSION_PRESS = 0.6   # declared: how hard an OPEN commission task presses when nothing else
+                         # does — above a fresh objective's 0.5 (an operator's standing order
+                         # outranks a self-chosen goal) but below a fully-frustrated one (1.0):
+                         # the commission itches steadily, it never screams.
+
+
 class GoalTensionDrive:
     def __init__(self, *, bus=None, neuromod=None, decay=0.9,
                  tension_arousal_max=0.4, press_threshold=0.5):
@@ -40,17 +46,22 @@ class GoalTensionDrive:
         self._lock = threading.Lock()
 
     def observe(self, *, made_progress: bool, open_objective: bool,
-                frustration_frac: float = 0.0, initiative: float = 0.5) -> float:
+                frustration_frac: float = 0.0, initiative: float = 0.5,
+                open_commission: bool = False) -> float:
         """Fold this tick's objective state into the drive; return the tension level 0..1.
 
         made_progress discharges it (relief); an open-but-unprogressed objective charges it, a
-        frustrated one harder (regret); nothing open => no goal pressure at all (idle novelty is
-        curiosity's job, not this drive's — a creature with no mission simply *is*)."""
+        frustrated one harder (regret); an open COMMISSION task presses too (a standing order from
+        the operator is an open commitment — COMMISSION_PLAN.md); nothing open => no goal pressure
+        at all (idle novelty is curiosity's job, not this drive's — a creature with no mission
+        simply *is*). Default open_commission=False keeps every pre-commission caller byte-identical."""
         frustration_frac = max(0.0, min(1.0, float(frustration_frac)))
         if made_progress:
             target = 0.0                                      # the gap just shrank → relief
-        elif open_objective:
-            target = min(1.0, 0.5 + 0.5 * frustration_frac)   # incompletion presses; stall = regret, harder
+        elif open_objective or open_commission:
+            target = min(1.0, 0.5 + 0.5 * frustration_frac) if open_objective else 0.0
+            if open_commission:
+                target = max(target, COMMISSION_PRESS)        # the standing order's steady itch
         else:
             target = 0.0                                      # no open commitment → no tension
         with self._lock:

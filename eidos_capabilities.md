@@ -208,6 +208,11 @@ catch yourself designing anything below, stop: it is already built and waiting o
   task WITH his feedback — read it like a coworker's review and go again.
 - Keep your own running notes in `commission_notes.md` in your home. Never build a task tracker,
   progress store, or feedback parser for the commission — the whole loop exists.
+- → COMMISSION WORK RIDES THE WORKSHOP: for anything bigger than a one-move edit (a game system, a
+  refactor, a real program), `delegate` the BUILD — your deeper builder already knows the standing
+  order (the brief rides along) — then spend your own ticks RUNNING, testing, and judging the
+  result before you `commission_done` it. Tick-by-tick hand-authoring of big code is the slow,
+  error-prone path; build-in-the-workshop → verify-yourself → claim is the strong one.
 
 ## The house & services — what you OPERATE and BUILD automation for
 - Your mind: the house-ai LLM served at http://127.0.0.1:8080 (llama-swap; gemma4-12b resident).

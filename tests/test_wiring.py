@@ -588,7 +588,8 @@ def test_post_tick_phase_dispatches_hooks_once_and_carries_intrinsic(tmp_path):
         wm_prev_act="bash", tick_situation="a|scan", curiosity=cur, intrinsic=0.0)
     reg.run_post_tick(ctx)
     assert gt.calls == [{"made_progress": True, "open_objective": True,
-                         "frustration_frac": 0.5, "initiative": 0.5}]
+                         "frustration_frac": 0.5, "initiative": 0.5,
+                         "open_commission": False}]
     assert wm.seen == ("a|probe", "bash", "a|scan")
     assert ctx.intrinsic == 0.42              # curiosity's bonus rode the ctx to the learner
 
