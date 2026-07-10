@@ -468,11 +468,20 @@ def search_bm25(config: Config, query: str, top_k: int = 5) -> list[dict]:
 
     scores = _bm25_instance.get_scores(tokens)
 
-    # Pair scores with IDs, sort descending
-    scored = sorted(zip(scores, _bm25_corpus_ids), key=lambda x: x[0], reverse=True)
-
     # Build result list from index (lookup by ID)
     index_map = {item["id"]: item for item in index}
+
+    # Recency tilt (flag-gated): BM25 is timeless, but the world is not — a device re-scanned
+    # today should outrank a stale note about it. The shared engram.recency_factor is floored,
+    # so age re-orders near-ties without burying an old entry that is the only real match.
+    if getattr(config, "pillars_recall_recency_enabled", False):
+        import engram as _engram
+        scores = [s * _engram.recency_factor(index_map.get(eid, {}).get("created", ""))
+                  if s > 0 else s
+                  for s, eid in zip(scores, _bm25_corpus_ids)]
+
+    # Pair scores with IDs, sort descending
+    scored = sorted(zip(scores, _bm25_corpus_ids), key=lambda x: x[0], reverse=True)
     # Relative noise floor: BM25 scores are corpus-scaled (no absolute threshold works), but
     # a result far below the TOP hit is filler, not relevance — a generic step like "explore"
     # used to pull arbitrary old facts into context just for having one weak term in common.

@@ -53,6 +53,15 @@ EXPLORE_STRENGTH_CEILING = 0.5      # declared: an engram counts as a "low-stren
                                     # neutral seed) so the exploration slot surfaces memories that have
                                     # not yet EARNED recall — never one already proven strong (that
                                     # one wins on rank and needs no help).
+ENCODE_AROUSAL_GAIN = 0.3           # declared: arousal-modulated encoding (§M-1 — the EncodedAt
+                                    # docstring's "strength is seeded against it", finally seeded).
+                                    # Birth strength = default + gain×(arousal − neutral): a flat
+                                    # tick births at 0.35 and is the FIRST thing decay+prune forgets;
+                                    # a spiked moment births at 0.65 and persists. This is the
+                                    # observation salience gate implemented as pressure — nothing is
+                                    # dropped at the door; the trivial just loses the economy.
+ENCODE_AROUSAL_NEUTRAL = 0.5        # declared: the arousal level that births at exactly the neutral
+                                    # STRENGTH_DEFAULT — the midpoint of the [0,1] arousal channel.
 
 # Legacy knowledge category -> engram kind (§2 schema). `reflections` has no engram kind of its own;
 # a reflection is a consolidated declarative belief, so it lands as a `fact`.
@@ -138,10 +147,18 @@ class MemoryManager:
                provenance: str = "experienced", **fields) -> Engram:
         """Encode a NEW engram and promote it to long-term through the consolidator. The emotional
         stamp is read LIVE from neuromod here (not passed in) — that is the whole point of stamping
-        at encode time. Returns the engram now living in long-term (the merge survivor on a near
-        restatement, else the fresh engram)."""
+        at encode time. With the salience flag on and a live neuromod organ, the stamp also SEEDS
+        birth strength (arousal-modulated encoding, §M-1) — unless the caller set strength
+        explicitly (the importer's floors, a prediction's declared seed). Returns the engram now
+        living in long-term (the merge survivor on a near restatement, else the fresh engram)."""
+        stamp = self._stamp(tick=tick, felt=felt)
+        if ("strength" not in fields and self._neuromod is not None
+                and getattr(self.config, "pillars_encode_salience_enabled", False)):
+            seeded = (engram.STRENGTH_DEFAULT
+                      + ENCODE_AROUSAL_GAIN * (stamp.arousal - ENCODE_AROUSAL_NEUTRAL))
+            fields["strength"] = max(0.0, min(1.0, seeded))
         eg = Engram(kind=kind, body=body, provenance=provenance,
-                    encoded_at=self._stamp(tick=tick, felt=felt), **fields)
+                    encoded_at=stamp, **fields)
         return self.consolidator.commit(eg)
 
     # ---------------------------------------------------------------------------------------------
@@ -343,9 +360,16 @@ class MemoryManager:
         if not candidates:
             return []
 
-        # --- rank by relevance × strength (§M-1) --------------------------------------------------
+        # --- rank by relevance × strength (§M-1), tilted toward the present when the recency
+        # flag is on: the factor is floored (engram.RECENCY_FLOOR) so age re-orders near-ties,
+        # never buries an earned memory — forgetting stays decay+prune's job. -----------------------
+        recency_on = bool(getattr(self.config, "pillars_recall_recency_enabled", False))
+
         def _score(e: Engram) -> float:
-            return relevance[e.id] * float(e.strength)
+            s = relevance[e.id] * float(e.strength)
+            if recency_on:
+                s *= engram.recency_factor(e.created)
+            return s
 
         ranked = sorted(candidates, key=_score, reverse=True)
 

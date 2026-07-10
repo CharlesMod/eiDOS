@@ -72,6 +72,14 @@ INHERITED_STRENGTH_FLOOR = 0.6  # declared: a `told`/`inherited` engram (a nugge
                                 # previous self, §M-2) is seeded ABOVE neutral so a fresh creature
                                 # does not immediately forget its bootstrap knowledge before it has
                                 # had a chance to earn recall. 2.2's importer uses this floor.
+RECENCY_HALFLIFE_S = 7 * 86400.0  # declared: recall's recency half-life. A week separates "this
+                                # era" from "history": a device re-scanned today should outrank a
+                                # stale note about it, but a memory is not stale by lunchtime —
+                                # days, not hours, is the scale the creature's world changes on.
+RECENCY_FLOOR = 0.5             # declared: the recency factor's floor — age can at most HALVE a
+                                # memory's rank, never bury it. Strength (earned usefulness) stays
+                                # the dominant key; time is a tilt toward the present, not a second
+                                # forgetting mechanism (decay+prune already own forgetting).
 
 # Valid engram kinds (§2 schema). A closed set — the taxonomy of what a memory can BE. Kept as a
 # frozenset (not an Enum) to match the house's plain-string typing (see episodes.fail_kind,
@@ -104,6 +112,25 @@ def _new_id() -> str:
     jobs, and the importer; a content-hash id would collide on identical bodies, and we want each
     encoding to be a distinct atom until the consolidator decides to merge them."""
     return uuid.uuid4().hex
+
+
+def recency_factor(created_iso: str, *, now: Optional[float] = None,
+                   halflife_s: float = RECENCY_HALFLIFE_S,
+                   floor: float = RECENCY_FLOOR) -> float:
+    """A recall-ranking multiplier in [floor, 1.0] from a record's age: 1.0 at birth, exponential
+    half-life decay toward the floor. Shared by every recall ranker that weights time (the engram
+    cascade, knowledge's BM25) so "recent" means one thing across the memory economy. FAIL-OPEN: an
+    unparseable/missing timestamp scores 1.0 — a record without a birthday is never penalized."""
+    try:
+        import calendar
+        born = calendar.timegm(time.strptime(created_iso.strip(), "%Y-%m-%dT%H:%M:%SZ"))
+    except (ValueError, AttributeError, TypeError, OverflowError):
+        return 1.0
+    age = max(0.0, (time.time() if now is None else float(now)) - born)
+    if halflife_s <= 0:
+        return 1.0
+    factor = 0.5 ** (age / float(halflife_s))
+    return max(float(floor), min(1.0, factor))
 
 
 # ============================================================================================
