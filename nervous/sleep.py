@@ -147,6 +147,16 @@ CALIBRATION_BRIER_NEUTRAL = 0.25   # declared: a coin flip's worth of squared er
 CALIBRATION_CAUTION_STEP_MAX = 0.05  # declared: the per-sleep bound on the caution nudge (pitfall #3:
                                    # clamp the step — one bad night must not ratchet disposition; the
                                    # temperament springs relax it back as calibration recovers).
+DREAM_PROMOTE_CREDIT = 1.0         # declared: settled bet credit a dreamed engram must EARN before
+                                   # its hypothesis cap lifts without a merge witness — one full unit
+                                   # of net-right wagers is corroboration by use, not by restatement.
+LESSON_STRENGTH_ERROR = 0.6        # declared: a commission rejection encodes ABOVE neutral (0.5) —
+                                   # scars persist (§2.3, error kind decays slower); the feedback that
+                                   # cost a rework must outlive the week it happened in.
+LESSON_STRENGTH_WIN = 0.55         # declared: a confirmed task's winning pattern encodes just above
+                                   # neutral — worth recalling, but wins teach less than wounds.
+LESSONS_MAX_PER_SLEEP = 12         # declared: bounded work — one sleep digests at most this many
+                                   # settlement lessons; a backlog waits for the next night.
 
 
 # --- The job protocol ----------------------------------------------------------------------------
@@ -300,6 +310,104 @@ class DedupMergeJob:
         if merges:
             _eg._commit_to_store(cons.store, kept)   # drop the absorbed twins (single writer, §I6)
         return {"merges": merges, "engrams": len(kept)}
+
+
+class DreamCorroborationJob:
+    """The promotion path out of the dreamed-hypothesis cap (pitfall #5's OTHER half): a dreamed
+    engram that has EARNED enough settled bet credit has been corroborated by use — recall put it
+    into decisions and the wagers on those decisions settled net-right. Lift the origin stamp and
+    let confidence rise to the ordinary default. Merge-time corroboration (a non-dream witness
+    restating it) lives in Consolidator.merge; this job catches the facts nothing ever restates.
+    Runs right after dedup so a same-night merge-corroboration isn't double-promoted."""
+    name = "dream_corroboration"
+    priority = 15
+
+    def __init__(self, *, promote_credit: float = DREAM_PROMOTE_CREDIT):
+        self.promote_credit = float(promote_credit)
+
+    def run(self, ctx: "SleepContext") -> dict:
+        cons = ctx.consolidator
+        if cons is None:
+            return {"skipped": "no consolidator"}
+        import engram as _eg
+        entries = cons.store.load()
+        promoted = 0
+        for e in entries:
+            if not e.stats.get("dreamed"):
+                continue
+            if float(e.stats.get("credit_sum", 0.0)) >= self.promote_credit:
+                e.stats.pop("dreamed", None)
+                e.confidence = max(e.confidence, _eg.CONFIDENCE_DEFAULT)
+                promoted += 1
+        if promoted:
+            _eg._commit_to_store(cons.store, entries)   # single writer bridge (§I6)
+        return {"promoted": promoted,
+                "still_dreamed": sum(1 for e in entries if e.stats.get("dreamed"))}
+
+
+class SettlementLessonsJob:
+    """Distil commission settlements into memory — MECHANICALLY, no model call (settlement notes
+    are already ground truth; burning watts to paraphrase them would be the solar sin). A rejection
+    becomes an `error` engram carrying the feedback verbatim (the words that cost a rework); a
+    confirmation becomes a `procedure` engram carrying the evidence pattern that won. Both are
+    provenance='experienced' — the creature lived these outcomes. Cursor on updated_ts so each
+    settlement is digested exactly once; bounded per sleep; commission dark → clean no-op."""
+    name = "settlement_lessons"
+    priority = 28   # after decay (a fresh lesson shouldn't decay the night it's born), before
+    #                 distillation (both commit through the consolidator; lessons are the surer kind)
+
+    def __init__(self, *, max_lessons: int = LESSONS_MAX_PER_SLEEP):
+        self.max_lessons = int(max_lessons)
+
+    def _cursor_path(self, config):
+        return config.state_dir / "commission_lessons.json"
+
+    def run(self, ctx: "SleepContext") -> dict:
+        cons = ctx.consolidator
+        if cons is None:
+            return {"skipped": "no consolidator"}
+        if not getattr(ctx.config, "pillars_commission_enabled", False):
+            return {"skipped": "commission dark"}
+        from commission import Commission, CONFIRMED, OPEN
+        from engram import Engram
+        try:
+            cursor = json.loads(self._cursor_path(ctx.config).read_text(encoding="utf-8"))
+            last = str(cursor.get("last_ts") or "")
+        except (OSError, ValueError):
+            last = ""
+        tasks = Commission(ctx.config).load()
+        fresh = sorted((t for t in tasks
+                        if (t.updated_ts or "") > last
+                        and (t.state == CONFIRMED or (t.state == OPEN and t.verdict_note))),
+                       key=lambda t: t.updated_ts or "")
+        lessons = 0
+        newest = last
+        for t in fresh[: self.max_lessons]:
+            if t.state == CONFIRMED:
+                body = (f"Commission win: '{t.title}' was confirmed — what worked: "
+                        f"{t.evidence or t.verdict_note}")
+                eg = Engram(kind="procedure", body=body, provenance="experienced",
+                            strength=LESSON_STRENGTH_WIN)
+            else:
+                body = (f"Commission rework: '{t.title}' came back — the feedback: "
+                        f"{t.verdict_note}")
+                eg = Engram(kind="error", body=body, provenance="experienced",
+                            strength=LESSON_STRENGTH_ERROR)
+            try:
+                cons.commit(eg)     # the merge policy dedups a repeat of the same lesson
+                lessons += 1
+            except Exception as e:  # noqa: BLE001 - one bad lesson is logged, not a job abort
+                logger.warning("settlement lesson could not commit: %s", e)
+            newest = max(newest, t.updated_ts or "")
+        if fresh:
+            try:
+                ctx.config.state_dir.mkdir(parents=True, exist_ok=True)
+                tmp = self._cursor_path(ctx.config).with_suffix(".tmp")
+                tmp.write_text(json.dumps({"last_ts": newest}), encoding="utf-8")
+                tmp.replace(self._cursor_path(ctx.config))
+            except OSError as e:
+                logger.warning("settlement lessons cursor write failed: %s", e)
+        return {"lessons": lessons, "pending": max(0, len(fresh) - self.max_lessons)}
 
 
 class StrengthDecayPruneJob:
@@ -628,12 +736,14 @@ def default_sleep_engine(*, decay: float = STRENGTH_DECAY_PER_SLEEP,
                          budget: int = LONGTERM_BUDGET,
                          confidence_cap: float = DREAMED_CONFIDENCE_CAP,
                          telemetry_derivers: Optional[list] = None) -> SleepEngine:
-    """The stock digestive tract: dedup/merge → decay+prune (SHY) → distillation → backup → telemetry
-    → skill retirement → calibration → organ on_sleep hooks. Jobs are priority-ordered inside the
-    engine; this just wires the defaults."""
+    """The stock digestive tract: dedup/merge → dream corroboration → decay+prune (SHY) →
+    settlement lessons → distillation → backup → telemetry → skill retirement → calibration →
+    organ on_sleep hooks. Jobs are priority-ordered inside the engine; this just wires the defaults."""
     return SleepEngine([
         DedupMergeJob(),
+        DreamCorroborationJob(),
         StrengthDecayPruneJob(decay=decay, budget=budget),
+        SettlementLessonsJob(),
         DistillationJob(confidence_cap=confidence_cap),
         BackupSnapshotJob(),
         TelemetryRederiveJob(telemetry_derivers or []),

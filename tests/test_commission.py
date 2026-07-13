@@ -116,6 +116,58 @@ class TestClaimSettlement:
 
 
 # =================================================================================================
+class TestRunsClaims:
+    """`runs:<command>` — the strongest claim shape: EXECUTED at the done-claim event, exit 0
+    confirms and pays, a failure REOPENS with the output tail as feedback (glue rejection, the
+    tightest loop in the system). Never executed while the task merely sits open."""
+
+    def test_never_runs_while_open_confirms_on_claim(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        c = Commission(cfg)
+        c.add("game boots", claim="runs:exit 0")
+        assert c.settle_claims({}) == []                  # open → the command did NOT run
+        c.claim_done(1, evidence="ran it myself")
+        settled = c.settle_claims({})
+        assert len(settled) == 1
+        s = settled[0]
+        assert s.how == "claim" and s.outcome == CONFIRMED
+        assert s.xp == COMMISSION_XP_CONFIRMED and s.feed == COMMISSION_FEED
+        assert "exit 0" in c.load()[0].verdict_note
+        assert c.settle_claims({}) == []                  # settled once, never again
+
+    def test_failing_run_reopens_with_the_error_as_feedback(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        c = Commission(cfg)
+        c.add("tests pass", claim="runs:echo boom-trace >&2; exit 3")
+        c.claim_done(1)
+        settled = c.settle_claims({})
+        assert len(settled) == 1
+        s = settled[0]
+        assert s.outcome == "rejected" and s.xp == 0      # glue rejection pays nothing
+        t = c.load()[0]
+        assert t.state == OPEN                            # back on the queue
+        assert "boom-trace" in t.verdict_note             # the error IS the feedback
+        assert c.settle_claims({}) == []                  # reopened → no re-run until re-claimed
+
+    def test_runs_claim_passes_the_add_boundary(self, tmp_path):
+        c = Commission(_cfg(tmp_path))
+        c.add("ok", claim="runs:python game/test.py")
+        with pytest.raises(ValueError):
+            c.add("empty command", claim="runs:   ")
+        with pytest.raises(ValueError):
+            c.add("a script, not a command", claim="runs:" + "x " * 200)
+
+    def test_timeout_is_a_failure_with_the_reason(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cm, "RUNS_CLAIM_TIMEOUT_S", 0.2)
+        c = Commission(_cfg(tmp_path))
+        c.add("hangs", claim="runs:sleep 5")
+        c.claim_done(1)
+        settled = c.settle_claims({})
+        assert settled[0].outcome == "rejected"
+        assert "timed out" in c.load()[0].verdict_note
+
+
+# =================================================================================================
 class TestOperatorVerdicts:
     def test_confirm_pays_and_closes(self, tmp_path):
         cfg = _cfg(tmp_path)
@@ -322,6 +374,54 @@ class TestCouplings:
         cfg.pillars_commission_enabled = False
         assert administrator._commission_section(cfg) is None   # dark → key omitted
 
+    def test_hot_task_prefers_feedback_then_recency(self, tmp_path):
+        c = Commission(_cfg(tmp_path))
+        assert c.hot_task() is None
+        c.add("first")
+        c.add("second")                                    # newest open → hot
+        assert c.hot_task().title == "second"
+        c.claim_done(1)
+        write_verdict(c.config, task_id=1, verdict="reject", note="redo the input loop")
+        c.consume_verdicts()                               # #1 reopens with feedback → outranks all
+        assert c.hot_task().id == 1
+
+    def test_focus_terms_carry_the_hot_task(self, tmp_path):
+        import eidos
+        cfg = _cfg(tmp_path)
+        cfg.pillars_commission_enabled = True
+        hub = eidos._Pillars(cfg)
+        try:
+            Commission(cfg).add("terminal renderer", detail="draw the maze with box glyphs")
+            terms = hub._focus_terms()
+            assert "terminal" in terms and "renderer" in terms
+        finally:
+            import tools as _tools
+            for name in ("commission_add", "commission_done", "weigh_options"):
+                _tools.TOOLS.pop(name, None)
+
+    def test_weigh_options_consults_three_lenses(self, tmp_path, monkeypatch):
+        import tools as _tools
+        import llm as _llm
+        cfg = _cfg(tmp_path)
+        seen = []
+
+        def _fake_complete(messages, config, temperature=None, max_tokens=None, **kw):
+            seen.append(messages[0]["content"])
+            return f"approach {len(seen)}"
+
+        monkeypatch.setattr(_llm, "complete", _fake_complete)
+        r = _tools.tool_weigh_options({"question": "how should the game loop tick?"}, cfg)
+        assert r.success
+        assert len(seen) == 3                              # three separate advisors
+        assert len({s for s in seen}) == 3                 # each argued a DIFFERENT lens
+        for tag in ("[simplest]", "[robust]", "[frugal]"):
+            assert tag in r.output
+        assert "WHY" in r.output                           # the choice is pushed back to the creature
+        # And it refuses without a question / without a mind.
+        assert not _tools.tool_weigh_options({}, cfg).success
+        cfg.mock_mode = True
+        assert not _tools.tool_weigh_options({"question": "x"}, cfg).success
+
     def test_delegate_house_rules_carry_the_brief(self, tmp_path):
         import delegate
         cfg = _cfg(tmp_path)
@@ -362,3 +462,31 @@ class TestBriefAndRender:
         assert "…awaiting confirmation" in block              # the claimed task
         assert "[feedback: needs sound]" in block             # rejection surfaces in-place
         assert f"(+{3} more)" in block                        # render bound holds
+
+    def test_rejected_build_points_back_at_its_workshop_job(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        c = Commission(cfg)
+        c.add("the maze level")
+        c.claim_done(1, evidence="workshop built it", job="maze")
+        assert c.load()[0].job == "maze"                      # round-trips
+        write_verdict(cfg, task_id=1, verdict="reject", note="walls flicker")
+        c.consume_verdicts()
+        block = c.render_block()
+        assert "[feedback: walls flicker]" in block
+        assert "'maze' workshop job holds this build" in block   # the revision hook
+
+    def test_exemplar_line_shows_the_last_confirmed_work(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        c = Commission(cfg)
+        c.add("older win")
+        write_verdict(cfg, task_id=1, verdict="confirm", note="fine")
+        c.consume_verdicts()
+        c.add("newest win")
+        c.claim_done(2, evidence="run log attached, score test green")
+        write_verdict(cfg, task_id=2, verdict="confirm", note="exactly right")
+        c.consume_verdicts()
+        c.add("still open")                                   # so the block renders a todo too
+        block = c.render_block()
+        assert "THE BAR" in block
+        assert "newest win" in block and "run log attached" in block
+        assert "exactly right" in block

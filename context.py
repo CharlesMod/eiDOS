@@ -164,6 +164,17 @@ def _build_relevant_recall(config: Config, exclude_ids: set) -> str:
             _extra.append(" ".join(_seen[:4]))
     except Exception:  # noqa: BLE001
         pass
+    # Task-conditioned recall (same fold as the objective above): the hot commission task's words
+    # lift priors about the WORK IN FRONT OF IT — what it knows about terminal rendering surfaces
+    # while it builds the terminal game, not when it happens to think of it. Dark flag → no fold.
+    try:
+        if getattr(config, "pillars_commission_enabled", False):
+            from commission import Commission
+            _hot = Commission(config).hot_task()
+            if _hot is not None:
+                _extra.append(f"{_hot.title} {_hot.detail} {_hot.verdict_note}")
+    except Exception:  # noqa: BLE001
+        pass
     broad = " ".join([step] + [e for e in _extra if e.strip()]).strip()
     if not step and not broad:
         return ""

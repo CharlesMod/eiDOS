@@ -34,8 +34,10 @@ from nervous.sleep import (
     run_sleep, default_sleep_engine,
     DedupMergeJob, StrengthDecayPruneJob, DistillationJob, BackupSnapshotJob,
     TelemetryRederiveJob, OrganSleepHooksJob,
+    DreamCorroborationJob, SettlementLessonsJob,
     build_distillation_grammar, parse_distillations,
     DREAMED_CONFIDENCE_CAP, DISTILL_MAX_FACTS, DISTILL_MAX_TAGS, DISTILL_TAG_MAX_LEN,
+    DREAM_PROMOTE_CREDIT, LESSON_STRENGTH_ERROR, LESSON_STRENGTH_WIN,
 )
 
 
@@ -104,7 +106,8 @@ class TestEngineOrderAndGuard:
 
     def test_default_engine_reads_like_a_digestive_tract(self):
         names = [j.name for j in default_sleep_engine().jobs]
-        assert names == ["dedup_merge", "strength_decay_prune", "distillation",
+        assert names == ["dedup_merge", "dream_corroboration", "strength_decay_prune",
+                         "settlement_lessons", "distillation",
                          "backup_snapshot", "telemetry_rederive", "skill_retire",
                          "calibration", "organ_on_sleep"]
 
@@ -150,6 +153,103 @@ class TestDedupMerge:
 
     def test_no_consolidator_is_a_clean_skip(self, tmp_path):
         assert "skipped" in DedupMergeJob().run(SleepContext(config=_cfg(tmp_path)))
+
+
+# =================================================================================================
+# Dream corroboration — the promotion path out of the hypothesis cap (pitfall #5's other half)
+# =================================================================================================
+class TestDreamCorroboration:
+    def _dreamed(self, body, credit=0.0):
+        eg = Engram(kind="fact", body=body, provenance="dreamed",
+                    confidence=DREAMED_CONFIDENCE_CAP)
+        eg.stats["dreamed"] = True
+        eg.stats["credit_sum"] = credit
+        return eg
+
+    def test_earned_credit_lifts_the_stamp_and_raises_confidence(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        cons = Consolidator(cfg)
+        earned = self._dreamed("the dashboard restarts via systemctl restart", DREAM_PROMOTE_CREDIT)
+        unproven = self._dreamed("the moon powers the gpu somehow", DREAM_PROMOTE_CREDIT - 0.1)
+        _seed_longterm(cons, [earned, unproven])
+        summary = DreamCorroborationJob().run(SleepContext(config=cfg, consolidator=cons))
+        assert summary == {"promoted": 1, "still_dreamed": 1}
+        settled = {e.body: e for e in cons.store.load()}
+        winner = settled[earned.body]
+        assert "dreamed" not in winner.stats                       # the cap key is gone
+        assert winner.confidence == pytest.approx(engram.CONFIDENCE_DEFAULT)
+        loser = settled[unproven.body]
+        assert loser.stats.get("dreamed") is True                  # still a hypothesis
+        assert loser.confidence == pytest.approx(DREAMED_CONFIDENCE_CAP)
+
+    def test_merge_with_experienced_witness_corroborates(self, tmp_path):
+        """The OTHER promotion path: a non-dream witness restating a dreamed keeper sheds the stamp
+        and upgrades the source grade (Consolidator.merge policy)."""
+        cfg = _cfg(tmp_path)
+        cons = Consolidator(cfg)
+        keeper = self._dreamed("the mqtt broker listens on port 1883 on sprinter")
+        _seed_longterm(cons, [keeper])
+        witness = Engram(kind="fact", body="the mqtt broker listens on port 1883 on sprinter box",
+                         provenance="experienced")
+        cons.merge(keeper, witness)
+        settled = cons.store.load()[0]
+        assert settled.provenance == "experienced"                 # stronger source grade survives
+        assert "dreamed" not in settled.stats                      # hypothesis met reality
+
+    def test_two_dreams_merging_stay_a_dream(self, tmp_path):
+        """Two hypotheses agreeing is not corroboration — the stamp survives a dream-dream merge."""
+        cfg = _cfg(tmp_path)
+        cons = Consolidator(cfg)
+        keeper = self._dreamed("the solar charge controller resets at dawn")
+        _seed_longterm(cons, [keeper])
+        cons.merge(keeper, self._dreamed("the solar charge controller resets at dawn each day"))
+        settled = cons.store.load()[0]
+        assert settled.provenance == "dreamed"
+        assert settled.stats.get("dreamed") is True
+
+
+# =================================================================================================
+# Settlement lessons — commission ground truth digested into memory, mechanically (no model)
+# =================================================================================================
+class TestSettlementLessons:
+    def _commissioned_cfg(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        cfg.pillars_commission_enabled = True
+        return cfg
+
+    def test_rejection_and_confirmation_become_lessons_once(self, tmp_path):
+        cfg = self._commissioned_cfg(tmp_path)
+        from commission import Commission, write_verdict
+        c = Commission(cfg)
+        c.add("enemy ai")
+        c.claim_done(1)
+        write_verdict(cfg, task_id=1, verdict="reject", note="enemies clip through walls")
+        c.consume_verdicts()
+        c.add("scoring system")
+        c.claim_done(2, evidence="score.py + the test run")
+        write_verdict(cfg, task_id=2, verdict="confirm")
+        c.consume_verdicts()
+
+        cons = Consolidator(cfg)
+        summary = SettlementLessonsJob().run(SleepContext(config=cfg, consolidator=cons))
+        assert summary["lessons"] == 2
+        by_kind = {e.kind: e for e in cons.store.load()}
+        scar = by_kind["error"]
+        assert "enemies clip through walls" in scar.body            # the feedback rides verbatim
+        assert scar.provenance == "experienced"
+        assert scar.strength == pytest.approx(LESSON_STRENGTH_ERROR)
+        win = by_kind["procedure"]
+        assert "scoring system" in win.body and "score.py" in win.body
+        assert win.strength == pytest.approx(LESSON_STRENGTH_WIN)
+        # Cursor: the same settlements are never digested twice.
+        again = SettlementLessonsJob().run(SleepContext(config=cfg, consolidator=cons))
+        assert again["lessons"] == 0
+
+    def test_dark_flag_and_no_store_are_clean_skips(self, tmp_path):
+        cfg = _cfg(tmp_path)      # commission flag off
+        cons = Consolidator(cfg)
+        assert "skipped" in SettlementLessonsJob().run(SleepContext(config=cfg, consolidator=cons))
+        assert "skipped" in SettlementLessonsJob().run(SleepContext(config=cfg))  # no consolidator
 
 
 # =================================================================================================

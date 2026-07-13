@@ -449,6 +449,16 @@ class CommissionAddArgs(_ToolArgs):
 class CommissionDoneArgs(_ToolArgs):
     id: int = Field(validation_alias=AliasChoices("id", "task_id"))
     evidence: str = ""
+    job: str = ""      # the workshop job that built it — a rejection then points back at the session
+
+
+class WeighOptionsArgs(_ToolArgs):
+    question: str = Field(validation_alias=AliasChoices("question", "decision", "q"))
+
+    @field_validator("question")
+    @classmethod
+    def _weigh_question_not_empty(cls, value: str) -> str:
+        return _present(value, "the decision to weigh")
 
 
 class DelegateArgs(_ToolArgs):
@@ -2409,9 +2419,10 @@ def tool_objective_list(args: dict, config: Config) -> ToolResult:
 
 def tool_commission_add(args: dict, config: Config) -> ToolResult:
     """Add a task to the COMMISSION todo — the standing order from Charlie you decompose and work
-    between everything else. Optionally attach a checkable 'claim' (exists:<relpath>,
-    not_exists:<relpath>, or <stat.path> <op> <number>) and the task confirms ITSELF the moment
-    the claim measures true; without one, Charlie judges it when he checks in."""
+    between everything else. Optionally attach a checkable 'claim' and the task confirms ITSELF:
+    `runs:<command>` (the strongest — the command is EXECUTED when you claim done; exit 0 pays,
+    a failure reopens the task with the error as feedback), `exists:<relpath>`,
+    `not_exists:<relpath>`, or `<stat.path> <op> <number>`. Without one, Charlie judges it."""
     from commission import Commission
     try:
         t = Commission(config).add(title=(args.get("title") or args.get("task") or ""),
@@ -2419,24 +2430,91 @@ def tool_commission_add(args: dict, config: Config) -> ToolResult:
                                    claim=args.get("claim") or args.get("check") or "")
     except ValueError as e:
         return ToolResult(output=f"Error: {e}", full_output_path=None, success=False, duration_s=0)
-    how = f"self-confirms when `{t.claim}` measures true" if t.claim else "Charlie will judge it"
+    if t.claim.lower().startswith("runs:"):
+        how = f"when you claim done, `{t.claim[5:].strip()}` runs — exit 0 confirms and pays"
+    elif t.claim:
+        how = f"self-confirms when `{t.claim}` measures true"
+    else:
+        how = "Charlie will judge it"
     return ToolResult(output=f"Commission task #{t.id} added: '{t.title}' ({how}).",
                       full_output_path=None, success=True, duration_s=0)
 
 
 def tool_commission_done(args: dict, config: Config) -> ToolResult:
     """Claim a commission task is DONE. This is a claim, not a payout: the task waits for ground
-    truth — its checkable claim measuring true, or Charlie's verdict at his next check-in. Say in
-    'evidence' what he should look at."""
+    truth — its checkable claim measuring true (a runs: claim EXECUTES now — have you run it
+    yourself first?), or Charlie's verdict at his next check-in. Say in 'evidence' what he should
+    look at, and in 'job' which workshop job built it (so a rejection can resume that session)."""
     from commission import Commission
     try:
         t = Commission(config).claim_done(int(args.get("id") or args.get("task_id") or 0),
-                                          evidence=args.get("evidence") or "")
+                                          evidence=args.get("evidence") or "",
+                                          job=args.get("job") or "")
     except (ValueError, TypeError) as e:
         return ToolResult(output=f"Error: {e}", full_output_path=None, success=False, duration_s=0)
     return ToolResult(output=f"Claimed done: commission task #{t.id} '{t.title}' — awaiting "
                              "confirmation (a measured claim, or Charlie's check-in).",
                       full_output_path=None, success=True, duration_s=0)
+
+
+# --- weigh_options: the deliberation prosthetic (first-idea bias countermeasure) -----------------
+# Three fixed LENSES, not three temperature re-rolls: a small mind asked for "three approaches"
+# in one pass gives one idea in three costumes; three SEPARATE bounded calls, each argued from a
+# genuinely different value system, actually diverge. Bounded work: 3 × WEIGH_MAX_TOKENS.
+_WEIGH_LENSES = (
+    ("simplest", "the simplest thing that could possibly work, shipped soonest"),
+    ("robust",   "what stays correct and easy to change as the thing grows"),
+    ("frugal",   "the cheapest path in energy, moves, and new parts — reuse over building"),
+)
+WEIGH_MAX_TOKENS = 180   # declared: one advisor's sketch is a paragraph, not an essay — the point
+                         # is three DIFFERENT directions on the table, not three designs.
+WEIGH_TEMPERATURE = 0.9  # declared: advisors sample hot — divergence is the product; the creature's
+                         # own (cooler) next tick does the judging.
+
+
+def tool_weigh_options(args: dict, config: Config) -> ToolResult:
+    """Before committing to an approach on a real decision, put THREE genuinely different options
+    on the table: three advisors — simplest / robust / frugal — each sketch one approach to your
+    question. Then YOU pick (or blend) and say why. Use it at forks that are expensive to back out
+    of: an architecture, a build plan, a debugging strategy. args: {"question": "the decision,
+    with enough context to reason about it"}."""
+    checked = _validate_tool_args(WeighOptionsArgs, args, "weigh_options")
+    if isinstance(checked, ToolResult):
+        return checked
+    start = time.monotonic()
+    if getattr(config, "mock_mode", False):
+        return ToolResult(output="Error: no mind available to consult (mock mode).",
+                          full_output_path=None, success=False,
+                          duration_s=time.monotonic() - start, fail_kind="blocked")
+    try:
+        from llm import complete as _complete
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(output=f"Error: advisors unavailable: {e}", full_output_path=None,
+                          success=False, duration_s=time.monotonic() - start, fail_kind="exec")
+    sketches = []
+    for name, lens in _WEIGH_LENSES:
+        messages = [
+            {"role": "system", "content":
+             f"You are one advisor of three, and you argue ONLY from this value system: {lens}. "
+             "Propose exactly ONE approach to the decision below, in 120 words or fewer: what "
+             "you'd do, why your lens favors it, and its one biggest risk. Do not hedge across "
+             "approaches — commit to yours."},
+            {"role": "user", "content": checked.question},
+        ]
+        try:
+            text = (_complete(messages, config, temperature=WEIGH_TEMPERATURE,
+                              max_tokens=WEIGH_MAX_TOKENS) or "").strip()
+        except Exception as e:  # noqa: BLE001 - one mute advisor doesn't cancel the council
+            text = f"(advisor unavailable: {e})"
+        sketches.append(f"[{name}] {text}")
+    if all(s.endswith(")") and "advisor unavailable" in s for s in sketches):
+        return ToolResult(output="Error: no advisor could be reached.", full_output_path=None,
+                          success=False, duration_s=time.monotonic() - start, fail_kind="exec")
+    out = ("Three advisors weighed it:\n" + "\n\n".join(sketches)
+           + "\n\nPick one (or blend the best parts) and say WHY before you act — "
+             "the choice is yours, the reasons are the deliverable.")
+    return ToolResult(output=out, full_output_path=None, success=True,
+                      duration_s=time.monotonic() - start)
 
 
 def tool_delegate(args: dict, config: Config) -> ToolResult:
@@ -2600,18 +2678,22 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
 
 
 def register_commission_tools(config: Config) -> bool:
-    """The Commission (COMMISSION_PLAN.md, DARK by default): register the two commission verbs ONLY
-    when `pillars_commission_enabled` is on. Idempotent; mirrors register_predict_tool — with the
+    """The Commission (COMMISSION_PLAN.md, DARK by default): register the commission verbs (plus
+    weigh_options, the deliberation prosthetic granted with the same U7 maturity) ONLY when
+    `pillars_commission_enabled` is on. Idempotent; mirrors register_predict_tool — with the
     flag off the tools are absent from TOOLS, never enter the grammar, and the organ stays dark.
     Returns True if the verbs are present after the call."""
     if getattr(config, "pillars_commission_enabled", False):
         TOOLS.setdefault("commission_add", tool_commission_add)
         TOOLS.setdefault("commission_done", tool_commission_done)
+        TOOLS.setdefault("weigh_options", tool_weigh_options)
         _TOOL_ARG_MODELS.setdefault("commission_add", CommissionAddArgs)
         _TOOL_ARG_MODELS.setdefault("commission_done", CommissionDoneArgs)
+        _TOOL_ARG_MODELS.setdefault("weigh_options", WeighOptionsArgs)
     else:
         TOOLS.pop("commission_add", None)
         TOOLS.pop("commission_done", None)
+        TOOLS.pop("weigh_options", None)
     return "commission_add" in TOOLS
 
 
@@ -2637,7 +2719,8 @@ _BUILTIN_TOOL_NAMES = frozenset(TOOLS)
 # them, but they are still PLATFORM tools (lockable units), never a creature's self-authored skill.
 # `predict` registers via register_predict_tool (4.1) and belongs to the foresight unit; the
 # commission verbs register via register_commission_tools and belong to the commission unit.
-_FLAG_REGISTERED_BUILTINS = frozenset({"predict", "commission_add", "commission_done"})
+_FLAG_REGISTERED_BUILTINS = frozenset({"predict", "commission_add", "commission_done",
+                                       "weigh_options"})
 _EVER_BUILTIN_NAMES = _BUILTIN_TOOL_NAMES | _FLAG_REGISTERED_BUILTINS
 
 # Registry aliases: alias name -> the canonical tool it rides on. An alias exists exactly when its

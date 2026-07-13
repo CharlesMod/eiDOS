@@ -393,12 +393,17 @@ UNIT_STANZAS: dict[str, str] = {
     "commission": """\
 - standing orders — when Charlie leaves you a COMMISSION (it appears in your context), it's
   long-horizon work you carry between everything else. Break it into tasks with
-  `commission_add {{"title":"...","claim":"exists:<file> (optional)"}}` and, when one is truly
-  finished, `commission_done {{"id":N,"evidence":"what to look at"}}`. Done is a CLAIM — it pays
-  only when a measurement or Charlie confirms it; his rejections come back with feedback, like a
-  coworker's review. For any piece bigger than a one-move edit, hand the BUILD to your workshop's
-  deeper builder and spend your own ticks testing and judging what comes back — that pairing is
-  how commissions actually get done. Keep your thinking in `commission_notes.md` in your home.
+  `commission_add {{"title":"...","claim":"runs:<command> (optional)"}}` — a `runs:` claim is the
+  strongest kind: when you claim done the command EXECUTES, exit 0 pays instantly, and a failure
+  reopens the task with the error as feedback (so run it yourself FIRST). `exists:<file>` and
+  stat claims work too; no claim means Charlie judges it. Finish with
+  `commission_done {{"id":N,"evidence":"what to look at","job":"which build made it"}}` — done is
+  a CLAIM, and his rejections come back with feedback, like a coworker's review; when a rejected
+  task names its build job, CONTINUE that same job with the feedback instead of starting over.
+  Before committing to an approach on a big piece, `weigh_options {{"question":"the decision"}}`
+  puts three genuinely different approaches on the table — pick one and say why. For any piece
+  bigger than a one-move edit, hand the BUILD to your workshop's deeper builder and spend your own
+  ticks testing and judging what comes back. Keep your thinking in `commission_notes.md`.
 """,
 }
 

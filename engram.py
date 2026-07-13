@@ -103,6 +103,7 @@ PROVENANCE = frozenset({
 })
 
 
+
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -601,6 +602,15 @@ class Consolidator:
         incoming.validate()
         keeper.strength = max(keeper.strength, incoming.strength)
         keeper.confidence = max(keeper.confidence, incoming.confidence)
+        # Corroboration (§M-2, pitfall #5's exit door): a DREAMED keeper restated by a non-dream
+        # witness has met reality — it takes the witness's source grade and sheds the hypothesis
+        # stamp. SCOPED to dreamed only: other grades keep the keeper's provenance, because source
+        # monitoring is history and the bet ledger's inherited strength-floor semantics depend on
+        # 'inherited' surviving a merge (a nugget must not lose its floor by being confirmed once).
+        if keeper.provenance == "dreamed" and incoming.provenance != "dreamed":
+            keeper.provenance = incoming.provenance
+        if keeper.stats.get("dreamed") and not incoming.stats.get("dreamed"):
+            keeper.stats.pop("dreamed", None)
         keeper.links = list(dict.fromkeys(list(keeper.links) + list(incoming.links)))
         keeper.stats["recall_count"] = int(keeper.stats.get("recall_count", 0)) + int(incoming.stats.get("recall_count", 0))
         keeper.stats["credit_sum"] = float(keeper.stats.get("credit_sum", 0.0)) + float(incoming.stats.get("credit_sum", 0.0))

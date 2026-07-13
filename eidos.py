@@ -804,7 +804,7 @@ class _Pillars:
         self.llm = _call
         return _call
 
-    # --- focus derivation (mechanical: objective title + plan step — never prose) ----------------
+    # --- focus derivation (mechanical: objective title + plan step + hot commission task) --------
     def _focus_terms(self) -> list:
         terms = []
         try:
@@ -819,7 +819,18 @@ class _Pillars:
             terms += _plan_next_step(self.config).split()
         except Exception:  # noqa: BLE001
             pass
-        return [t for t in terms if t][:24]
+        # Task-conditioned recall: the HOT commission task's own words join the focus, so memory
+        # and salience surface what the creature knows about the work in front of it (a reopened
+        # task's feedback rides along — Charlie's words become recall keys). Bounded sub-slice so
+        # the immediate step always keeps the head of the query.
+        try:
+            if self.commission is not None:
+                _hot = self.commission.hot_task()
+                if _hot is not None:
+                    terms += f"{_hot.title} {_hot.detail} {_hot.verdict_note}".split()[:12]
+        except Exception:  # noqa: BLE001
+            pass
+        return [t for t in terms if t][:32]
 
     def focus_query(self) -> str:
         return " ".join(self._focus_terms())

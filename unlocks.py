@@ -186,13 +186,13 @@ UNITS: tuple[Unit, ...] = (
     # flag registers the verbs (register_commission_tools).
     Unit(
         id="commission",
-        tools=("commission_add", "commission_done"),
+        tools=("commission_add", "commission_done", "weigh_options"),
         criterion=Criterion(all_of=[
             Criterion(path="quests.passed", op=">=", value=COMMISSION_QUESTS_REQUIRED),
             Criterion(path="sleeps.total", op=">=", value=COMMISSION_SLEEPS_REQUIRED),
         ]),
         requires_service=None,
-        announce="[SYSTEM] GRANTED: commission_add, commission_done. "
+        announce="[SYSTEM] GRANTED: commission_add, commission_done, weigh_options. "
                  "Standing orders may now bind you.",
         register=REGISTER_SYSTEM,
     ),

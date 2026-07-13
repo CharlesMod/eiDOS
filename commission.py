@@ -54,6 +54,13 @@ RENDER_MAX_TASKS = 8            # declared: TODO block shows at most this many l
                                 # context strip stays a strip; the store holds the rest.
 TITLE_MAX_CHARS = 160           # declared: a task title is one line — detail carries the rest.
 DETAIL_MAX_CHARS = 600          # declared: bound on the free-text detail persisted per task.
+RUNS_CLAIM_TIMEOUT_S = 30       # declared: wall bound on executing a `runs:<command>` claim at the
+                                # settle beat — long enough for a real test run or program launch,
+                                # short enough that one hung claim can't stall the tick loop.
+RUNS_CMD_MAX_CHARS = 300        # declared: a runs-claim is one command line, not a script — anything
+                                # longer belongs in a file the command invokes.
+EXEMPLAR_NOTE_CHARS = 140       # declared: the exemplar line quotes evidence/verdict head-capped —
+                                # a standard to imitate, not a transcript.
 
 # Task lifecycle states.
 OPEN = "open"                   # live — the creature's work queue
@@ -92,6 +99,20 @@ def enabled(config) -> bool:
     return bool(getattr(config, "pillars_commission_enabled", False))
 
 
+def parse_runs_claim(claim: str) -> Optional[str]:
+    """A `runs:<command>` claim — the strongest claim shape: at settle time the ENGINE executes the
+    command (creature-home cwd, RUNS_CLAIM_TIMEOUT_S bound) and exit 0 IS the confirmation; a
+    non-zero exit REOPENS the task carrying the output tail as feedback. "I ran it" becomes
+    ground truth instead of a promise. Returns the command, or None if this isn't a runs claim."""
+    s = (claim or "").strip()
+    if not s.lower().startswith("runs:"):
+        return None
+    cmd = s[len("runs:"):].strip()
+    if not cmd or len(cmd) > RUNS_CMD_MAX_CHARS:
+        return None
+    return cmd
+
+
 def load_brief(config) -> str:
     """The operator's standing order, head-capped for context. Missing file → "" (no commission)."""
     try:
@@ -109,19 +130,24 @@ class Task:
     id: int
     title: str
     detail: str = ""
-    claim: str = ""                  # "" = operator-settled; else expectations claim vocabulary
+    claim: str = ""                  # "" = operator-settled; else claim vocabulary (incl. runs:)
     state: str = OPEN
     evidence: str = ""               # the creature's done-claim note (what to look at)
     verdict_note: str = ""           # the operator's words at settle time (feedback on reject)
+    job: str = ""                    # the workshop (delegate) job that built it, if any — the
+    #                                  revision hook: a rejected build resumes THAT session
     created_ts: str = field(default_factory=_now)
     claimed_ts: Optional[str] = None
     closed_ts: Optional[str] = None
+    updated_ts: Optional[str] = None   # last state change — the lessons job's cursor key
 
     def to_dict(self) -> dict:
         return {"id": self.id, "title": self.title, "detail": self.detail, "claim": self.claim,
                 "state": self.state, "evidence": self.evidence,
-                "verdict_note": self.verdict_note, "created_ts": self.created_ts,
-                "claimed_ts": self.claimed_ts, "closed_ts": self.closed_ts}
+                "verdict_note": self.verdict_note, "job": self.job,
+                "created_ts": self.created_ts,
+                "claimed_ts": self.claimed_ts, "closed_ts": self.closed_ts,
+                "updated_ts": self.updated_ts}
 
     @staticmethod
     def from_dict(d: dict) -> "Task":
@@ -129,8 +155,10 @@ class Task:
                     detail=str(d.get("detail", "")), claim=str(d.get("claim", "")),
                     state=str(d.get("state", OPEN)), evidence=str(d.get("evidence", "")),
                     verdict_note=str(d.get("verdict_note", "")),
+                    job=str(d.get("job", "")),
                     created_ts=d.get("created_ts") or _now(),
-                    claimed_ts=d.get("claimed_ts"), closed_ts=d.get("closed_ts"))
+                    claimed_ts=d.get("claimed_ts"), closed_ts=d.get("closed_ts"),
+                    updated_ts=d.get("updated_ts"))
 
 
 @dataclass
@@ -186,13 +214,13 @@ class Commission:
         if not title:
             raise ValueError("a commission task needs a one-line title")
         claim = (claim or "").strip()
-        if claim:
+        if claim and parse_runs_claim(claim) is None:
             from expectations import parse_claim
             if parse_claim(claim) is None:
                 raise ValueError(
-                    f"claim {claim!r} is not checkable — use `exists:<relpath>`, "
-                    "`not_exists:<relpath>`, or `<stat.path> <op> <number>`, or omit it "
-                    "(the operator will judge)")
+                    f"claim {claim!r} is not checkable — use `runs:<command>` (exit 0 confirms), "
+                    "`exists:<relpath>`, `not_exists:<relpath>`, or `<stat.path> <op> <number>`, "
+                    "or omit it (the operator will judge)")
         tasks = self.load()
         if sum(1 for t in tasks if t.state in _LIVE) >= COMMISSION_MAX_LIVE:
             raise ValueError(
@@ -200,15 +228,16 @@ class Commission:
                 "finish or drop something before adding more")
         nid = max((t.id for t in tasks), default=0) + 1
         task = Task(id=nid, title=title, detail=(detail or "").strip()[:DETAIL_MAX_CHARS],
-                    claim=claim)
+                    claim=claim, updated_ts=_now())
         tasks.append(task)
         self._save(tasks)
         return task
 
-    def claim_done(self, task_id: int, *, evidence: str = "") -> Task:
+    def claim_done(self, task_id: int, *, evidence: str = "", job: str = "") -> Task:
         """The creature claims a task is done. A CLAIM, not a settlement: the task moves to
         done_claimed and waits for ground truth (glue on its claim, or the operator's verdict).
-        Nothing pays here."""
+        Nothing pays here. `job` names the workshop (delegate) session that built it, if any —
+        a rejection then points back at the session to CONTINUE with the feedback."""
         tasks = self.load()
         t = next((t for t in tasks if t.id == int(task_id)), None)
         if t is None:
@@ -217,22 +246,82 @@ class Commission:
             raise ValueError(f"task #{task_id} is {t.state}, not open")
         t.state = DONE_CLAIMED
         t.evidence = (evidence or "").strip()[:DETAIL_MAX_CHARS]
+        if (job or "").strip():
+            t.job = job.strip()[:64]
         t.claimed_ts = _now()
+        t.updated_ts = _now()
         self._save(tasks)
         return t
 
+    def hot_task(self) -> Optional[Task]:
+        """The task most alive right now — recall and attention conditioning key on it. A reopened
+        task (operator feedback waiting) outranks everything (his words are the work); else the
+        most recently touched open task (the current decomposition front). None when nothing is open."""
+        open_tasks = [t for t in self.live() if t.state == OPEN]
+        if not open_tasks:
+            return None
+        fed = [t for t in open_tasks if t.verdict_note]
+        pool = fed or open_tasks
+        return max(pool, key=lambda t: (t.updated_ts or t.created_ts, t.id))  # id breaks same-second ties
+
     # --- settlement: glue half --------------------------------------------------------------
+    def _execute_runs_claim(self, cmd: str) -> tuple[bool, str]:
+        """Run a `runs:` claim's command in the creature's home, bounded. Returns (passed, tail) —
+        the tail is the last of the combined output, which becomes the FEEDBACK on failure (the
+        error message is the review). No new privilege: the creature's own bash runs anything."""
+        import subprocess
+        try:
+            import tools as _tools
+            root = _tools._creature_root(self.config)
+            root.mkdir(parents=True, exist_ok=True)
+            r = subprocess.run(cmd, shell=True, cwd=str(root),
+                               capture_output=True, text=True, errors="replace",
+                               timeout=RUNS_CLAIM_TIMEOUT_S)
+            tail = (r.stdout + r.stderr).strip()[-DETAIL_MAX_CHARS:]
+            return r.returncode == 0, tail or f"exit {r.returncode}"
+        except subprocess.TimeoutExpired:
+            return False, f"timed out after {RUNS_CLAIM_TIMEOUT_S}s"
+        except Exception as e:  # noqa: BLE001 - an unrunnable claim fails with the reason, never raises
+            return False, f"could not run: {e}"
+
     def settle_claims(self, stats: Optional[dict]) -> list[Settlement]:
         """Measure every LIVE task that carries a checkable claim; a claim measuring TRUE settles
         the task CONFIRMED (glue ground truth — even if the creature never said done). Unmeasurable
         defers; false leaves the task where it is (a commission task has no deadline — the operator
-        is the backstop). Returns the settlements owed."""
+        is the backstop). Returns the settlements owed.
+
+        `runs:` claims are the exception on both counts: EXECUTED only when the task is
+        DONE_CLAIMED (the claim event is the trigger — one bounded run per done-claim, never a
+        per-tick poll of an open task), and a FAILING run REOPENS the task with the output tail as
+        feedback — glue rejection, the tightest loop the system has."""
         tasks = self.load()
         out: list[Settlement] = []
         changed = False
         from expectations import parse_claim, evaluate_claim
         for t in tasks:
             if t.state not in _LIVE or not t.claim:
+                continue
+            cmd = parse_runs_claim(t.claim)
+            if cmd is not None:
+                if t.state != DONE_CLAIMED:
+                    continue                      # runs only on the claim event, never on open
+                passed, tail = self._execute_runs_claim(cmd)
+                changed = True
+                if passed:
+                    t.state = CONFIRMED
+                    t.closed_ts = _now()
+                    t.updated_ts = _now()
+                    t.verdict_note = f"ran clean: `{cmd}` (exit 0)"
+                    out.append(Settlement(task=t, how="claim", outcome=CONFIRMED,
+                                          note=t.verdict_note,
+                                          xp=COMMISSION_XP_CONFIRMED, feed=COMMISSION_FEED))
+                else:
+                    t.state = OPEN                # glue rejection — the error IS the feedback
+                    t.claimed_ts = None
+                    t.updated_ts = _now()
+                    t.verdict_note = f"`{cmd}` failed: {tail}"[:DETAIL_MAX_CHARS]
+                    out.append(Settlement(task=t, how="claim", outcome=REJECTED,
+                                          note=t.verdict_note))
                 continue
             claim = parse_claim(t.claim)
             if claim is None:
@@ -241,6 +330,7 @@ class Commission:
             if verdict is True:
                 t.state = CONFIRMED
                 t.closed_ts = _now()
+                t.updated_ts = _now()
                 t.verdict_note = f"claim measured true ({t.claim}; actual: {actual})"
                 changed = True
                 out.append(Settlement(task=t, how="claim", outcome=CONFIRMED,
@@ -280,6 +370,7 @@ class Commission:
                 elif verdict == "confirm":
                     task.state = CONFIRMED
                     task.closed_ts = _now()
+                    task.updated_ts = _now()
                     task.verdict_note = note or "confirmed by the operator"
                     out.append(Settlement(task=task, how="operator", outcome=CONFIRMED,
                                           note=task.verdict_note,
@@ -288,6 +379,7 @@ class Commission:
                 elif verdict == "reject":
                     task.state = OPEN                 # reopened — the note is the feedback
                     task.claimed_ts = None
+                    task.updated_ts = _now()
                     task.verdict_note = note or "rejected by the operator"
                     out.append(Settlement(task=task, how="operator", outcome=REJECTED,
                                           note=task.verdict_note))
@@ -295,6 +387,7 @@ class Commission:
                 else:  # drop
                     task.state = DROPPED
                     task.closed_ts = _now()
+                    task.updated_ts = _now()
                     task.verdict_note = note or "withdrawn by the operator"
                     out.append(Settlement(task=task, how="operator", outcome=DROPPED,
                                           note=task.verdict_note))
@@ -328,9 +421,22 @@ class Commission:
             for t in live[:RENDER_MAX_TASKS]:
                 mark = "…awaiting confirmation" if t.state == DONE_CLAIMED else "open"
                 note = f"  [feedback: {t.verdict_note}]" if (t.state == OPEN and t.verdict_note) else ""
-                lines.append(f"  #{t.id} [{mark}] {t.title}{note}")
+                # The revision hook: a reopened task that names its workshop job points BACK at the
+                # session — continuing the builder that has the context beats rebuilding cold.
+                fix = (f"  [the '{t.job}' workshop job holds this build — continue it "
+                       "with the feedback]" if (t.state == OPEN and t.verdict_note and t.job) else "")
+                lines.append(f"  #{t.id} [{mark}] {t.title}{note}{fix}")
             if len(live) > RENDER_MAX_TASKS:
                 lines.append(f"  (+{len(live) - RENDER_MAX_TASKS} more)")
+        # The exemplar (imitation beats instruction): the last CONFIRMED task, with the evidence
+        # that won — the standard every new claim is implicitly measured against.
+        done = [t for t in self.load() if t.state == CONFIRMED]
+        if done:
+            ex = max(done, key=lambda t: (t.closed_ts or "", t.id))   # id breaks same-second ties
+            ev = (ex.evidence or "(no evidence given)")[:EXEMPLAR_NOTE_CHARS]
+            why = (ex.verdict_note or "")[:EXEMPLAR_NOTE_CHARS]
+            lines.append(f"THE BAR (your last confirmed work — match it): "
+                         f"✓ #{ex.id} {ex.title} — evidence: {ev}; confirmed: {why}")
         return "\n".join(lines)
 
 
