@@ -1204,6 +1204,8 @@ def _make_handler(config: Config):
                 self._respond(200, "application/json", json.dumps(_ctrl_resume(config)))
             elif self.path == "/api/control/pause":
                 self._respond(200, "application/json", json.dumps(_ctrl_pause(config)))
+            elif self.path == "/api/control/sleep":
+                self._respond(200, "application/json", json.dumps(_ctrl_sleep(config)))
             elif self.path == "/api/control/reset":
                 # Destructive wipe (rebirth / full). Operator-only like the other controls.
                 if not _token_ok(self.headers, self.path, config):
@@ -1906,6 +1908,19 @@ def _ctrl_pause(config):
     pausefile.write_text("paused by operator")
     control_notify("pause")
     return {"ok": True, "message": "paused", **_ctrl_status(config)}
+
+
+def _ctrl_sleep(config):
+    """Operator-forced sleep (validation/debug control): drop a sentinel the tick loop consumes at
+    its next sleep window to run a FULL consolidation regardless of arousal — the memory digestion
+    (dedup/distill/decay/skill-retire/calibration) AND the reward-lesson re-distillation that a
+    natural low-arousal sleep would eventually do. The creature's own rhythm still owns real naps;
+    this is the operator reaching in to force a digest now, the same class of control as the
+    kill-switch. Consume-and-delete: the loop removes the sentinel so it fires exactly once."""
+    (config.workspace / "eidos.sleep_now").write_text("sleep requested by operator")
+    control_notify("sleep")   # wake the loop out of any listen/idle wait so it digests promptly
+    return {"ok": True, "message": "sleep queued — the next tick will consolidate",
+            **_ctrl_status(config)}
 
 
 def _restart_eidos_keep_armed(config, reason="restart"):

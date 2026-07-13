@@ -359,6 +359,19 @@ def _count_skills(config: Config) -> int:
         return 0
 
 
+def _consume_sleep_now(config: Config) -> bool:
+    """Operator-forced sleep: True (once) if the dashboard dropped the `eidos.sleep_now` sentinel.
+    Consume-and-delete so a single request fires exactly one forced consolidation. Best-effort."""
+    try:
+        p = config.workspace / "eidos.sleep_now"
+        if p.exists():
+            p.unlink()
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 def _count_artifacts(config: Config) -> int:
     """Count durable files the creature has authored in its own writable home — the cheap harness fact
     that makes 'organize the workspace' REGISTER as progress. Before this, progress was blind to
@@ -2039,9 +2052,12 @@ def run_loop(config: Config, persona=None, wal=None):
             goal_start_time = time.time()
         last_goal_hash = goal_hash
 
-        # --- Compaction check ---
+        # --- Compaction check (or an operator-forced sleep) ---
         tick_compacted = False
-        if should_compact(config, ticks_since_compaction):
+        _forced_sleep = _consume_sleep_now(config)
+        if _forced_sleep:
+            print(f"{pfx} Operator-forced sleep — consolidating now.")
+        if should_compact(config, ticks_since_compaction) or _forced_sleep:
             print(f"{pfx} Dreaming... consolidating memories.")
             write_activity(config, "dreaming", detail="consolidating memories")
             try:
@@ -2076,6 +2092,16 @@ def run_loop(config: Config, persona=None, wal=None):
                                          observations=_sleep_obs)
                 except Exception as _pse:  # noqa: BLE001 - the window is guarded end-to-end (I5)
                     logger.warning("pillars sleep window failed: %s", _pse)
+            # An operator-forced sleep also re-distills the REWARD lessons now — the background
+            # SleepCycle only replays at low arousal, so without this a forced digest could miss
+            # the very signal we force it for (does the value cache still say "thought goes well"?).
+            if _forced_sleep and nervous_learner is not None:
+                try:
+                    _rp = nervous_learner.replay()
+                    print(f"{pfx} Forced reward replay: re-distilled "
+                          f"{len((_rp or {}).get('lessons') or [])} lessons.")
+                except Exception as _re:  # noqa: BLE001 - never let a forced digest wound the tick
+                    logger.warning("forced reward replay failed: %s", _re)
 
         # --- RAM check (observation only; the model is the big consumer and it's a
         # service we don't own — there are no expendable children worth killing) ---

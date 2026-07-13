@@ -102,6 +102,16 @@ def test_count_artifacts_sees_new_workspace_files(tmp_path):
     assert eidos._count_artifacts(cfg) == after_new + 1  # recurses into subdirs
 
 
+def test_forced_sleep_sentinel_is_consume_once(tmp_path):
+    """The operator 'Sleep now' control: the sentinel fires the digest exactly once, then is gone."""
+    cfg = _mk_config(tmp_path)
+    assert eidos._consume_sleep_now(cfg) is False          # nothing queued
+    (cfg.workspace / "eidos.sleep_now").write_text("go")
+    assert eidos._consume_sleep_now(cfg) is True           # consumed
+    assert eidos._consume_sleep_now(cfg) is False          # exactly once — deleted
+    assert not (cfg.workspace / "eidos.sleep_now").exists()
+
+
 @pytest.fixture(autouse=True)
 def _cleanup_predict_tool():
     """The predict tool registers into the GLOBAL tools.TOOLS; deregister after every test here so
