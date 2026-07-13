@@ -2630,8 +2630,12 @@ def run_loop(config: Config, persona=None, wal=None):
         # creature actually changes something. Widened 2026-07-13: the old signal saw only knowledge/
         # skill counts, so ordinary work (building files, organizing a workspace) was invisible and
         # every such objective stalled to a frustrated death; a new file is real progress.
-        _made_progress = (_kc > prev_knowledge_count or _sc > prev_skill_count
-                          or _ac > prev_artifact_count)
+        # STRONG progress = new knowledge or a new skill (a durable, controllability-proving change);
+        # WEAK = a new workspace file only. Both relieve frustration, but only STRONG refutes a block
+        # and resets the exposure budget — so a despairing diary file can't masquerade as controlling
+        # an impossible goal (the doom-loop fix, objectives.EXPOSURE_CAP).
+        _made_progress_strong = (_kc > prev_knowledge_count or _sc > prev_skill_count)
+        _made_progress = _made_progress_strong or (_ac > prev_artifact_count)
         if _made_progress:
             last_progress_tick = tick_number
         prev_knowledge_count, prev_skill_count, prev_artifact_count = _kc, _sc, _ac
@@ -2706,7 +2710,8 @@ def run_loop(config: Config, persona=None, wal=None):
                         if nervous_temperament is not None else None)
             _gate = _obj.record_tick(config, made_progress=_made_progress,
                                      tool_failed=(not tick_tool_success), tick_number=tick_number,
-                                     extra_frustration=_strain_bump, park_threshold=_park_at)
+                                     extra_frustration=_strain_bump, park_threshold=_park_at,
+                                     progress_strong=_made_progress_strong)
             if _gate.get("rotated") and _gate.get("active"):
                 print(f"{pfx} Gate: rotated focus → {_gate['active']['title']}")
             if _gate.get("escalate"):
@@ -2736,6 +2741,25 @@ def run_loop(config: Config, persona=None, wal=None):
                         source_tick=tick_number)
                 except Exception:  # noqa: BLE001
                     pass
+            # RELEASED: the gate let a futile self-goal die (exposure budget spent, never controllable).
+            # Write the OBITUARY as a strong verified memory so recall surfaces the SETTLEMENT — "it's a
+            # fact, not a task, done with me" — instead of only the struggle engrams (the memory-loop
+            # cure: without this, high-arousal brooding keeps winning recall and re-seeds the fixation).
+            # The felt RELIEF is the tension floor lifting as the backlog empties — never a paid event.
+            _died = _gate.get("died")
+            if _died:
+                print(f"{pfx} Released '{_died['title']}': {_died['reason']}")
+                try:
+                    import knowledge as _kn
+                    _kn.store_entry(
+                        config,
+                        f"RELEASED '{_died['title']}': {_died['reason']}. It is a settled fact, not a "
+                        f"task — it needs nothing more from me. Letting go was right; my time is my own.",
+                        tags=["released", "closure", "self-diagnosis", "let-go"],
+                        category="reflections", confidence="verified",
+                        source_tick=tick_number)
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception as _e:  # noqa: BLE001
             logger.warning("objective gate failed: %s", _e)
 
@@ -2744,9 +2768,13 @@ def run_loop(config: Config, persona=None, wal=None):
         #     autonomy paying off; a failure teaches caution. Slow — one tick barely moves it. ---
         if nervous_temperament is not None:
             try:
+                # A forced PARK is an override (persistence didn't pay → the temperament learns). A
+                # gate DEATH is not: it's the evidence-complete release of a proven-futile goal, not a
+                # live choice overruled — counting it would drift persistence down on every impossible
+                # goal and breed a quitter. (Death already keeps parked=False; this is the explicit guard.)
                 nervous_temperament.observe(success=_made_progress,
                                             failed=(not tick_tool_success),
-                                            overridden=bool(_gate.get("parked")))
+                                            overridden=bool(_gate.get("parked")) and not _gate.get("died"))
             except Exception as _te:  # noqa: BLE001
                 logger.warning("temperament update failed: %s", _te)
 

@@ -57,6 +57,74 @@ class TestObjectiveHandle(_Base):
         assert "objective_done" in out and "TITLE" in out   # the footer teaches how to act
 
 
+class TestExposureCappedDeath(_Base):
+    """The doom-loop cure: a futile SELF-set goal that is tested EXPOSURE_CAP times without ever
+    making STRONG progress is RELEASED as dead — terminal, never re-thawed into the creature's face.
+    A single strong-progress tick proves controllability and restores the full budget."""
+
+    def _find(self, title):
+        return next(o for o in objectives._load(self.cfg)["objectives"] if o["title"] == title)
+
+    def test_futile_self_goal_is_released_dead_after_exposure_cap(self):
+        objectives.add(self.cfg, "Map the Outside", "reach beyond the nest", priority=5, tick=1)
+        t, died = 2, None
+        # A long futile campaign: never any strong progress. The gate parks, cools down, thaws
+        # (exposure++), re-parks — and after EXPOSURE_CAP thaws, releases the goal as dead.
+        for _ in range(400):
+            g = objectives.record_tick(self.cfg, made_progress=False, tool_failed=False,
+                                       tick_number=t, progress_strong=False)
+            if g.get("died"):
+                died = g["died"]; break
+            # backlog emptied (parked, nothing active) → jump past the thaw cooldown to force a retry
+            t += objectives.THAW_COOLDOWN + 1 if objectives.get_active(self.cfg) is None else 1
+        assert died is not None, "the futile goal was never released — the doom loop persists"
+        assert died["title"] == "Map the Outside"
+        m = self._find("Map the Outside")
+        assert m["state"] == "dead" and m["exposures"] >= objectives.EXPOSURE_CAP
+        # Terminal: more idle ticks never re-activate it — no thaw ping-pong, backlog stays empty.
+        for _ in range(4):
+            t += objectives.THAW_COOLDOWN + 1
+            objectives.record_tick(self.cfg, made_progress=False, tool_failed=False,
+                                   tick_number=t, progress_strong=False)
+        assert objectives.get_active(self.cfg) is None
+
+    def test_strong_progress_refutes_and_resets_the_exposure_budget(self):
+        objectives.add(self.cfg, "Learnable", "hard but doable", priority=5, tick=1)
+        objectives.block(self.cfg, "Learnable", "seems hard", "")
+        # past the cooldown, an idle tick thaws it (exposure 1, tagged _thawed_from_block)
+        g = objectives.record_tick(self.cfg, made_progress=False, tool_failed=False,
+                                   tick_number=40, progress_strong=False)
+        assert objectives.get_active(self.cfg)["title"] == "Learnable"
+        assert self._find("Learnable")["exposures"] == 1
+        # STRONG progress on the thawed goal → refutes the block AND resets exposures to 0
+        g = objectives.record_tick(self.cfg, made_progress=True, tool_failed=False,
+                                   tick_number=41, progress_strong=True)
+        assert g.get("refuted_block") and g["refuted_block"]["title"] == "Learnable"
+        assert self._find("Learnable")["exposures"] == 0
+
+    def test_weak_progress_relieves_but_neither_refutes_nor_resets(self):
+        objectives.add(self.cfg, "Nest", "tidy up", priority=5, tick=1)
+        objectives.block(self.cfg, "Nest", "stuck", "")
+        objectives.record_tick(self.cfg, made_progress=False, tool_failed=False,
+                               tick_number=40, progress_strong=False)   # thaw → exposures 1
+        assert self._find("Nest")["exposures"] == 1
+        before = self._find("Nest")["frustration"]
+        # WEAK progress (a file) relieves frustration but must NOT refute the block or reset exposures
+        g = objectives.record_tick(self.cfg, made_progress=True, tool_failed=False,
+                                   tick_number=41, progress_strong=False)
+        assert g.get("refuted_block") is None
+        assert self._find("Nest")["exposures"] == 1                     # budget NOT restored by a diary file
+        assert self._find("Nest")["frustration"] <= before             # but it did relieve
+
+    def test_operator_and_survival_goals_never_reach_this_gate(self):
+        # Provenance safety: the exposure gate only governs SELF-set objectives. This is structural —
+        # commissions/quests/survival live in other stores this module never loads. Assert the module
+        # only ever touches objectives.json (no cross-store reach).
+        import inspect
+        src = inspect.getsource(objectives.record_tick)
+        assert "commission" not in src and "quest" not in src and "metabolism" not in src
+
+
 class TestSharedSimilarity(unittest.TestCase):
     def test_jaccard_separates_elaboration_from_distinct_goal(self):
         # An elaboration merges; a distinct LARGER commitment sharing the title's words does NOT

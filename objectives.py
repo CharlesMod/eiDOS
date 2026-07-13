@@ -34,6 +34,14 @@ FRUST_FAIL = 2        # frustration added when the tick's tool FAILED
 FRUST_STALL = 1       # frustration added on a no-progress (but not failed) tick
 FRUST_RELIEF = 3      # frustration removed when the tick made REAL progress
 THAW_COOLDOWN = 25    # ticks a parked objective must wait before it can be thawed for a retry
+EXPOSURE_CAP = 2      # a SELF-set goal that re-parks after this many tested thaw-retrials WITHOUT ever
+                      # making STRONG progress is released as DEAD — the gate's terminal state, so an
+                      # impossible self-goal ("Map the Outside") can't be re-thawed into the creature's
+                      # face forever (the 2026-07-13 doom loop). Each thaw is a controlled retrial;
+                      # 2 buys ~20+ attempts across campaigns — not flighty. A single STRONG-progress
+                      # tick refutes the block and resets exposures to 0 (a hard-but-doable goal keeps
+                      # its full budget). Provenance-safe: only self-set objectives reach this gate —
+                      # operator commissions / System quests / survival live in other systems untouched.
 
 
 def _path(config):
@@ -401,7 +409,8 @@ def _maybe_escalate(data: dict, tick_number: int) -> bool:
 
 
 def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int,
-                extra_frustration: int = 0, park_threshold: Optional[int] = None) -> dict:
+                extra_frustration: int = 0, park_threshold: Optional[int] = None,
+                progress_strong: bool = True) -> dict:
     """THE GATE. Called every tick after progress is known. Updates the active objective's
     frustration, then rotates focus if it has stalled / been parked / finished. Returns a small
     event dict: {rotated: bool, parked: bool, escalate: bool, active: <obj or None>}.
@@ -446,12 +455,17 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
     # Update frustration from this tick's outcome.
     refuted_block = None
     if made_progress:
-        # REFUTATION: a goal thawed from a block that then makes progress means the "I can't do
-        # this" belief was WRONG — the most valuable outcome (maximally surprising). Report it so
-        # the loop can feed the surprise to curiosity (strongly encoding the correction).
-        if active.pop("_thawed_from_block", False):
-            refuted_block = {"title": active["title"],
-                             "reason": str(active.get("blocked_reason") or "")}
+        # Two-tier progress: WEAK (a new workspace file) relieves frustration and resets the stall
+        # counter — writing things is real work for an ordinary goal. But only STRONG progress (new
+        # knowledge / new skill / a completion) proves CONTROLLABILITY: it alone refutes a block and
+        # resets the exposure budget. This closes the 2026-07-13 hole where a despairing DIARY entry
+        # about an impossible goal counted as progress, relieved its frustration, and even "refuted"
+        # its own correct impossibility-belief — brooding was the optimal policy.
+        if progress_strong:
+            if active.pop("_thawed_from_block", False):
+                refuted_block = {"title": active["title"],
+                                 "reason": str(active.get("blocked_reason") or "")}
+            active["exposures"] = 0                     # controllability proven → full budget restored
         active["frustration"] = max(0, active["frustration"] - FRUST_RELIEF)
         active["ticks_since_progress"] = 0
         active["last_progress_tick"] = tick_number
@@ -459,19 +473,29 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
         active["frustration"] += (FRUST_FAIL if tool_failed else FRUST_STALL) + max(0, extra_frustration)
         active["ticks_since_progress"] += 1
 
-    # Has it earned a park? (Frustration over threshold → auto-block + rotate.)
+    # Has it earned a park? (Frustration over threshold → auto-block + rotate — or DIE if it has
+    # already spent its exposure budget without ever proving controllability.)
     rotated = False
     parked = False
     escalate = False
+    died = None
     if active["frustration"] >= park_at:
-        parked = True
-        active["state"] = "blocked"
-        # Re-blocking a thawed goal without progress CONFIRMS the belief (the exposure didn't pan
-        # out this time), so drop the refutation tag — only a real progress tick may refute.
-        active.pop("_thawed_from_block", None)
-        active["blocked_reason"] = active.get("blocked_reason") or (
-            f"stalled — {active['ticks_since_progress']} ticks without progress")
-        # leave wake_condition as set by the model if any
+        active.pop("_thawed_from_block", None)   # re-parking without progress confirms the belief
+        if int(active.get("exposures", 0)) >= EXPOSURE_CAP:
+            # RELEASE: tested EXPOSURE_CAP times, never any strong progress → futile. Dead is terminal
+            # (never re-picked, never re-thawed), so the loop ends instead of the thaw ping-pong
+            # shoving it back into focus. This is the gate's EVIDENCE-COMPLETE call, not the model's —
+            # which keeps 'letting go' out of reach of reward-hacking (no tool, no reward for it).
+            active["state"] = "dead"
+            active["blocked_reason"] = (f"released: {active.get('exposures')} tested retrials without "
+                                        f"real progress — accepted as not mine to do")
+            died = {"title": active["title"], "reason": active["blocked_reason"]}
+        else:
+            parked = True
+            active["state"] = "blocked"
+            active["blocked_reason"] = active.get("blocked_reason") or (
+                f"stalled — {active['ticks_since_progress']} ticks without progress")
+            # leave wake_condition as set by the model if any
         nxt = _pick_next(data, exclude_id=active["id"])
         if nxt is None:
             nxt = _thaw_candidate(data, tick_number)
@@ -491,14 +515,13 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
                 "tick": tick_number,
             }
         else:
-            # Nothing workable anywhere → surface to Boss ONCE (batched), then keep grinding gently.
-            # This is NOT an override of the model's choice (there is nothing else to do), so parked
-            # stays False — the temperament must not "learn to let go" when letting go isn't possible.
-            parked = False
-            active["state"] = "active"   # un-park: there's literally nothing else to do
-            active["frustration"] = park_at - FRUST_RELIEF  # bleed off so we don't re-trip instantly
+            # Nothing else workable. An EMPTY backlog is valid — the creature simply has no open
+            # commitment right now (goal-tension discharges to zero: that relief IS the reward for
+            # letting go, never a credited event). We do NOT un-park-and-grind an impossible lone
+            # goal (the old doom pump); we surface it to Charlie ONCE and let the moment be free.
+            data["active_id"] = None
             escalate = _maybe_escalate(data, tick_number)
 
     _save(config, data)
-    return {"rotated": rotated, "parked": parked, "escalate": escalate,
+    return {"rotated": rotated, "parked": parked, "escalate": escalate, "died": died,
             "active": _by_id(data, data["active_id"]), "refuted_block": refuted_block}
