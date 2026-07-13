@@ -146,6 +146,42 @@ def rumination_streak(outcomes: list[dict], window: int = RUMINATE_WINDOW) -> in
     return sum(1 for o in recent if o.get("tool") in _THOUGHT_TOOLS)
 
 
+MOTIF_WINDOW = 10       # recent reflection bodies (thoughts + notes) the motif brake scans
+MOTIF_DOMINANCE = 0.6   # fraction of them sharing the single most-common content-token PAIR that reads
+#                         as "circling ONE theme" — the morose burrower loop measured ~0.8; healthy
+#                         exploration <0.3. This is content-aware where rumination_streak is not: the
+#                         creature journals its loop THROUGH note_append (thought-only counting misses
+#                         it), and token_jaccard is blind to elaborated rephrasing (0.10–0.26) while a
+#                         dominant token-pair is not.
+MOTIF_BUMP = 1          # small: only nudges rotation, applied on no-progress ticks only, so it can
+#                         never combine with the objective exposure-cap to kill a WORKING goal.
+
+
+def motif_dominance(bodies: list) -> float:
+    """Fraction of recent reflection bodies (thought/note text) that share the single most common
+    CONTENT-TOKEN PAIR — the fingerprint of circling one theme even while rephrasing it every tick."""
+    import itertools
+    from collections import Counter
+    import knowledge as _k
+    bs = [b for b in (bodies or []) if b and str(b).strip()]
+    if len(bs) < 4:
+        return 0.0
+    counts: Counter = Counter()
+    for b in bs:
+        toks = sorted(_k._content_toks(b))
+        for pair in {p for p in itertools.combinations(toks, 2)}:
+            counts[pair] += 1
+    if not counts:
+        return 0.0
+    return counts.most_common(1)[0][1] / len(bs)
+
+
+def motif_bump(bodies: list) -> int:
+    """+MOTIF_BUMP frustration when recent reflection is dominated by one motif — the content-aware
+    rumination brake that catches a loop journaling through action tools."""
+    return MOTIF_BUMP if motif_dominance(bodies) >= MOTIF_DOMINANCE else 0
+
+
 def rumination_bump(outcomes: list[dict], window: int = RUMINATE_WINDOW,
                     k: int = RUMINATE_K) -> int:
     """Extra gate frustration when the recent window is dominated by thought ticks.

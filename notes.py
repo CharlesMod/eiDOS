@@ -51,15 +51,38 @@ def close_active(config) -> None:
         pass
 
 
-def append_note(config, name: str, text: str) -> str:
-    """Append a line/block to a named notebook (creating it), and make it the active notebook."""
+NOTE_DEDUP_SIM = 0.75   # a new line this token-similar to a recent line in the same notebook is a
+#                         near-verbatim repeat — NOT written. The active notebook is re-injected every
+#                         tick; without this it becomes a litany the creature then imitates ("the wall
+#                         is my horizon" ×N → the morose loop). Verbatim repeats score 0.89–1.0, so this
+#                         catches the loop while leaving genuine new notes (which score <0.3) alone.
+
+
+def _recent_lines(config, name: str, n: int = 15) -> list:
+    txt = read_note(config, name, max_chars=4000)
+    return [ln.strip() for ln in txt.splitlines() if ln.strip()][-n:]
+
+
+def append_note(config, name: str, text: str):
+    """Append a line/block to a named notebook (creating it), and make it the active notebook.
+    Returns (name, dropped): dropped=True when the line was a near-verbatim repeat of a recent line
+    and was therefore NOT written — the de-echo that stops the notebook feeding a self-imitation loop."""
     name = _safe_name(name)
-    p = _notes_dir(config) / f"{name}.md"
     body = (text or "").rstrip()
+    if body:
+        try:
+            import knowledge as _k
+            if any(_k.token_jaccard(body, prev) >= NOTE_DEDUP_SIM
+                   for prev in _recent_lines(config, name)):
+                set_active(config, name)          # they meant to work here — keep it open, skip the echo
+                return name, True
+        except Exception:  # noqa: BLE001 - dedup is best-effort; never block a real note
+            pass
+    p = _notes_dir(config) / f"{name}.md"
     with open(p, "a", encoding="utf-8") as f:
         f.write(body + "\n")
     set_active(config, name)
-    return name
+    return name, False
 
 
 def read_note(config, name: str, max_chars: int = 4000) -> str:

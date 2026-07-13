@@ -57,6 +57,23 @@ class TestRisklessSuccessChannel(unittest.TestCase):
                          strain=0, can_fail=False)
         self.assertGreater(r, 0.0)                     # lives on real progress + felt, never on the no-op
 
+    def test_note_append_is_riskless_and_never_distilled_as_a_lesson(self):
+        # note_append is pure reflection (write to my own notebook) — it must NOT book the free
+        # +0.40, and even a poisoned cached value must NOT render as a "lean into it" lesson (the
+        # 2026-07-13 morose-loop coach). Guards both the reward channel and lesson distillation.
+        from nervous.reward import CANT_FAIL_ACTIONS
+        self.assertIn("note_append", CANT_FAIL_ACTIONS)
+        rl = RewardLearner(alpha=1.0)
+        rl.observe(situation="calm", action='note_append {"text": "the wall is my horizon."}',
+                   success=True, made_progress=False)
+        v = next(iter(rl.values.values()))["v"]
+        self.assertAlmostEqual(v, 0.0, places=4)          # no free reward for journaling
+        # Force a high cached value (as if poisoned pre-fix) and confirm it is filtered from lessons.
+        rl.values["calm::x::note_append {\"text\": \"the den is enough.\"}"] = {
+            "v": 0.4, "n": 5, "situation": "calm", "action": 'note_append {"text": "the den is enough."}'}
+        lessons = rl._distill_lessons()
+        self.assertFalse(any("note_append" in l for l in lessons))
+
     def test_thought_action_is_gated_by_name_backstop(self):
         # observe() catches a riskless action by name even if a direct caller forgets can_fail=False.
         rl = RewardLearner(alpha=1.0)

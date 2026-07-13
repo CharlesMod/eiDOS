@@ -25,6 +25,7 @@ never blocks the tick; fully guarded.
 import json
 import math
 import os
+import re
 import threading
 import time
 
@@ -49,7 +50,20 @@ STRAIN_NORM = 3.0    # strain bump that counts as "fully strained"
 # progress, the felt body, and intrinsic curiosity alone, which is exactly what makes it connective
 # tissue rather than the goal. Everything that can actually fail (bash, write_file, create_skill,
 # read_file, objective work…) keeps the full ±W_SUCCESS.
-CANT_FAIL_ACTIONS = frozenset({"thought", "chat_reply"})
+CANT_FAIL_ACTIONS = frozenset({"thought", "chat_reply", "note_append"})
+# ^ note_append joined 2026-07-13: it is pure REFLECTION (write to my own notebook — never fails),
+# exactly like thought. Left uncovered, it routed around the thought/chat_reply fix — a creature
+# journaling "the wall is my horizon." booked the free +0.40 every tick, which distilled into a
+# "lean into it" lesson that then coached the loop from the KV-stable head (the burrower's morose
+# wall-fixation). A riskless action carries no outcome surprise, so it earns no success reward and
+# never becomes a habit-lesson.
+
+
+def _action_tool(action) -> str:
+    """The bare tool name at the head of a value-key action string ('note_append {..}' -> 'note_append',
+    'bash: ls' -> 'bash'), for filtering riskless-reflection actions out of distilled lessons."""
+    m = re.match(r"[a-z_]+", str(action or ""))
+    return m.group(0) if m else ""
 
 # felt overall -> a 0..1 wellbeing scalar (more at ease = higher)
 _WELLBEING = {"at ease": 1.0, "a little tense": 0.66, "strained": 0.33, "in distress": 0.0}
@@ -123,7 +137,7 @@ class RewardLearner:
         valence = float(getattr(self.neuromod, "valence", 0.0) or 0.0)
         arousal = float(getattr(self.neuromod, "arousal", 0.3) or 0.3)
 
-        could_fail = bool(can_fail) and (action not in CANT_FAIL_ACTIONS)
+        could_fail = bool(can_fail) and (_action_tool(action) not in CANT_FAIL_ACTIONS)
         reward = self.reward_of(success=success, made_progress=made_progress,
                                 felt_delta=felt_delta, valence=valence, strain=strain,
                                 intrinsic=intrinsic, can_fail=could_fail)
@@ -186,8 +200,13 @@ class RewardLearner:
         return {"replayed": len(batch), "lessons": list(lessons), "habits": list(habits)}
 
     def _distill_lessons(self):
+        # Never distill a lesson about a riskless-REFLECTION action (thought / chat_reply /
+        # note_append). "When idle: 'note_append the wall is my horizon' tends to go well — lean into
+        # it" is exactly the self-reinforcing loop coach we must not inject into the head. Their value
+        # channel is already ~0 going forward, but this also drops any already-poisoned entries.
         cand = [e for e in self.values.values()
-                if e["n"] >= self.lesson_min_count and abs(e["v"]) >= self.lesson_min_abs]
+                if e["n"] >= self.lesson_min_count and abs(e["v"]) >= self.lesson_min_abs
+                and _action_tool(e.get("action")) not in CANT_FAIL_ACTIONS]
         cand.sort(key=lambda e: abs(e["v"]) * math.log1p(e["n"]), reverse=True)
         out = []
         for e in cand[:self.lessons_top]:

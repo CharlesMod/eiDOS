@@ -1863,7 +1863,12 @@ def tool_note_append(args: dict, config: Config) -> ToolResult:
     text = args.get("text") or args.get("note") or args.get("content") or ""
     if not text:
         return ToolResult(output="Error: provide 'text' to append.", full_output_path=None, success=False, duration_s=0)
-    nm = notes.append_note(config, name, text)
+    nm, dropped = notes.append_note(config, name, text)
+    if dropped:
+        return ToolResult(
+            output=(f"You already wrote almost exactly that in '{nm}' — it's still there in your "
+                    f"notebook, no need to say it again. Do or notice something new instead."),
+            full_output_path=None, success=True, duration_s=0)
     return ToolResult(output=f"Noted to '{nm}' (now your open notebook; it's shown in your context each tick).",
                       full_output_path=None, success=True, duration_s=0)
 

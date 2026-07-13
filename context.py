@@ -803,6 +803,11 @@ def _creature_identity_block(config: Config) -> str:
     return "\n".join(lines)
 
 
+THOUGHT_ECHO_SIM = 0.6   # consecutive thoughts this token-similar collapse into one "circled N×" turn
+#                          (a rephrased near-repeat is a loop, not a new exemplar). The motif brake in
+#                          glue catches the wider thematic looping this misses.
+
+
 def _build_history_thread(config: Config, n_ticks: int = 14) -> list[dict]:
     """Recreate the recent past as a real assistant/user conversation so the model
     experiences its own thought -> action -> result flow, not a flattened blob.
@@ -835,7 +840,22 @@ def _build_history_thread(config: Config, n_ticks: int = 14) -> list[dict]:
     collapsed = []
     for o in obs:
         s = _obs_sig(o)
-        if (collapsed and collapsed[-1][0] == s
+        # Thought turns never shared an _obs_sig (each rephrasing is distinct), so a looping monologue
+        # used to arrive as N fresh assistant turns the model then imitated. Collapse consecutive
+        # NEAR-VERBATIM thoughts too, so repetition is VISIBLE as repetition, not as more exemplars.
+        if (o.get("tool") == "thought" and collapsed
+                and collapsed[-1][2].get("tool") == "thought"):
+            cur = thoughts.get(o.get("tick"), "")
+            prev = thoughts.get(collapsed[-1][2].get("tick"), "")
+            try:
+                import knowledge as _k
+                if cur and prev and _k.token_jaccard(cur, prev) >= THOUGHT_ECHO_SIM:
+                    collapsed[-1][1] += 1
+                    continue
+            except Exception:  # noqa: BLE001
+                pass
+            collapsed.append([s, 1, o])
+        elif (collapsed and collapsed[-1][0] == s
                 and o.get("tool") not in ("system", "watchdog", "dream", "system_window")):
             collapsed[-1][1] += 1
         else:
@@ -866,7 +886,9 @@ def _build_history_thread(config: Config, n_ticks: int = 14) -> list[dict]:
         thought = thoughts.get(o.get("tick"), "")
         if tool == "thought":
             if thought:
-                out.append({"role": "assistant", "content": thought})
+                rep = (f"  (you've circled this same thought {count}× — nothing new here; do or "
+                       f"notice something else)" if count > 1 else "")
+                out.append({"role": "assistant", "content": thought + rep})
             continue
         try:
             argstr = json.dumps(o.get("args", {}), ensure_ascii=False)

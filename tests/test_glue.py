@@ -193,5 +193,27 @@ class TestEscalationHint(unittest.TestCase):
         self.assertEqual(glue.escalation_hint([F(sig="a"), F(sig="a")]), "")
 
 
+class TestMotifBrake(unittest.TestCase):
+    """The content-aware rumination brake: a loop that rephrases ONE theme every tick (evading the
+    thought-only counter) is caught by content-token-pair dominance, where token_jaccard is blind."""
+
+    def test_theme_loop_fires_healthy_exploration_does_not(self):
+        loop = ["the wall is there. the words stay. a small solid space.",
+                "the wall. the words. they stay. a strange truth.",
+                "the wall is there, the words stay, a heavy truth to carry.",
+                "the wall. the words. a repeating truth, a pulse.",
+                "the wall the words they stay the foundation of it all."]
+        healthy = ["ooh what's in this file", "i made a folder it's mine",
+                   "feeling low i'll rest", "what happens if i run that",
+                   "the stories folder has three things"]
+        self.assertGreaterEqual(glue.motif_dominance(loop), glue.MOTIF_DOMINANCE)
+        self.assertEqual(glue.motif_bump(loop), glue.MOTIF_BUMP)
+        self.assertLess(glue.motif_dominance(healthy), glue.MOTIF_DOMINANCE)
+        self.assertEqual(glue.motif_bump(healthy), 0)
+
+    def test_too_few_bodies_is_never_a_loop(self):
+        self.assertEqual(glue.motif_dominance(["the wall", "the wall"]), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2661,6 +2661,23 @@ def run_loop(config: Config, persona=None, wal=None):
                 print(f"{pfx} Glue: ruminating ({_glue.rumination_streak(_outcomes)} thought ticks "
                       f"in the last {_glue.RUMINATE_WINDOW}) — frustration +{_rum_bump}")
             _strain_bump += _rum_bump
+            # Motif brake (content-aware): a loop that journals ITS one theme through action tools
+            # evades the thought-only counter above. Scan recent thoughts + the open notebook for a
+            # dominant content-token pair and nudge rotation off the fixation.
+            try:
+                from memory import read_recent_thoughts as _rrt
+                _bodies = [t.get("text", "") for t in _rrt(config, _glue.MOTIF_WINDOW)]
+                import notes as _notes
+                _an = _notes.get_active(config)
+                if _an:
+                    _bodies += _notes._recent_lines(config, _an, _glue.MOTIF_WINDOW)
+                _motif = _glue.motif_bump(_bodies)
+                if _motif:
+                    print(f"{pfx} Glue: circling one theme (motif dominance "
+                          f"{_glue.motif_dominance(_bodies):.2f}) — frustration +{_motif}")
+                _strain_bump += _motif
+            except Exception:  # noqa: BLE001
+                pass
         except Exception as _ge:  # noqa: BLE001 - glue is best-effort
             logger.warning("strain glue failed: %s", _ge)
 
