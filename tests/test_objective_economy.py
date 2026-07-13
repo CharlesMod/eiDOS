@@ -32,6 +32,31 @@ class _Base(unittest.TestCase):
                       if o.get("state") in states)
 
 
+class TestObjectiveHandle(_Base):
+    """2026-07-13 friction: the list showed '[3]' (the PRIORITY) which read like an id, so a newborn
+    typed '3' into objective_done and nothing matched. The TITLE is the handle; the list shows it and
+    a refusal teaches it."""
+
+    def test_done_by_title_substring_not_priority_number(self):
+        import tools
+        objectives.add(self.cfg, "Build the contradiction log", "why", priority=3, tick=1)
+        # The priority number is NOT a handle — a bare "3" must be refused, teachingly.
+        r = tools.tool_objective_done({"id": "3"}, self.cfg)
+        assert not r.success
+        assert "Build the contradiction log" in r.output and "TITLE" in r.output
+        # A few words of the title DO close it.
+        r = tools.tool_objective_done({"title": "contradiction log"}, self.cfg)
+        assert r.success and "contradiction log" in r.output.lower()
+
+    def test_list_leads_with_title_and_teaches_the_handle(self):
+        import tools
+        objectives.add(self.cfg, "Map the nest", "why", priority=5, tick=1)
+        out = tools.tool_objective_list({}, self.cfg).output
+        assert "Map the nest" in out
+        assert "p5" in out                      # priority demoted to a trailing tag, not a leading id
+        assert "objective_done" in out and "TITLE" in out   # the footer teaches how to act
+
+
 class TestSharedSimilarity(unittest.TestCase):
     def test_jaccard_separates_elaboration_from_distinct_goal(self):
         # An elaboration merges; a distinct LARGER commitment sharing the title's words does NOT

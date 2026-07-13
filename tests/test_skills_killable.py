@@ -99,7 +99,9 @@ class TestKillableExecution(unittest.TestCase):
 
 
 class TestAuthoringContract(unittest.TestCase):
-    """(b) a dict-returning skill is rejected at authoring time (killable path only)."""
+    """(b) a bare return (dict/str/number) is FIRST-CLASS — accepted at authoring and wrapped into a
+    successful ToolResult at runtime, on the killable path too. (Reversed 2026-07-13: forcing a
+    newborn to construct a ToolResult was pure friction — it burned ticks failing the contract.)"""
 
     def setUp(self):
         self.config = _cfg()
@@ -108,23 +110,19 @@ class TestAuthoringContract(unittest.TestCase):
         for n in ("dicty", "adder"):
             TOOLS.pop(n, None)
 
-    def test_dict_return_rejected_at_create(self):
+    def test_bare_return_accepted_at_create_and_wrapped_at_run(self):
         r = create_skill(self.config, "dicty", _DICT)
-        self.assertFalse(r.get("success"))
-        joined = " ".join(r.get("errors", []))
-        self.assertIn("ToolResult", joined)
-        self.assertNotIn("dicty", TOOLS)  # never activated
+        self.assertTrue(r.get("success"), r.get("errors"))     # a dict return authors cleanly now
+        self.assertIn("dicty", TOOLS)                          # and activates
+        res = TOOLS["dicty"]({}, self.config)                  # runtime wraps it into a success
+        self.assertTrue(res.success, res.output)
 
-    def test_dict_return_rejected_at_edit(self):
-        # Author a good skill, then try to edit it into a dict-returner (same function name, wrong
-        # return type) — the new version is refused and the good active version is kept.
+    def test_bare_return_accepted_at_edit(self):
+        # Author a good ToolResult skill, then edit it into a bare-dict returner — now allowed.
         self.assertTrue(create_skill(self.config, "adder", _GOOD, args_schema={"n": "int"})["success"])
         dict_body = 'def tool_adder(args, config):\n    return {"presence": True}\n'
         r = edit_skill(self.config, "adder", dict_body)
-        self.assertFalse(r.get("success"))
-        joined = " ".join(r.get("errors", []))
-        self.assertIn("ToolResult", joined)
-        self.assertEqual(r.get("kept_active"), "1.0.0")
+        self.assertTrue(r.get("success"), r.get("errors"))
 
     def test_toolresult_return_accepted_at_create(self):
         r = create_skill(self.config, "adder", _GOOD, args_schema={"n": "int"})

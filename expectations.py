@@ -470,6 +470,47 @@ CLAIM_OPS = (">=", "<=", "==", ">", "<")   # two-char ops first: the parser scan
 
 _CLAIM_PATH_RE = re.compile(r"^[a-z_]+\.[a-z_0-9]+$")
 
+# Forgiving scanners (salvage_claim): a small model routinely writes the claim into its prose or the
+# wrong field. These find a checkable claim EMBEDDED anywhere in free text so it is rescued, not
+# refused. Ops sorted longest-first so ">=" wins over ">".
+_STAT_CLAIM_RE = re.compile(r"[a-z_]+\.[a-z_0-9]+\s*(?:>=|<=|==|>|<)\s*-?\d+(?:\.\d+)?", re.I)
+_FILE_CLAIM_RE = re.compile(r"(?:not_exists|exists)\s*:\s*[^\s\"'`]+", re.I)
+_BARE_PATH_RE = re.compile(r"\b[a-z_]+\.[a-z_0-9]+\b", re.I)   # a path with NO op/number (for diagnostics)
+
+
+def salvage_claim(text: str) -> Optional[dict]:
+    """Find the first checkable claim embedded ANYWHERE in free text, or None. parse_claim is strict
+    (the whole string must BE the claim); this is the forgiving scan for when the model wrapped the
+    claim in words or wrote it into the statement instead of the target field. Meet it where it is."""
+    if not text:
+        return None
+    for rx in (_FILE_CLAIM_RE, _STAT_CLAIM_RE):
+        for m in rx.finditer(text):
+            c = parse_claim(m.group(0).replace(" ", "") if rx is _FILE_CLAIM_RE else m.group(0))
+            if c:
+                return c
+    return None
+
+
+def claim_to_str(claim: Optional[dict]) -> str:
+    """Render a parsed claim back to its canonical one-line form — so a salvaged claim is stored and
+    echoed in the exact shape the creature should have typed (the teaching form)."""
+    if not claim:
+        return ""
+    if claim.get("kind") == "file":
+        return ("not_exists:" if claim.get("negate") else "exists:") + claim.get("relpath", "")
+    if claim.get("kind") == "stat":
+        v = claim.get("value")
+        v = int(v) if isinstance(v, float) and v.is_integer() else v
+        return f"{claim.get('path')} {claim.get('op')} {v}"
+    return ""
+
+
+def bare_paths(text: str) -> list:
+    """Dotted path-like tokens in free text that carry NO operator/number — used only to DIAGNOSE a
+    refused bet ("I see `skills.live_count` but a claim needs an operator and a number")."""
+    return _BARE_PATH_RE.findall(text or "")
+
 
 def parse_claim(target: str) -> Optional[dict]:
     """Parse a bet target into a checkable claim, or None if it is legacy free text.

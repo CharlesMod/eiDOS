@@ -98,12 +98,43 @@ class TestPredictCreatesEngram:
         res = tools.tool_predict({"statement": "dean gets home before dinner",
                                   "target": "front door opens", "deadline": "in 2h"}, cfg)
         assert not res.success and res.fail_kind == "args"
-        assert "isn't checkable" in res.output and "exists:" in res.output
+        # The refusal now DIAGNOSES (no claim found anywhere) and shows the fix, not just a rule.
+        assert "couldn't find a checkable claim" in res.output and "exists:" in res.output
         assert not ExpectationLedger(cfg).open_predictions()   # nothing entered the ledger
         # A stat claim outside the adjudicatable vocabulary is refused the same way.
         res = tools.tool_predict({"statement": "latency stays low",
                                   "target": "network.latency_ms <= 50", "deadline": "in 5m"}, cfg)
         assert not res.success and "isn't a stat the world tracks" in res.output
+
+    def test_tool_predict_salvages_a_misplaced_claim(self, tmp_path):
+        # 2026-07-13 friction: a newborn wrote the VALID claim into 'statement' and left 'target'
+        # empty (or wrapped it in prose), got "isn't checkable", and gave up. Now it's rescued.
+        cfg = _cfg(tmp_path)
+        res = tools.tool_predict({"statement": "I'll have at least one live skill: skills.live_count >= 1",
+                                  "target": "", "deadline": "in 2h", "confidence": 0.9}, cfg)
+        assert res.success
+        assert "I read your claim as `skills.live_count >= 1`" in res.output   # and it TEACHES the form
+        assert ExpectationLedger(cfg).open_predictions()                       # the bet was placed
+
+    def test_tool_predict_diagnoses_a_bare_path(self, tmp_path):
+        # A real stat named without an operator/number is diagnosed, not just re-lectured.
+        cfg = _cfg(tmp_path)
+        res = tools.tool_predict({"statement": "betting on skills", "target": "skills.live_count",
+                                  "deadline": "in 1h"}, cfg)
+        assert not res.success
+        assert "needs an operator and a number" in res.output and "skills.live_count >= 1" in res.output
+
+    def test_tool_predict_suggests_closest_path(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        res = tools.tool_predict({"statement": "x", "target": "skills.livecount >= 1",
+                                  "deadline": "in 1h"}, cfg)
+        assert not res.success and "Did you mean" in res.output and "skills.live_count" in res.output
+
+    def test_salvage_and_canonical_string(self):
+        import expectations as e
+        assert e.claim_to_str(e.salvage_claim("bet that exists:nest/map.txt soon")) == "exists:nest/map.txt"
+        assert e.claim_to_str(e.salvage_claim("maybe skills.live_count >= 1 tonight")) == "skills.live_count >= 1"
+        assert e.salvage_claim("just some prose with no claim") is None
 
     def test_tool_predict_blocked_when_flag_off(self, tmp_path):
         cfg = _cfg(tmp_path, enabled=False)

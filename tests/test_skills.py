@@ -123,6 +123,11 @@ _DROPPER = """def tool_dropper(args, config):
     return ToolResult(output='dropped', full_output_path=None, success=True, duration_s=0.0)
 """
 
+# A newborn's skill: no framework object, just a plain string return. Must be first-class.
+_BARE_RETURN = """def tool_greet(args, config):
+    return 'hello from the nest'
+"""
+
 
 class TestSkillWorld(unittest.TestCase):
     """Skill code (the create-time smoke call AND every runtime invoke) executes in the
@@ -159,6 +164,16 @@ class TestSkillWorld(unittest.TestCase):
                         "skill invoke did not execute in the creature home")
         self.assertFalse(self._repo_probe().exists(),
                          "skill invoke wrote into the repo root — the wrong world")
+
+    def test_bare_string_return_is_first_class(self):
+        # 2026-07-13 friction: a newborn burned ticks because a skill was REJECTED unless it built a
+        # ToolResult. A plain `return "..."` must now author cleanly AND run wrapped as a success.
+        self.addCleanup(lambda: TOOLS.pop("greet", None))
+        r = skills.create_skill(self.config, "greet", _BARE_RETURN)
+        self.assertTrue(r.get("success"), r.get("errors"))     # authoring accepts the bare return
+        res = TOOLS["greet"]({}, self.config)                  # runtime wraps it
+        self.assertTrue(res.success, res.output)
+        self.assertIn("hello from the nest", res.output)
 
     def test_house_ai_skill_runs_in_the_workspace(self):
         # creature_mode OFF: bash's world is the full workspace (no home burrow) — skills follow

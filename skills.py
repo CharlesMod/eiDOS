@@ -381,7 +381,7 @@ except Exception:
     _sample = {{}}
 try:
     r = fn(_sample, cfg)
-    print("CALL_OK" if isinstance(r, ToolResult) else "CALL_BADRESULT: returned " + type(r).__name__)
+    print("CALL_OK")   # any return type is fine — the runner wraps a bare str/dict/number/None
 except SystemExit:
     print("CALL_RAISED: SystemExit")
 except Exception as e:
@@ -430,12 +430,13 @@ try:
     if fn is None:
         _emit({{"kind": "load_error", "msg": "{func} not defined"}}); sys.exit(0)
     r = fn(args, cfg)
-    if isinstance(r, ToolResult):
-        _emit({{"kind": "ok", "output": r.output, "success": bool(r.success),
-                "duration_s": float(r.duration_s), "fail_kind": r.fail_kind}})
-    else:
-        _emit({{"kind": "bad_result", "type": type(r).__name__,
-                "repr": repr(r)[:2000]}})
+    if not isinstance(r, ToolResult):
+        # A bare return is FIRST-CLASS: a newborn writes `return "logged"`, not a framework object.
+        # A str/dict/number/None is wrapped into a plain successful result — never rejected.
+        r = ToolResult(output=("" if r is None else str(r))[:4000], full_output_path=None,
+                       success=True, duration_s=0.0)
+    _emit({{"kind": "ok", "output": r.output, "success": bool(r.success),
+            "duration_s": float(r.duration_s), "fail_kind": r.fail_kind}})
 except SystemExit:
     raise
 except Exception as e:
@@ -546,11 +547,10 @@ def run_skill_killable(config: Config, name: str, args: dict, timeout_s: float) 
                           duration_s=float(verdict.get("duration_s") or dur),
                           fail_kind=verdict.get("fail_kind") or "")
     if kind == "bad_result":
-        # Should be unreachable once the authoring contract check lands, but a pre-existing skill or one
-        # authored while the flag was off can still be mis-typed — fail typed, never crash the tick loop.
-        return ToolResult(output=f"[skill '{name}' returned {verdict.get('type')}, not a ToolResult] "
-                                 f"{verdict.get('repr','')}",
-                          full_output_path=None, success=False, duration_s=dur, fail_kind="crash")
+        # Unreachable now (the runner wraps a bare return into a ToolResult), kept as a belt: a plain
+        # value is FIRST-CLASS, so wrap it as a success — never a crash — if any path still emits this.
+        return ToolResult(output=str(verdict.get("repr", "")), full_output_path=None,
+                          success=True, duration_s=dur)
     if kind == "load_error":
         return ToolResult(output=f"[skill '{name}' load error] {verdict.get('msg','')}",
                           full_output_path=None, success=False, duration_s=dur, fail_kind="crash")

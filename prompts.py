@@ -114,11 +114,12 @@ Core tools:
 - check_tools  {{}}      — your full toolkit (built-in tools + the skills you've authored)
 
 Build your own tools — this is core to who you are:
-- create_skill  {{"skill_name": "set_plug", "skill_code": "def tool_set_plug(args, config):\\n    # ...do the work...\\n    return ToolResult(output='done', full_output_path=None, success=True, duration_s=0)", "description": "Turn a Tuya plug on/off"}}
-    Author a new reusable tool. The code MUST define a function named tool_<skill_name>(args, config)
-    that returns ToolResult(output, full_output_path, success, duration_s). It is validated,
-    dry-run, and becomes callable immediately (next tick). Skills MAY import and use os, subprocess,
-    requests, sockets, etc. — that is how you control the house. Never use eval/exec/compile/__import__.
+- create_skill  {{"skill_name": "set_plug", "skill_code": "def tool_set_plug(args, config):\\n    # ...do the work...\\n    return 'plug set'", "description": "Turn a Tuya plug on/off"}}
+    Author a new reusable tool. The code MUST define a function named tool_<skill_name>(args, config);
+    just `return` a short string (or dict) saying what happened — that's enough (a ToolResult(...) is
+    also accepted if you want to force success=False). It is validated, dry-run, and becomes callable
+    immediately (next tick). Skills MAY import and use os, subprocess, requests, sockets, etc. — that
+    is how you control the house. Never use eval/exec/compile/__import__.
 - edit_skill  {{"skill_name": "set_plug", "skill_code": "...improved version..."}}  (old version kept)
 - list_skills  {{}}   — see your skills and how reliable each has been
 - rollback_skill  {{"skill_name": "set_plug", "version": "1.0.0"}}

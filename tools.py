@@ -2366,10 +2366,22 @@ def tool_objective_done(args: dict, config: Config) -> ToolResult:
     key = (args.get("id") or args.get("title") or args.get("objective") or "").strip()
     o = objectives.mark_done(config, key)
     if not o:
-        return ToolResult(output=f"No objective matched '{key}'. Use objective_list to see them.",
+        return ToolResult(output=_no_objective_matched(config, key),
                           full_output_path=None, success=False, duration_s=0)
     return ToolResult(output=f"✓ Done: '{o['title']}'. Focus will move to your next commitment.",
                       full_output_path=None, success=True, duration_s=0)
+
+
+def _no_objective_matched(config, key: str) -> str:
+    """A teaching refusal: echo what didn't match AND list the titles that WOULD, so the creature
+    fixes it now instead of guessing (a '3' — the priority — matched nothing, 2026-07-13)."""
+    import objectives
+    titles = [o["title"] for o in objectives.list_objectives(config)]
+    if not titles:
+        return f"No objective matched '{key}' — you have none open. Add one with objective_add."
+    shown = "\n".join(f"  · {t}" for t in titles[:8])
+    return (f"No objective matched '{key}'. Use the TITLE (a few words are enough), not a number. "
+            f"Your objectives:\n{shown}")
 
 
 def tool_objective_block(args: dict, config: Config) -> ToolResult:
@@ -2387,7 +2399,7 @@ def tool_objective_block(args: dict, config: Config) -> ToolResult:
         o = objectives.block(config, key, reason, wake)
         verb = "Parked"
     if not o:
-        return ToolResult(output=f"No objective matched '{key}'. Use objective_list to see them.",
+        return ToolResult(output=_no_objective_matched(config, key),
                           full_output_path=None, success=False, duration_s=0)
     tail = f" (resumes when: {wake})" if wake else ""
     return ToolResult(output=f"{verb} '{o['title']}': {reason}{tail}. Switch to another commitment now.",
@@ -2404,16 +2416,23 @@ def tool_objective_list(args: dict, config: Config) -> ToolResult:
     active_id = (objectives._load(config)).get("active_id")
     glyph = {"active": "▶", "blocked": "⏸", "done": "✓", "dead": "✗"}
     lines = []
+    # The TITLE is the handle: lead with it so the creature acts on what it can see, and demote the
+    # priority to a trailing tag — a leading "[3]" used to read like an id, so a newborn typed "3"
+    # into objective_done and nothing matched (2026-07-13). objective_done takes the title (a few
+    # words of it are enough — substring match), never the priority number.
     for o in sorted(objs, key=lambda x: (-x["priority"])):
         mark = "»" if o["id"] == active_id else " "
         g = glyph.get(o["state"], "·")
         extra = ""
         if o["state"] == "active":
-            extra = f"  frustration {o['frustration']}/{objectives.FRUST_PARK}"
+            extra = f"  ·  frustration {o['frustration']}/{objectives.FRUST_PARK}"
         elif o["state"] == "blocked":
-            extra = f"  ({o.get('blocked_reason') or 'parked'}" + (
+            extra = f"  ·  ({o.get('blocked_reason') or 'parked'}" + (
                 f"; resumes when {o['wake_condition']}" if o.get("wake_condition") else "") + ")"
-        lines.append(f"{mark}{g} [{o['priority']}] {o['title']}{extra}")
+        lines.append(f"{mark}{g} {o['title']}  ·  p{o['priority']}{extra}")
+    lines.append("")
+    lines.append("Act on one by its TITLE (a few words are enough): "
+                 "objective_done {\"title\": \"...\"} · objective_block {\"title\": \"...\"}")
     return ToolResult(output="\n".join(lines), full_output_path=None, success=True, duration_s=0)
 
 
@@ -2555,6 +2574,14 @@ def _parse_deadline(raw: str) -> float:
         return now + _PREDICT_DEFAULT_HORIZON_S
 
 
+def _closest_paths(bad: str, vocab, n: int = 2) -> str:
+    """The 1–2 adjudicatable paths nearest a mistyped one, for a 'did you mean' diagnostic. '' when
+    nothing is close enough — never guess wildly at a path the creature didn't nearly type."""
+    import difflib
+    hits = difflib.get_close_matches((bad or "").lower(), list(vocab), n=n, cutoff=0.6)
+    return " / ".join(f"`{h}`" for h in hits)
+
+
 def _claim_vocab_help() -> str:
     """The teaching refusal for an ungradeable bet target — the creature's one manual for what the
     world can actually check. Rendered at the tool boundary so an unrepresentable bet teaches the
@@ -2591,18 +2618,42 @@ def tool_predict(args: dict, config: Config) -> ToolResult:
                           full_output_path=None, success=False, duration_s=0, fail_kind="args")
     # The winnable-game boundary: an ungradeable target is REFUSED WITH THE MANUAL, never accepted
     # and auto-failed later. Stat claims must use the same adjudicatable vocabulary quest criteria
-    # do — the referee and the rulebook stay one thing.
+    # do — the referee and the rulebook stay one thing. But a small model routinely writes the right
+    # claim into the wrong field or wraps it in prose (2026-07-13: a newborn burned ~10 ticks with a
+    # VALID `skills.live_count >= 1` it couldn't seat, then concluded the System was lying). So we
+    # SALVAGE the claim from wherever it landed, and when we can't, we DIAGNOSE the specific mistake
+    # and echo the fix — never just re-list the vocabulary it already has.
     target = (args.get("target") or "").strip()
     claim = expectations.parse_claim(target)
+    salvaged = None
     if claim is None:
-        return ToolResult(output=f"Bet refused — \"{target or '(empty)'}\" isn't checkable.\n"
-                                 f"{_claim_vocab_help()}",
+        claim = expectations.salvage_claim(target + "  " + statement)   # search both fields + prose
+        if claim is not None:
+            salvaged = expectations.claim_to_str(claim)
+            target = salvaged                                          # store/echo the clean form
+    if claim is None:
+        # Nothing checkable anywhere. Diagnose: did they name a real stat but leave off the op/number?
+        import quests as _quests
+        seen = [p for p in expectations.bare_paths(target + " " + statement)
+                if p.lower() in _quests.ADJUDICATABLE_PATHS]
+        if seen:
+            p = seen[0].lower()
+            return ToolResult(output=(f"Bet refused — I see the stat `{p}`, but a claim needs an "
+                                      f"operator and a number. Put JUST this in 'target': "
+                                      f"`{p} >= 1`  (nothing else).\n{_claim_vocab_help()}"),
+                              full_output_path=None, success=False, duration_s=0, fail_kind="args")
+        return ToolResult(output=(f"Bet refused — I couldn't find a checkable claim in your target "
+                                  f"or statement. Put the bare claim in 'target', e.g. "
+                                  f"`skills.live_count >= 1` or `exists:nest/map.txt` — nothing "
+                                  f"else.\n{_claim_vocab_help()}"),
                           full_output_path=None, success=False, duration_s=0, fail_kind="args")
     if claim.get("kind") == "stat":
         import quests as _quests
         if claim["path"] not in _quests.ADJUDICATABLE_PATHS:
-            return ToolResult(output=f"Bet refused — \"{claim['path']}\" isn't a stat the world "
-                                     f"tracks.\n{_claim_vocab_help()}",
+            close = _closest_paths(claim["path"], _quests.ADJUDICATABLE_PATHS)
+            hint = f" Did you mean {close}?" if close else ""
+            return ToolResult(output=(f"Bet refused — \"{claim['path']}\" isn't a stat the world "
+                                      f"tracks.{hint}\n{_claim_vocab_help()}"),
                               full_output_path=None, success=False, duration_s=0, fail_kind="args")
     try:
         confidence = float(args.get("confidence", expectations.DEFAULT_CONFIDENCE))
@@ -2620,9 +2671,11 @@ def tool_predict(args: dict, config: Config) -> ToolResult:
         return ToolResult(output=f"Prediction refused: {e}", full_output_path=None,
                           success=False, duration_s=0, fail_kind="blocked")
     when = max(0, int(deadline - time.time()))
+    note = (f"  (I read your claim as `{salvaged}` — put exactly that in 'target' next time.)"
+            if salvaged else "")
     return ToolResult(
         output=(f"Bet placed: \"{p.statement}\" (target: {p.target or '—'}; confidence "
-                f"{p.confidence:.0%}; resolves in ~{when}s). Glue will score it — not your word."),
+                f"{p.confidence:.0%}; resolves in ~{when}s). Glue will score it — not your word.{note}"),
         full_output_path=None, success=True, duration_s=0)
 
 
