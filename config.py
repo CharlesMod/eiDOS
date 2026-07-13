@@ -203,8 +203,11 @@ class Config:
     #                                              tokens) was starvation. Recall is remember-via-retrieval.
     context_env_max_chars: int = 800
     context_interventions_max_chars: int = 2000
-    context_max_total_chars: int = 36000  # ~10-11k tokens (gemma ~3.3 char/tok on tool-trace): coherent
-    #                                        backstop under the 16k window leaving ~5k for the response.
+    context_max_total_chars: int = 37000  # the SAFE MAX under the 16k window (=(16384 - ~5k response) ×
+    #                                        3.3 char/tok). A true BACKSTOP: with history depth bounding the
+    #                                        living stream, the pre-dream total sits ~30k, so this rarely
+    #                                        fires — it does NOT trim history every tick (which churned the
+    #                                        KV cache and slowed ticks). The dream is the primary bound.
     # BIBLE §2.11 delta prompting: memoize the byte-stable KV head (identity/self-guide/skills/learned/
     # mission) so it is re-RENDERED only when one of its source files actually changes — the per-tick
     # work becomes the deltas, not re-reading + re-truncating the whole prefix. Kill-switch (default on).

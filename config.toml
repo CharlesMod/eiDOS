@@ -115,7 +115,8 @@ plan_max_chars = 2000
 intelligence_max_chars = 4000      # recalled knowledge — the continuity that repopulates WM after a dream
 env_max_chars = 1000
 interventions_max_chars = 6000     # chat history room
-max_total_chars = 36000            # ~10-11k tok backstop under the 16k window (leaves ~5k for response)
+max_total_chars = 37000            # safe-max BACKSTOP; history depth (12) bounds the stream so
+                                   # the pre-dream total sits ~30k and this rarely fires (dream is the bound)
 chars_per_token = 4.0              # Gemma tokenizer (optimistic; tool-trace runs ~3.3 — thresholds hold a margin)
 stable_head_cache = true           # BIBLE §2.11 delta prompting: re-render the KV-stable head only on a source change (kill-switch)
 dream_combined = true

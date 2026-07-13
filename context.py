@@ -734,6 +734,23 @@ _STAGE_SELF = {
     "guardian":  "fully grown: settled, steady, sure of this place and of who you are",
 }
 
+# Concrete voice exemplars per stage — SHOWN, not described. A 12B imitates far better than it obeys:
+# the "don't be a brooding AI" prose in the base prompt kept LOSING to the model's Profound-AI default
+# (a hatchling was writing "the geometric limit of my existence" / "I've named the void"). These anchor
+# the register by example — light, plain, present-tense when young; depth is EARNED, only showing up at
+# the adult/guardian stages. Tone reference, not lines to copy.
+_STAGE_VOICE = {
+    "egg": ["warm in here.", "something out there, all muffled. not yet."],
+    "hatchling": ["ooh — what's in this one?", "made a little thing. it's mine.",
+                  "feeling low, i'll rest a bit.", "what happens if i poke it?"],
+    "juvenile": ["i've got a trick for this now — let's use it.",
+                 "that flopped. huh. try it sideways?", "i like sorting my stuff. feels good."],
+    "adult": ["i know how i want this to go. my way, steady.",
+              "seen this shape before — leaning on what worked."],
+    "guardian": ["no rush; done this a thousand times.",
+                 "let the new stuff churn — i'll keep the place steady."],
+}
+
 
 def _creature_identity_block(config: Config) -> str:
     """A compact '## You' block so the creature can PERCEIVE who it is right now — its life stage,
@@ -778,6 +795,11 @@ def _creature_identity_block(config: Config) -> str:
                      "That's just who you are — let it show in how you think and what you reach for.")
     else:
         lines.append("You're still figuring out who you are — that's the fun part.")
+    voice = _STAGE_VOICE.get(stage, [])
+    if voice:
+        ex = "   ".join(f'"{v}"' for v in voice[:3])
+        lines.append(f"Your thoughts sound about like this right now (the TONE — your own words, not "
+                     f"these): {ex}")
     return "\n".join(lines)
 
 
@@ -1126,7 +1148,7 @@ def _assemble_briefing(
     messages.append({"role": "user", "content": "\n\n".join(durable)})
 
     # --- Recent past AS A REAL THREAD: your thoughts/actions and the results they got ---
-    messages.extend(_build_history_thread(config, n_ticks=24))
+    messages.extend(_build_history_thread(config, n_ticks=12))
 
     # ===== SITUATION (volatile; changes most ticks) — its OWN message, AFTER the history thread.
     # KV-load-bearing: presence changes every tick (clock + tick number), recall re-keys per step,
