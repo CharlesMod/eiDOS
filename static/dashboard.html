@@ -654,10 +654,25 @@ body::after {
 #tool-glyph { font-size: 13px; line-height: 1; display: inline-block; color: #6fc0ff; }
 #tool-now { flex: 1; color: #9fd4ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #tool-elapsed { color: #3f6f9f; font-size: 10px; flex-shrink: 0; }
-#tool-last {
-    margin-top: 4px; color: #6f9fc4; font-size: 10px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+#tool-last-row {
+    display: flex; align-items: center; gap: 6px; margin-top: 5px;
 }
+#tool-last {
+    flex: 1; color: #6f9fc4; font-size: 10px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: color 0.35s ease;
+}
+/* did/now gutter labels — a tiny fixed-width caps prefix so the two rows read as one timeline */
+.deed-label {
+    flex-shrink: 0; width: 26px; font-size: 8px; letter-spacing: 0.8px;
+    text-transform: uppercase; color: #3f5f7f; text-align: right;
+}
+/* Even tempo: state colour/opacity eases in rather than snapping on each sporadic poll. */
+#thought-bubble, #thought-glyph, #thought-state, #tool-glyph, #tool-now {
+    transition: color 0.35s ease, opacity 0.35s ease;
+}
+#thought-bubble #thought-text { transition: opacity 0.25s ease; }
+#thought-bubble.mind-quiet { opacity: 0.72; }        /* the mind between thoughts — present, dimmed */
 #thought-bubble.state-idle {
     --bub: #2a4a2a;
     color: #556655;
@@ -1184,11 +1199,15 @@ function toggleVoice(){
             <pre id="creature-art"></pre>
             <div id="tool-bubble" class="tb-idle">
                 <div id="tool-bubble-head">
+                    <span class="deed-label">now</span>
                     <span id="tool-glyph">⌁</span>
                     <span id="tool-now">idle</span>
                     <span id="tool-elapsed"></span>
                 </div>
-                <div id="tool-last"></div>
+                <div id="tool-last-row">
+                    <span class="deed-label">did</span>
+                    <span id="tool-last">—</span>
+                </div>
             </div>
             <div class="creature-info">
                 <span id="name-level"></span> · <span id="mood-display"></span><br>
@@ -1571,7 +1590,16 @@ function wbStandbyLine() {
 // Re-render the thought bubble immediately (e.g. the instant you switch to the workbench).
 window.refreshThought = function () { try { updateThoughtBubble(_lastActivitySnap); } catch (e) {} };
 
-// Blue tool bubble below the creature — purely the tool-call feed, independent of thoughts.
+// Elapsed since a unix ts, as a compact "4s" / "1m 3s". Empty when there's nothing to time.
+function fmtElapsed(since) {
+    if (!since || since <= 0) return '';
+    let e = Math.max(0, Math.floor(Date.now() / 1000 - since));
+    return (e >= 60 ? Math.floor(e / 60) + 'm ' : '') + (e % 60) + 's';
+}
+
+// The BODY strip below the creature: a clean did → now timeline of DEEDS, independent of the mind
+// bubble above. "now" = what the body is doing this beat; "did" = the last completed tool. The mind
+// (thinking/speaking/dreaming) lives in the thought bubble — the two never show the same word.
 function updateToolBubble(activity) {
     let box = document.getElementById('tool-bubble');
     if (!box) return;
@@ -1584,32 +1612,34 @@ function updateToolBubble(activity) {
     let since = (activity && activity.since) || 0;
     let lt = (activity && activity.last_tool) || null;
 
+    // NOW — the body's current beat. Only real doing lights the strip up (tb-active); thinking,
+    // dreaming and resting are quiet body states (the ACTION is what this strip is for).
     box.classList.remove('tb-active');
     if (state === 'executing') {
         box.classList.add('tb-active');
         glyph.textContent = '⚙'; glyph.className = 'tb-spin'; glyph.style.color = '#6fc0ff';
-        now.textContent = 'running ' + (detail || 'tool');
-        if (since > 0) {
-            let e = Math.max(0, Math.floor(Date.now() / 1000 - since));
-            elapsed.textContent = (e >= 60 ? Math.floor(e / 60) + 'm ' : '') + (e % 60) + 's';
-        } else elapsed.textContent = '';
+        now.textContent = detail || 'working'; now.style.color = '#9fd4ff';
     } else if (state === 'thinking') {
-        glyph.textContent = '…'; glyph.className = 'tb-pulse'; glyph.style.color = '#6fc0ff';
-        now.textContent = 'choosing next tool';
-        elapsed.textContent = '';
+        glyph.textContent = '⋯'; glyph.className = 'tb-pulse'; glyph.style.color = '#6f9fc4';
+        now.textContent = 'choosing what to do'; now.style.color = '#7fb0d8';
     } else if (state === 'dreaming') {
         glyph.textContent = '✦'; glyph.className = 'tb-pulse'; glyph.style.color = '#9a7fff';
-        now.textContent = 'consolidating'; elapsed.textContent = '';
-    } else {
-        glyph.textContent = '⌁'; glyph.className = ''; glyph.style.color = '#3f6f9f';
-        now.textContent = 'idle'; elapsed.textContent = '';
+        now.textContent = 'off digesting the day'; now.style.color = '#9a7fff';
+    } else if (state === 'listening') {
+        glyph.textContent = '◉'; glyph.className = 'tb-pulse'; glyph.style.color = '#33bbff';
+        now.textContent = 'listening'; now.style.color = '#7fc8f0';
+    } else {                                    // idle / sleeping — the body is at rest
+        glyph.textContent = _hasGoal ? '⌁' : 'z'; glyph.className = ''; glyph.style.color = '#3f6f9f';
+        now.textContent = _hasGoal ? 'resting a beat' : 'resting'; now.style.color = '#5f7f9f';
     }
-    // Last completed tool call (persists between ticks so the feed never goes blank)
+    elapsed.textContent = state === 'sleeping' ? '' : fmtElapsed(since);
+
+    // DID — the last completed tool, held between ticks so the timeline never goes blank.
     if (lt && lt.tool) {
-        last.textContent = 'last: ' + lt.tool + (lt.ok ? ' ✓' : ' ✕')
-            + (lt.summary ? ' · ' + lt.summary : '');
+        last.textContent = lt.tool + (lt.ok ? ' ✓' : ' ✕') + (lt.summary ? ' · ' + lt.summary : '');
+        last.style.color = lt.ok ? '#6f9fc4' : '#c88a8a';
     } else {
-        last.textContent = '';
+        last.textContent = '—'; last.style.color = '#3f5f7f';
     }
 }
 
@@ -1639,10 +1669,12 @@ function updateThoughtBubble(activity) {
     let glyphEl = document.getElementById('thought-glyph');
     let stateEl = document.getElementById('thought-state');
 
-    // The bubble's KIND \u2014 what this moment IS: a fresh externalized line wins (speech),
-    // then live tool work (action), else the inner monologue (thought).
+    // This bubble is the MIND \u2014 always the inner voice, never the tool feed (that's the body strip
+    // below). A fresh externalized line shows as speech; otherwise it holds the last thought and the
+    // header reflects the mind's MODE (thinking / dreaming / listening / quiet). It never says "idle"
+    // or names a tool \u2014 so the two readouts can never show the same word.
     if (_speechLine && Date.now() >= _speechLine.until) _speechLine = null;
-    let kind = _speechLine ? 'speech' : (state === 'executing' ? 'action' : 'thought');
+    let kind = _speechLine ? 'speech' : 'thought';
 
     bubble.className = 'kind-' + kind;
     let g, label, anim, gcol, text;
@@ -1651,11 +1683,6 @@ function updateThoughtBubble(activity) {
         label = _speechLine.spoken ? 'speaking aloud' : 'telling Charlie';
         anim = 'tb-pulse'; gcol = '#33bbff';
         text = _speechLine.text;
-    } else if (kind === 'action') {
-        bubble.classList.add('state-executing');
-        g='\u2699'; label='running ' + (detail || 'tool'); anim='tb-spin'; gcol='#ffb000';
-        let lt = (activity && activity.last_tool) || null;
-        text = (detail || 'tool') + (lt && lt.summary ? '  \u00b7  ' + lt.summary : '');
     } else if (state === 'thinking') {
         bubble.classList.add('state-thinking'); g='\u273a'; label='thinking'; anim='tb-pulse'; gcol='#00ff41';
     } else if (state === 'dreaming') {
@@ -1663,7 +1690,11 @@ function updateThoughtBubble(activity) {
     } else if (state === 'listening') {
         bubble.classList.add('state-listening'); g='\ud83d\udc42'; label='listening to Charlie'; anim='tb-pulse'; gcol='#33bbff';
     } else {
-        bubble.classList.add(_hasGoal ? 'state-idle' : 'state-sleeping'); g='\u00b7'; label='idle'; anim=''; gcol='#557755';
+        // idle / executing / sleeping \u2014 the body is busy or at rest; the mind simply holds its last
+        // thought, dimmed. The deed strip below says what the body is doing.
+        bubble.classList.add(_hasGoal ? 'state-idle' : 'state-sleeping');
+        bubble.classList.add('mind-quiet');
+        g='\u00b7'; label = (state === 'sleeping' && !_hasGoal) ? 'at rest' : 'quiet'; anim=''; gcol='#6a8a6a';
     }
     if (glyphEl) { glyphEl.textContent = g; glyphEl.className = anim; glyphEl.style.color = gcol; }
     if (stateEl) stateEl.textContent = label;
@@ -1673,15 +1704,11 @@ function updateThoughtBubble(activity) {
         text = _lastSnippet || (state === 'sleeping' && !_hasGoal ? 'resting' : '\u2026');
     setBubbleText(textEl, text);
 
-    // Elapsed in the current state — so a long tool run reads "running bash 14s", not frozen
-    if (since > 0 && state !== 'sleeping') {
-        let elapsed = Math.max(0, Math.floor(Date.now() / 1000 - since));
-        let m = Math.floor(elapsed / 60);
-        let s = elapsed % 60;
-        elapsedEl.textContent = (m > 0 ? m + 'm ' : '') + s + 's';
-    } else {
-        elapsedEl.textContent = '';
-    }
+    // Elapsed belongs to an ACTIVE mind (thinking/dreaming/listening) — "thinking 3s" is meaningful,
+    // "quiet 12s" is not. When the mind is quiet the "how long" lives on the body's deed strip below.
+    let mindActive = kind !== 'speech' &&
+                     (state === 'thinking' || state === 'dreaming' || state === 'listening');
+    elapsedEl.textContent = (mindActive && since > 0) ? fmtElapsed(since) : '';
 }
 
 // Poll activity — fast during active states, gentle during idle
@@ -1712,21 +1739,26 @@ async function pollActivity() {
                 document.getElementById('llm-readout').innerHTML =
                     '<span>'+(l.tok_s||0)+' tok/s</span><span>last tick: '+(l.prompt_tokens||0)+'→'+(l.completion_tokens||0)+' tok</span><span>'+(l.llm_elapsed_s||0)+'s</span>';
             }
-            // Active states get fast polling, sleeping gets slow
+            // Steady tempo: the tick loop itself is bursty (LLM latency swings tick to tick), so the
+            // DISPLAY deliberately does NOT mirror it — a modest, even cadence reads calmer than
+            // 500ms↔3000ms lurches. Active states poll a touch faster for the streaming partial.
             let active = data.state === 'thinking' || data.state === 'executing' || data.state === 'dreaming';
-            schedulePoll(active ? 500 : 3000);
+            schedulePoll(active ? 800 : 1500);
             return;
         }
     } catch(e) {}
-    schedulePoll(3000);
+    schedulePoll(1500);
 }
 
-// Also tick idle musings even without a network poll
+// Local heartbeat (no fetch): re-render the bubbles every second so the "now … 4s → 5s" elapsed
+// counters advance evenly BETWEEN polls — the single biggest cause of the panel feeling frozen then
+// snapping. Cheap: it only re-reads the last snapshot, never hits the network.
 setInterval(function() {
-    if (_lastActivity && _lastActivity.state === 'sleeping' && _hasGoal) {
-        updateThoughtBubble(_lastActivity);
+    if (_lastActivity) {
+        try { updateToolBubble(_lastActivity); } catch (e) {}
+        if (_lastActivity.state === 'sleeping' && _hasGoal) updateThoughtBubble(_lastActivity);
     }
-}, 2000);
+}, 1000);
 
 let _pausedNow = false;
 async function togglePause() {
