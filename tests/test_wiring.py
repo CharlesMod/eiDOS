@@ -83,6 +83,25 @@ def _drive_tick(hub, cfg, *, tick=1, success=True, tool="bash", persona=None,
                       summary="did a probe", event_text="probe output", persona=persona)
 
 
+def test_count_artifacts_sees_new_workspace_files(tmp_path):
+    """The widened progress signal: a new file in the creature's writable home raises the count (real
+    external change = progress), while rewriting an existing file does not (no progress-farm lever)."""
+    import tools as _tools
+    cfg = _mk_config(tmp_path)
+    root = _tools._creature_root(cfg)
+    root.mkdir(parents=True, exist_ok=True)
+    base = eidos._count_artifacts(cfg)
+    (root / "notes.md").write_text("first", encoding="utf-8")
+    after_new = eidos._count_artifacts(cfg)
+    assert after_new == base + 1                       # a NEW file is progress
+    (root / "notes.md").write_text("rewritten, longer content", encoding="utf-8")
+    after_rewrite = eidos._count_artifacts(cfg)
+    assert after_rewrite == after_new                  # rewriting the same file is NOT progress
+    (root / "sub").mkdir(exist_ok=True)
+    (root / "sub" / "deep.txt").write_text("x", encoding="utf-8")
+    assert eidos._count_artifacts(cfg) == after_new + 1  # recurses into subdirs
+
+
 @pytest.fixture(autouse=True)
 def _cleanup_predict_tool():
     """The predict tool registers into the GLOBAL tools.TOOLS; deregister after every test here so

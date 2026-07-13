@@ -39,6 +39,18 @@ W_VALENCE = 0.15     # mood valence (neuromod affect)
 W_STRAIN = 0.15      # frustration / rumination penalty
 STRAIN_NORM = 3.0    # strain bump that counts as "fully strained"
 
+# The success channel is a reward-PREDICTION-ERROR signal (Schultz/RPE, this module's own doctrine):
+# it should fire only when the outcome was genuinely IN DOUBT. A structurally-riskless action — one
+# whose success the tick hardcodes True because it has no failure mode (a bare thought, a chat reply)
+# — carries no outcome surprise, so paying it the full +W_SUCCESS is a free +0.40 the value learner
+# will (correctly) chase, collapsing behaviour onto the safest no-op (the 2026-07-13 "thought tends to
+# go well — lean into it" fixed point, 28/85 ticks pure thought). For these, the success channel pays
+# ZERO (not a penalty — a penalty would teach "thinking goes badly"); such a tick lives or dies on real
+# progress, the felt body, and intrinsic curiosity alone, which is exactly what makes it connective
+# tissue rather than the goal. Everything that can actually fail (bash, write_file, create_skill,
+# read_file, objective work…) keeps the full ±W_SUCCESS.
+CANT_FAIL_ACTIONS = frozenset({"thought", "chat_reply"})
+
 # felt overall -> a 0..1 wellbeing scalar (more at ease = higher)
 _WELLBEING = {"at ease": 1.0, "a little tense": 0.66, "strained": 0.33, "in distress": 0.0}
 
@@ -84,9 +96,11 @@ class RewardLearner:
         self._load()
 
     # ---- reward function -------------------------------------------------------------
-    def reward_of(self, *, success, made_progress, felt_delta, valence, strain, intrinsic=0.0):
-        """The scalar reward in [-1, 1]. Pure + testable."""
-        r = W_SUCCESS if success else -W_SUCCESS
+    def reward_of(self, *, success, made_progress, felt_delta, valence, strain, intrinsic=0.0,
+                  can_fail=True):
+        """The scalar reward in [-1, 1]. Pure + testable. `can_fail` gates the success channel: a
+        riskless action (can_fail=False) scores 0 on success — an outcome never in doubt is no signal."""
+        r = (W_SUCCESS if success else -W_SUCCESS) if can_fail else 0.0
         if made_progress:
             r += W_PROGRESS
         r += W_FELT * float(felt_delta)
@@ -97,9 +111,11 @@ class RewardLearner:
 
     # ---- the learning step (one per acting tick) -------------------------------------
     def observe(self, *, situation="", action="", success=True, made_progress=False,
-                strain=0.0, intrinsic=0.0, tick=None):
+                strain=0.0, intrinsic=0.0, tick=None, can_fail=True):
         """Compute the reward + RPE for this tick's action, update the value cache, log the experience,
-        and fire dopamine. Reads the felt body + mood from the bus/neuromod itself. Guarded by callers."""
+        and fire dopamine. Reads the felt body + mood from the bus/neuromod itself. Guarded by callers.
+        `can_fail` gates the success channel; a structurally-riskless action (also caught by name via
+        CANT_FAIL_ACTIONS as a backstop for direct callers) never books the free ±W_SUCCESS."""
         overall = self._current_felt()
         wb = wellbeing(overall)
         prev = self._prev_wellbeing if self._prev_wellbeing is not None else wb
@@ -107,9 +123,10 @@ class RewardLearner:
         valence = float(getattr(self.neuromod, "valence", 0.0) or 0.0)
         arousal = float(getattr(self.neuromod, "arousal", 0.3) or 0.3)
 
+        could_fail = bool(can_fail) and (action not in CANT_FAIL_ACTIONS)
         reward = self.reward_of(success=success, made_progress=made_progress,
                                 felt_delta=felt_delta, valence=valence, strain=strain,
-                                intrinsic=intrinsic)
+                                intrinsic=intrinsic, can_fail=could_fail)
         key = self._key(situation, action, overall)
         with self._lock:
             entry = self.values.get(key)

@@ -36,6 +36,38 @@ class TestRewardFunction(unittest.TestCase):
         self.assertGreater(prog, base)
 
 
+class TestRisklessSuccessChannel(unittest.TestCase):
+    """A structurally-riskless action (no failure was possible) must NOT book the free ±W_SUCCESS —
+    otherwise the value learner collapses onto the safest no-op (the 'thought tends to go well' trap)."""
+
+    def test_can_fail_false_zeroes_the_success_channel(self):
+        rl = RewardLearner()
+        risky = rl.reward_of(success=True, made_progress=False, felt_delta=0.0, valence=0.0,
+                             strain=0, can_fail=True)
+        riskless = rl.reward_of(success=True, made_progress=False, felt_delta=0.0, valence=0.0,
+                                strain=0, can_fail=False)
+        self.assertAlmostEqual(riskless, 0.0)          # nothing was at stake → no signal
+        self.assertAlmostEqual(risky, 0.40)            # the full success reward when it could fail
+        self.assertGreater(risky, riskless)
+
+    def test_riskless_is_neutral_not_penalized(self):
+        # zeroing is NOT a penalty — a penalty would teach "thinking goes badly". Progress/felt still pay.
+        rl = RewardLearner()
+        r = rl.reward_of(success=True, made_progress=True, felt_delta=0.2, valence=0.0,
+                         strain=0, can_fail=False)
+        self.assertGreater(r, 0.0)                     # lives on real progress + felt, never on the no-op
+
+    def test_thought_action_is_gated_by_name_backstop(self):
+        # observe() catches a riskless action by name even if a direct caller forgets can_fail=False.
+        rl = RewardLearner(alpha=1.0)
+        rl.observe(situation="calm", action="thought", success=True, made_progress=False)
+        v = next(iter(rl.values.values()))["v"]
+        self.assertAlmostEqual(v, 0.0, places=4)       # no free +0.40 fixed point for a bare thought
+        rl.observe(situation="calm", action="bash", success=True, made_progress=False)
+        vb = [e for e in rl.values.values() if e["action"] == "bash"][0]["v"]
+        self.assertAlmostEqual(vb, 0.40, places=4)     # a can-fail action still books the win
+
+
 class TestValueLearning(unittest.TestCase):
     def test_repeated_good_outcome_raises_value(self):
         rl = RewardLearner(alpha=0.5)

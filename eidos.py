@@ -359,6 +359,30 @@ def _count_skills(config: Config) -> int:
         return 0
 
 
+def _count_artifacts(config: Config) -> int:
+    """Count durable files the creature has authored in its own writable home — the cheap harness fact
+    that makes 'organize the workspace' REGISTER as progress. Before this, progress was blind to
+    everything but knowledge/skill counts, so an objective like "organize the cocoon" could never
+    settle: every file it created was invisible, so every tick on it was a stall, frustration ratcheted
+    to park, and it died un-closed (2026-07-13 run: 0/4 objectives closed, frustration pinned at 8). A
+    NEW file appearing is real external change — it counts. Rewriting an existing file does not raise
+    the count, so it is not a progress-farming lever. Bounded, best-effort, never raises."""
+    try:
+        import tools as _tools
+        root = _tools._creature_root(config)
+        if not root.exists():
+            return 0
+        n = 0
+        for p in root.rglob("*"):
+            if p.is_file():
+                n += 1
+                if n >= 100000:            # sanity ceiling — never walk unbounded
+                    break
+        return n
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def write_wal(config: Config, tick_number: int, ticks_since_compaction: int,
               goal_start_time: float, consecutive_failures: int = 0,
               reasoning_exhaustions: int = 0, current_max_tokens: int = 0,
@@ -1655,6 +1679,7 @@ def run_loop(config: Config, persona=None, wal=None):
     except Exception:  # noqa: BLE001
         prev_knowledge_count = 0
     prev_skill_count = _count_skills(config)
+    prev_artifact_count = _count_artifacts(config)   # workspace files authored — widens the progress signal
     # Objective backlog (Ventral Striatum / Action Gate): seed the open commitments once, then the
     # gate rotates focus among them each tick so a stalled task never starves the rest of the system.
     try:
@@ -2572,12 +2597,18 @@ def run_loop(config: Config, persona=None, wal=None):
         except Exception:  # noqa: BLE001
             _kc = prev_knowledge_count
         _sc = _count_skills(config)
-        # Progress = genuinely NEW knowledge or a NEW skill only. Re-asking Boss the same question or
-        # prepping a blocked task does NOT count — so tension keeps climbing until it actually pivots.
-        _made_progress = (_kc > prev_knowledge_count or _sc > prev_skill_count)
+        _ac = _count_artifacts(config)
+        # Progress = a durable EXTERNAL change this tick: genuinely new knowledge, a new skill, a new
+        # workspace file authored, or (below) a settled commission/objective. Re-asking Boss the same
+        # question or re-writing an existing file does NOT count — so tension keeps climbing until the
+        # creature actually changes something. Widened 2026-07-13: the old signal saw only knowledge/
+        # skill counts, so ordinary work (building files, organizing a workspace) was invisible and
+        # every such objective stalled to a frustrated death; a new file is real progress.
+        _made_progress = (_kc > prev_knowledge_count or _sc > prev_skill_count
+                          or _ac > prev_artifact_count)
         if _made_progress:
             last_progress_tick = tick_number
-        prev_knowledge_count, prev_skill_count = _kc, _sc
+        prev_knowledge_count, prev_skill_count, prev_artifact_count = _kc, _sc, _ac
 
         # --- Strain glue (Insula/ACC, phase 6): record this tick's TYPED outcome, then compute a
         #     frustration bump from chronic / repeated-signature failure. Feeding it to the gate is
@@ -2724,9 +2755,16 @@ def run_loop(config: Config, persona=None, wal=None):
                 # metabolism; post-pivot food = literal battery power — only curiosity pays.)
                 _intrinsic = float(getattr(_post_ctx, "intrinsic", 0.0) or 0.0)
                 _act_readable = tick_action_label or tick_tool_name or str(_act_sig)
+                # A structurally-riskless tick (a bare thought, a chat reply) has no outcome in doubt,
+                # so its success channel pays nothing — otherwise the free +0.40 trains the creature to
+                # narrate instead of act (reward.CANT_FAIL_ACTIONS). tick_tool_name is the reliable
+                # discriminator (the richer _act_readable label is for the value key, not the gate).
+                from nervous.reward import CANT_FAIL_ACTIONS as _CANT_FAIL
+                _can_fail = tick_tool_name not in _CANT_FAIL
                 nervous_learner.observe(situation=tick_situation, action=_act_readable,
                                         success=tick_tool_success, made_progress=_made_progress,
-                                        strain=_strain_bump, intrinsic=_intrinsic, tick=tick_number)
+                                        strain=_strain_bump, intrinsic=_intrinsic, tick=tick_number,
+                                        can_fail=_can_fail)
                 _wm_prev_sit, _wm_prev_act = tick_situation, _act_readable
             except Exception as _le:  # noqa: BLE001 - learning must never break the tick
                 logger.warning("reward learning failed: %s", _le)
