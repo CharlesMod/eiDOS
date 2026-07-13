@@ -245,6 +245,89 @@ class TestRecall:
 
 
 # =================================================================================================
+class TestIncrementalEmbedding:
+    """The vector sidecar syncs INCREMENTALLY: an ordinary single-engram commit embeds ONLY the new
+    engram, not the whole store. This is the scaling fix — memory_manager.encode() commits on every
+    acting tick, so a re-embed-all sidecar meant N embed HTTP calls/tick, growing without bound
+    (CONTEXT_SPEC.md Finding 7). Bodies are immutable per id, so cached vectors are reused by id."""
+
+    # Distinct rooms+fixtures per index — genuinely different token sets so pattern-separation keeps
+    # them as separate engrams (overlap well under LONGTERM_MERGE_THRESHOLD) rather than merging.
+    _ROOMS = ["garage", "kitchen", "attic", "cellar", "garden", "porch", "hallway", "basement"]
+    _FIXTURES = ["heater", "faucet", "window", "ladder", "railing", "carpet", "freezer", "mailbox"]
+
+    def _distinct_body(self, i: int) -> str:
+        return f"the {self._ROOMS[i]} {self._FIXTURES[i]} needs attention soon"
+
+    def _count_embeds(self, monkeypatch):
+        """Wrap embedding.embed_query with a call counter; return the list of embedded texts."""
+        import embedding as _emb
+        calls: list[str] = []
+        real = _emb.embed_query
+
+        def counting(config, text):
+            calls.append(text)
+            return real(config, text)
+
+        monkeypatch.setattr(_emb, "embed_query", counting)
+        return calls
+
+    def test_single_commit_embeds_only_the_new_engram(self, tmp_path, monkeypatch):
+        cfg = _cfg(tmp_path)                         # mock_mode → deterministic hash embedder
+        con = Consolidator(cfg)
+        for i in range(6):                           # seed a non-trivial store (distinct → no merge)
+            con.commit(_engram(kind="fact", body=self._distinct_body(i)))
+        assert len(engram.LongTermStore(cfg)) == 6   # guard: seeding really made 6, not a merge blob
+        # From here, one more commit must trigger EXACTLY ONE embed — not one-per-existing-engram.
+        calls = self._count_embeds(monkeypatch)
+        con.commit(_engram(kind="fact", body=self._distinct_body(6)))
+        assert len(calls) == 1, f"a single commit must embed only the new engram, got {len(calls)}"
+
+    def test_sidecar_stays_complete_after_incremental_commits(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        con = Consolidator(cfg)
+        ids = [con.commit(_engram(kind="fact", body=self._distinct_body(i))).id for i in range(4)]
+        vecs, vec_ids = engram.LongTermStore(cfg)._load_vectors()
+        assert vecs is not None
+        assert vec_ids == ids                        # every engram embedded, in store order
+        assert vecs.shape[0] == len(ids)
+
+    def test_merge_and_update_embed_nothing(self, tmp_path, monkeypatch):
+        cfg = _cfg(tmp_path)
+        con = Consolidator(cfg)
+        a = con.commit(_engram(body="the water heater is in the garage", strength=0.4))
+        # After the store is seeded, neither a merge (body unchanged, same id) nor a strength update
+        # touches a body — both must reuse the cached vector and embed NOTHING.
+        calls = self._count_embeds(monkeypatch)
+        con.commit(_engram(body="the water heater is in the garage", strength=0.9))   # merges into a
+        con.update_strength(a.id, 0.7, recalled_tick=5)
+        assert calls == [], f"merge/update must not re-embed (bodies immutable), got {calls}"
+
+    def test_incremental_sidecar_matches_full_rebuild(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        con = Consolidator(cfg)
+        for i in range(5):
+            con.commit(_engram(kind="fact", body=self._distinct_body(i)))
+        store = engram.LongTermStore(cfg)
+        assert len(store) == 5                        # guard: 5 distinct engrams, not a merge blob
+        inc_vecs, inc_ids = store._load_vectors()
+        store.rebuild_vectors()                      # repair path: re-embed everything from scratch
+        reb_vecs, reb_ids = store._load_vectors()
+        assert reb_ids == inc_ids                    # same ids, same order
+        import numpy as np
+        assert np.allclose(reb_vecs, inc_vecs)       # incremental reuse produced identical vectors
+
+    def test_recall_still_semantic_after_incremental(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        con = Consolidator(cfg)
+        con.commit(_engram(body="the garage water heater pilot light went out"))
+        con.commit(_engram(body="the front door lock battery is low"))
+        con.commit(_engram(body="the router password rotates every friday morning"))
+        hits = engram.LongTermStore(cfg).recall("water heater garage", top_k=2)
+        assert hits and "water heater" in hits[0].body   # incremental vectors still rank correctly
+
+
+# =================================================================================================
 class TestConfigFlagWiring:
     def test_engram_flag_defaults_off(self):
         assert Config().pillars_memory_engram_enabled is False

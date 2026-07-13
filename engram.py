@@ -494,8 +494,9 @@ class LongTermStore:
 
     # --- write (CLOSED — name-mangled; only _commit_to_store reaches it) ----------------------
     def __append(self, engrams: list[Engram]) -> None:
-        """The ONLY mutator of the long-term store. Whole-file atomic rewrite of jsonl + index +
-        vector sidecar. Private + name-mangled: external code cannot call this (there is no public
+        """The ONLY mutator of the long-term store. Whole-file atomic rewrite of jsonl + index (both
+        cheap, no network); the vector sidecar is synced INCREMENTALLY (only new ids are embedded —
+        see __sync_vectors). Private + name-mangled: external code cannot call this (there is no public
         write method), so every long-term write is funnelled through the Consolidator (§I6)."""
         for e in engrams:
             e.validate()
@@ -515,26 +516,49 @@ class LongTermStore:
         tmp_i.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
         tmp_i.replace(ip)
         # vector sidecar (embedding-gated + mock-aware; skipped when no embedder — recall falls back)
-        self.__reembed(engrams)
+        self.__sync_vectors(engrams)
 
-    def __reembed(self, engrams: list[Engram]) -> None:
-        """Rebuild the npy vector sidecar for the current long-term set. Best-effort: if no embedder
-        is available (no model, embedding off) it simply removes any stale sidecar so recall uses the
-        token-overlap fallback. Mirrors embedding._save_vectors' atomic temp+replace."""
+    def __sync_vectors(self, engrams: list[Engram], *, force: bool = False) -> None:
+        """Bring the npy vector sidecar in line with the current long-term set, embedding ONLY the
+        engrams that don't yet have a stored vector (matched by id) and REUSING the cached vector for
+        the rest. Engram bodies are immutable per id (merge/update_strength never rewrite a body), so
+        an id already in the sidecar is already correctly embedded — this keeps an ordinary
+        single-engram commit at exactly ONE embed call instead of re-embedding all N every tick (the
+        scaling bottleneck: N embed HTTP calls per acting tick). Mirrors embedding.embed_and_store's
+        id-keyed incremental merge and embedding._save_vectors' atomic temp+replace.
+
+        Best-effort: if no embedder is available for a NEW engram (no model, embedding off) it removes
+        any stale sidecar so recall uses the token-overlap fallback. `force=True` ignores the cache
+        and re-embeds everything — the repair/migration path (see rebuild_vectors)."""
         try:
             import numpy as np
+            cache: dict[str, "np.ndarray"] = {}
+            if not force:
+                prev_v, prev_ids = self._load_vectors()
+                if prev_v is not None:
+                    cache = {eid: prev_v[i] for i, eid in enumerate(prev_ids)}
             vecs = []
             ids = []
+            dim: Optional[int] = None
             for e in engrams:
-                v = self._embed(e.body)
+                v = cache.get(e.id)
                 if v is None:
-                    vecs = []          # no embedder — abandon the sidecar entirely (fall back to overlap)
-                    break
-                vecs.append(np.asarray(v, dtype=np.float32))
+                    emb = self._embed(e.body)          # only NEW ids reach the embed service
+                    if emb is None:
+                        vecs = []      # no embedder for a new engram — abandon the sidecar (fall back to overlap)
+                        break
+                    v = np.asarray(emb, dtype=np.float32)
+                v = np.asarray(v, dtype=np.float32).reshape(1, -1)
+                # Dimension guard: a swapped embedding model makes cached vectors incompatible (vstack
+                # would raise). Drop the stale cache and re-embed from this engram onward.
+                if dim is not None and v.shape[1] != dim:
+                    return self.__sync_vectors(engrams, force=True)
+                dim = v.shape[1]
+                vecs.append(v)
                 ids.append(e.id)
             vp, ip = _longterm_vectors_path(self.config), _longterm_vector_ids_path(self.config)
             if vecs:
-                arr = np.vstack([v.reshape(1, -1) for v in vecs])
+                arr = np.vstack(vecs)
                 tmp_v = vp.with_suffix(".tmp.npy")
                 tmp_i = ip.with_suffix(".tmp.json")
                 np.save(str(tmp_v), arr)
@@ -550,6 +574,14 @@ class LongTermStore:
                         pass
         except Exception:  # noqa: BLE001 - the vector sidecar is an optimization; recall degrades gracefully
             pass
+
+    def rebuild_vectors(self) -> None:
+        """Repair/migration: re-embed EVERY long-term engram from scratch, discarding the cached
+        sidecar. O(n) embed calls — for one-shot recovery (corrupt/stale sidecar, swapped embedding
+        model), NOT the per-tick write path. Reads engram CONTENT only from the jsonl source of truth
+        and rewrites the derived vector index; it adds/removes no engrams, so it does not breach the
+        single-writer contract (§I6)."""
+        self.__sync_vectors(self.load(), force=True)
 
 
 def _commit_to_store(store: "LongTermStore", engrams: list[Engram]) -> None:
