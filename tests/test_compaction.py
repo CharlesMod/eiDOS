@@ -45,6 +45,22 @@ class TestCompactionTriggers(unittest.TestCase):
             append_observation(self.config, {"tick": i, "output": "x" * 50})
         self.assertTrue(should_compact(self.config, ticks_since_last=0))
 
+    def test_threshold_is_tokens_not_bytes(self):
+        # The units-bug regression guard: the threshold is TOKENS. A byte-count that sits BETWEEN the
+        # token threshold and (threshold × chars_per_token) must NOT trigger — the old code compared
+        # raw bytes and fired ~4× too early, wiping working memory every couple thousand tokens.
+        self.config.compaction_token_threshold = 500      # tokens
+        self.config.chars_per_token = 4.0                 # so the trigger is ~2000 BYTES, not 500
+        self.config.compaction_tick_threshold = 10_000    # keep the tick backstop out of the way
+        # ~800 bytes of observations: >500 bytes (old bug would fire) but only ~200 tokens (< 500).
+        append_observation(self.config, {"tick": 1, "output": "y" * 700})
+        assert self.config.observations_path.stat().st_size > 500      # the old byte comparison would trip
+        self.assertFalse(should_compact(self.config, ticks_since_last=0))  # token-correct: not yet
+        # Now push well past 500 tokens (~2000+ bytes) — it fires.
+        for i in range(40):
+            append_observation(self.config, {"tick": i, "output": "z" * 50})
+        self.assertTrue(should_compact(self.config, ticks_since_last=0))
+
 
     def test_snapshot_empty_memory(self):
         _snapshot_memory(self.config)

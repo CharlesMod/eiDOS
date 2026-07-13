@@ -342,7 +342,9 @@ _OBS_ARCHIVE_MAX_BYTES = 4 * 1024 * 1024   # per archive file; ~weeks of compact
 # clear-to-zero) severed the stream of consciousness every dream — the creature came to with one
 # line of dream-summary and no idea what it had just been doing. Digestion keeps the last few
 # breaths of the day. (Small: the dream already distilled everything; this is continuity, not recall.)
-_OBS_KEEP_TAIL = 4
+_OBS_KEEP_TAIL = 20   # lines of recent life that survive a dream — the creature wakes mid-thread, not
+#                       blank. 4 was a near-total wipe every compaction (part of 'wakes thin'); with
+#                       compaction now firing far less often (the units-bug fix), a longer tail is safe.
 
 
 def truncate_observations(config: Config) -> int:

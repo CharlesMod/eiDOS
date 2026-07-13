@@ -39,9 +39,10 @@ from engram import Consolidator, Engram, EncodedAt, LongTermStore, INHERITED_STR
 from episodes import STEP_CHARS, SUMMARY_CHARS, clean_fragment
 
 # --- Declared knobs (§0.4: each a labeled design knob with its one-line justification) -----------
-RECALL_DEFAULT_BUDGET_CHARS = 1200  # declared: default char budget for a recall set when a caller
-                                    # names none. ~300 tokens — a few episodes' worth; small enough
-                                    # that recall never dominates the context window, large enough to
+RECALL_DEFAULT_BUDGET_CHARS = 4000  # declared: default char budget for a recall set when a caller
+                                    # names none. ~1k tokens — recall IS how working memory is
+                                    # repopulated after a dream (remember-via-retrieval); 1200 was
+                                    # starvation. Still a fraction of the window, never dominates, but
                                     # carry the exact-match layer plus one exploration sample.
 SEMANTIC_TOP_K = 12                 # declared: how many candidates the semantic layer pulls from
                                     # long-term before the manager re-ranks by relevance×strength and

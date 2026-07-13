@@ -137,9 +137,13 @@ class Config:
                                           # when there's work, calm when idle (doc: multi-rate loop).
     loop_detect_window: int = 3
 
-    # Compaction
-    compaction_token_threshold: int = 8000
-    compaction_tick_threshold: int = 20
+    # Compaction (dream/consolidation). token_threshold is now REAL tokens (should_compact divides
+    # the observation byte-count by chars_per_token). Sized so the lived stream fills its share of a
+    # 16k window without starving the head/recall/response — the old 8000 was compared to BYTES and
+    # fired at ~2k tokens (constant amnesia). tick_threshold is the dry-spell backstop, raised so
+    # content — not a fixed 20-tick clock — drives consolidation.
+    compaction_token_threshold: int = 5000
+    compaction_tick_threshold: int = 60
     compaction_max_tokens: int = 2048
     compaction_retry_max_tokens: int = 4096  # retry budget if thinking exhausts tokens
 
@@ -194,10 +198,13 @@ class Config:
     context_memory_max_chars: int = 4000
     context_plan_max_chars: int = 800           # briefing model: plan section budget
     context_subgoals_max_chars: int = 1500       # subgoals section budget
-    context_intelligence_max_chars: int = 1200  # briefing model: auto-recalled knowledge
+    context_intelligence_max_chars: int = 4000  # auto-recalled knowledge — this IS the continuity that
+    #                                              repopulates working memory after a dream; 1200 (~300
+    #                                              tokens) was starvation. Recall is remember-via-retrieval.
     context_env_max_chars: int = 800
     context_interventions_max_chars: int = 2000
-    context_max_total_chars: int = 20000  # test/dev default; production uses config.toml (6500)
+    context_max_total_chars: int = 36000  # ~10-11k tokens (gemma ~3.3 char/tok on tool-trace): coherent
+    #                                        backstop under the 16k window leaving ~5k for the response.
     # BIBLE §2.11 delta prompting: memoize the byte-stable KV head (identity/self-guide/skills/learned/
     # mission) so it is re-RENDERED only when one of its source files actually changes — the per-tick
     # work becomes the deltas, not re-reading + re-truncating the whole prefix. Kill-switch (default on).

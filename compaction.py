@@ -38,11 +38,16 @@ logger = logging.getLogger("eidos.compaction")
 
 
 def should_compact(config: Config, ticks_since_last: int) -> bool:
-    """Check if compaction should run based on thresholds."""
-    # Token threshold (approximated by char count)
-    if count_observation_chars(config) >= config.compaction_token_threshold:
+    """Consolidate (dream) when the lived observation stream fills its share of the model window,
+    or after a long dry spell. The size gate is in TOKENS: count_observation_chars returns BYTES,
+    so we divide by chars_per_token — the old code compared bytes directly to an 8000-*token*
+    threshold and thus fired at ~2k tokens of a 16k window, wiping working memory every few minutes
+    ('wakes thin'). Now the creature runs its recent life to compaction_token_threshold tokens —
+    sized to leave the model window headroom for the head, recall, and the response — before a dream."""
+    est_tokens = count_observation_chars(config) / max(1.0, float(getattr(config, "chars_per_token", 4.0)))
+    if est_tokens >= config.compaction_token_threshold:
         return True
-    # Tick count threshold
+    # Long dry spell: consolidate periodically even if little accumulated (a genuine rest, not a wipe).
     if ticks_since_last >= config.compaction_tick_threshold:
         return True
     return False

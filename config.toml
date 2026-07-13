@@ -33,8 +33,11 @@ interval_s = 2.5           # tick cadence (fast supervised mode); wakes instantl
 loop_detect_window = 4
 
 [compaction]
-token_threshold = 8000
-tick_threshold = 20
+# token_threshold is REAL tokens now (should_compact divides obs bytes by chars_per_token). The old
+# 8000 was compared to BYTES → dreamed at ~2k tokens of a 16k window (constant amnesia). 5000 lets the
+# lived stream fill its share of the window before consolidating. tick_threshold is the dry-spell backstop.
+token_threshold = 5000
+tick_threshold = 60
 max_tokens = 2048
 retry_max_tokens = 4096
 obs_max_chars = 16000
@@ -100,17 +103,20 @@ metrics_archive_count = 3
 snapshot_max_count = 20
 
 [context]
-# Budgets sized for the 128k-ctx house mind.
-obs_max_chars = 30000
+# Sized COHERENT with the real served window: gemma is loaded at -c 16384 (llama-swap), NOT 128k.
+# The rule: model n_ctx >= max_total_chars/chars_per_token + response_reserve. Here ~36k chars
+# (~10-11k tok) + ~5k response (max_tokens 4096 + reasoning 1000) fits under 16384. (Phase 2 raises
+# the model to -c 32768 with KV-quant and these open up.)
+obs_max_chars = 22000              # the living stream — ~6k tok, matched to the compaction threshold
 obs_max_count = 30
 goal_max_chars = 3000
 memory_max_chars = 8000
 plan_max_chars = 2000
-intelligence_max_chars = 3000
+intelligence_max_chars = 4000      # recalled knowledge — the continuity that repopulates WM after a dream
 env_max_chars = 1000
 interventions_max_chars = 6000     # chat history room
-max_total_chars = 120000           # ~30k tokens — open it up; we have a 128k window, not a Pi
-chars_per_token = 4.0              # Gemma tokenizer
+max_total_chars = 36000            # ~10-11k tok backstop under the 16k window (leaves ~5k for response)
+chars_per_token = 4.0              # Gemma tokenizer (optimistic; tool-trace runs ~3.3 — thresholds hold a margin)
 stable_head_cache = true           # BIBLE §2.11 delta prompting: re-render the KV-stable head only on a source change (kill-switch)
 dream_combined = true
 

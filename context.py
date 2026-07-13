@@ -1126,7 +1126,7 @@ def _assemble_briefing(
     messages.append({"role": "user", "content": "\n\n".join(durable)})
 
     # --- Recent past AS A REAL THREAD: your thoughts/actions and the results they got ---
-    messages.extend(_build_history_thread(config, n_ticks=14))
+    messages.extend(_build_history_thread(config, n_ticks=24))
 
     # ===== SITUATION (volatile; changes most ticks) — its OWN message, AFTER the history thread.
     # KV-load-bearing: presence changes every tick (clock + tick number), recall re-keys per step,
