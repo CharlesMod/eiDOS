@@ -113,16 +113,30 @@ class TestGermlineDraws:
         anchors = rng.sample(MORPHS[morph]["anchors"], ANCHOR_COUNT)
         carries = {sd["slot"]: rng.choice((None,) + tuple(v["id"] for v in sd["variants"]))
                    for sd in ALLELE_SLOTS}
+        # v3 APPEND (drawn LAST): type pick + the 3 new axes, then the whole-vector mean-shift.
+        from genome import LATENTS_V3, ALL_LATENTS, PRIMARY_NAMES, PRESETS, BLEND_PRIMARY
+        primary = rng.choice(PRIMARY_NAMES)
+        secondary = rng.choice([n for n in PRIMARY_NAMES if n != primary])
+        for n in LATENTS_V3:
+            lat[n] = round(max(-LATENT_BOUND, min(LATENT_BOUND, rng.gauss(0.0, LATENT_SD))), 4)
+        p, s = PRESETS[primary], PRESETS[secondary]
+        for i, ax in enumerate(ALL_LATENTS):
+            mean = BLEND_PRIMARY * p[i] + (1.0 - BLEND_PRIMARY) * s[i]
+            lat[ax] = round(max(-LATENT_BOUND, min(LATENT_BOUND, lat[ax] + mean)), 4)
         germ = draw_germline(seed)
-        assert germ["latents"] == lat
+        # BODY FROZEN: morph/phenotype/alleles must be byte-identical (the v3 draws come AFTER them, so
+        # no existing creature's body can drift) — this is the safety-critical guarantee.
         assert germ["morph"] == morph
         assert germ["phenotype"]["palette"] == {"accent": accent, "word": word}
         assert germ["phenotype"]["pattern"] == pattern
         assert germ["phenotype"]["eye_family"] == eye
         assert germ["phenotype"]["build"] == build
         assert germ["phenotype"]["anchors"] == [dict(a) for a in anchors]
-        assert {s: e["variant"] for s, e in germ["alleles"].items()} == carries
+        assert {s2: e["variant"] for s2, e in germ["alleles"].items()} == carries
         assert all(e["expressed_at_stage"] is None for e in germ["alleles"].values())
+        # v3 latents + type match the mirrored order
+        assert germ["latents"] == lat
+        assert germ["type"] == {"primary": primary, "secondary": secondary}
 
     def test_birth_goes_through_the_germline(self, tmp_path):
         cfg = _cfg(tmp_path)
@@ -135,7 +149,7 @@ class TestGermlineDraws:
         assert g.alleles == germ["alleles"]
         assert g.stage_history == []
         doc = json.loads(_genome_bytes(cfg))
-        assert doc["v"] == GENOME_V == 2
+        assert doc["v"] == GENOME_V == 3
         assert doc["morph"] == g.morph and doc["phenotype"] == g.phenotype
         assert all(e["expressed_at_stage"] is None for e in doc["alleles"].values())
 
@@ -192,10 +206,13 @@ class TestV1Upgrade:
         v1 = _write_v1(cfg, seed=1234)
         g = Genome(cfg)                                    # load-or-birth → must LOAD + upgrade
         doc = json.loads(_genome_bytes(cfg))
-        assert doc["v"] == 2 and doc["seed"] == 1234
-        # stored v1 state preserved byte-for-byte — an upgrade never re-derives a living creature
-        assert doc["latents"] == v1["latents"]
-        assert doc["genes"] == v1["genes"]
+        assert doc["v"] == 3 and doc["seed"] == 1234
+        # stored v1 state preserved — an upgrade never re-derives a living creature's OLD axes; the 3
+        # v3 axes are ADDED as neutral (0.0 latent -> 1.0 gene), fail-open, until a fresh birth.
+        assert {k: doc["latents"][k] for k in v1["latents"]} == v1["latents"]
+        assert all(doc["latents"][a] == 0.0 for a in ("affiliation", "boldness", "playfulness"))
+        assert {k: doc["genes"][k] for k in v1["genes"]} == v1["genes"]
+        assert doc["genes"]["operator_pull"] == doc["genes"]["levity"] == doc["genes"]["press_scale"] == 1.0
         assert doc["stamp_baselines"] == v1["stamp_baselines"]
         # the NEW fields derive from the STORED seed (reproducible), all alleles dormant
         germ = draw_germline(1234)
@@ -219,19 +236,22 @@ class TestV1Upgrade:
         cfg = _cfg(tmp_path)
         _write_v1(cfg, seed=5)
         assert gene(cfg, "emotional_stamp") == 1.0         # stored v1 gene value, unchanged
-        assert json.loads(_genome_bytes(cfg))["v"] == 2
+        assert json.loads(_genome_bytes(cfg))["v"] == 3
 
     def test_v2_stored_values_win_over_derivation(self, tmp_path):
         """Belt and braces: a persisted morph + anchors survive loading VERBATIM even when the
-        seed would derive something else — and a clean v2 file is not rewritten on load."""
+        seed would derive something else. A v2 file upgrades to v3 once; a CURRENT-version file is
+        then never rewritten again."""
         cfg = _cfg(tmp_path)
         _write_v2(cfg, seed=7, morph="moth")               # seed 7 need not derive "moth"
-        before = _genome_bytes(cfg)
         g = Genome(cfg)
         assert g.morph == "moth"
         assert g.phenotype["anchors"] == _PHENO["anchors"]
         assert g.phenotype["palette"] == _PHENO["palette"]
-        assert _genome_bytes(cfg) == before                # no gratuitous rewrite of a v2 file
+        assert json.loads(_genome_bytes(cfg))["v"] == 3    # v2 upgraded to current
+        upgraded = _genome_bytes(cfg)
+        Genome(cfg)                                         # reload a now-current file
+        assert _genome_bytes(cfg) == upgraded              # no gratuitous rewrite of a current file
 
     def test_v2_build_reclamped_on_load(self, tmp_path):
         """A hand-edited build outside {-1,0,+1} is re-clamped (creature_gen canvas math) — the

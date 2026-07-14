@@ -67,12 +67,45 @@ from pathlib import Path
 import creature_gen  # name tuples only (pure stdlib, no I/O) — the renderer-coherence red gate
 
 GENOME_FILENAME = "genome.json"
-GENOME_V = 2         # v2: morph + phenotype + alleles, appended AFTER the v1 latent draws
+GENOME_V = 3         # v3: 3 more latent axes + named type, appended AFTER the v2 body draws
 
 LATENTS = ("sensitivity", "openness", "tenacity", "tempo")
+# v3 (2026-07-14): three MORE personality axes so a matrix of named types feels genuinely distinct.
+# They are DRAWN LAST (appended after the v2 body draws in draw_germline) so every existing seed's
+# morph/phenotype/alleles RNG positions are byte-identical — the frozen-draw discipline (docstring §).
+LATENTS_V3 = ("affiliation", "boldness", "playfulness")
+ALL_LATENTS = LATENTS + LATENTS_V3
 LATENT_SD = 0.6      # declared: birth draw ~ N(0, 0.6) — most creatures are mild, strong trait tails are rare
 LATENT_BOUND = 1.5   # declared: truncation at 2.5 SD — no latent can be born a monster (keeps every
                      # gene's pre-clamp expression inside a sane band before the hard clamps even apply)
+
+# The named-type MATRIX. Each PRIMARY type is a preset MEAN vector over ALL_LATENTS order
+# [sensitivity, openness, tenacity, tempo, affiliation, boldness, playfulness]. A birth draws a
+# primary + a distinct secondary, blends 65/35, and MEAN-SHIFTS the germline draw by it (the gaussian
+# jitter stays, so each of the 10×9 permutations is recognizable yet individually varied). Components
+# are CAPPED at ±1.0 — the invariant-b ceiling (a 65/35 blend of two ≤1.0 vectors is itself ≤1.0, so
+# no birth baseline can ride past the [0.38,0.62] clamp that sits inside disposition()'s thresholds).
+# NOTE: types are FELT as pressure only; the name is operator-facing (nature_name → dashboard), never
+# read by the creature (invariant a).
+_S, _M, _F = 1.0, 0.6, 0.3     # strong / mild / faint
+PRESETS = {
+    #             sens  open  tenac tempo  affil bold  play
+    "Explorer":  (0.0,  _S,   0.0,  _M,    0.0,  _M,   0.0),
+    "Builder":   (0.0,  0.0,  _S,  -_F,    0.0,  0.0,  0.0),
+    "Companion": (_M,   0.0,  0.0,  0.0,   _S,   0.0,  _F ),
+    "Sage":      (0.0,  _F,   _S,  -_S,    0.0,  0.0, -_F ),
+    "Spark":     (0.0,  _F,   0.0,  _S,    _F,   _F,   _S ),
+    "Tender":    (_S,   _F,   0.0, -_F,    _M,   0.0,  0.0),
+    "Stoic":     (-_S,  0.0,  _M,   0.0,   0.0,  _S,   0.0),
+    "Wanderer":  (0.0,  _S,   0.0,  _F,   -_S,   _M,   _F ),
+    "Sentinel":  (_M,   0.0,  _M,   0.0,   _M,  -_M,   0.0),
+    "Trickster": (-_F,  _M,   0.0,  _M,    0.0,  _M,   _S ),
+}
+PRIMARY_NAMES = tuple(PRESETS.keys())
+BLEND_PRIMARY = 0.70           # primary/secondary mix; a 70/30 blend of ≤1.0 vectors stays ≤1.0.
+#                                ~76% of births are recognizable as one of their two types (nearest-
+#                                preset in top-2) — distinct, while the gaussian jitter keeps each one
+#                                individual and the 30% secondary keeps the nature label's flavor real.
 
 # ==================================================================================================
 # The loading matrix — gene value = clamp(1.0 + Σ latent × loading, lo, hi)
@@ -99,7 +132,17 @@ GENE_LOADINGS: dict[str, tuple[dict[str, float], float, float]] = {
     # Multiplier on learning_progress.restlessness_signal (the curiosity organ's per-domain "move
     # on" pressure): openness raises it (dilettante), tenacity lowers it (deep-driller). The shaped
     # signal is re-clamped to [0,1] at the consumer so the gene can never break curiosity's contract.
-    "restlessness": ({"openness": 0.30, "tenacity": -0.25}, 0.6, 1.6),
+    "restlessness": ({"openness": 0.30, "tenacity": -0.25, "playfulness": 0.20}, 0.6, 1.6),
+    # v3 affiliation — the reach-toward-the-operator pull (a want to check in / show what it found).
+    # A new consumer (goaltension's reach-out itch) reads this; no existing social drive to load onto.
+    "operator_pull": ({"affiliation": 0.35}, 0.5, 1.8),
+    # v3 playfulness — HOW HARD a predictable lull bites the body into moving (levity). Multiplies the
+    # curiosity restless-arousal floor; a playful creature breaks out of idle to poke sooner. Wired to
+    # the exploratory DRIVE, never to speech/register (the tone system stays untouched).
+    "levity": ({"playfulness": 0.30}, 0.6, 1.6),
+    # v3 boldness — how hard an OPEN goal presses arousal (approach). Multiplies the goal-tension
+    # arousal floor; hi capped at 1.4 so a bold creature leans awake-while-working but never unsleepable.
+    "press_scale": ({"boldness": 0.30}, 0.7, 1.4),
     # Multiplier on temperament.park_threshold's persistence effect (the objectives gate's teeth):
     # a tenacious creature grinds longer before the gate rotates it off a hard objective. tenacity×0.30.
     "grip": ({"tenacity": 0.30}, 0.7, 1.4),
@@ -122,8 +165,10 @@ BASELINE_LOADINGS: dict[str, dict[str, float]] = {
     "initiative": {"openness": 0.06, "tempo": 0.04},
     # tenacity IS the persistence setpoint's congenital tilt (+0.08).
     "persistence": {"tenacity": 0.08},
-    # a sensitive creature hedges a little more (+0.06); an open one a little less (−0.03).
-    "caution": {"sensitivity": 0.06, "openness": -0.03},
+    # a sensitive creature hedges a little more (+0.06); an open one a little less (−0.03); a bold one
+    # is born nearer approach (−0.06). SAFE: worst-case pre-clamp 0.5 − 1.5×(0.06+0.06) = 0.32, and the
+    # HARD [0.38,0.62] clamp (BASELINE_LO) sits strictly inside disposition()'s 0.34 — no day-one badge.
+    "caution": {"sensitivity": 0.06, "openness": -0.03, "boldness": -0.06},
 }
 BASELINE_LO, BASELINE_HI = 0.38, 0.62   # declared: strictly inside the disposition() bands (0.34/0.66)
 
@@ -151,6 +196,38 @@ def express_baselines(latents: dict) -> dict:
         v = BASELINE_NEUTRAL + sum(float(latents.get(l, 0.0)) * w for l, w in loadings.items())
         out[ax] = round(_clamp(v, BASELINE_LO, BASELINE_HI), 4)
     return out
+
+
+# The type NAME is the noun; a second type flavors it as an adjective: "{ADJ[secondary]} {NOUN[primary]}".
+_NATURE_NOUN = {n: n for n in PRIMARY_NAMES}
+_NATURE_ADJ = {"Explorer": "Curious", "Builder": "Dogged", "Companion": "Warm", "Sage": "Wise",
+               "Spark": "Lively", "Tender": "Gentle", "Stoic": "Steady", "Wanderer": "Roaming",
+               "Sentinel": "Watchful", "Trickster": "Playful"}
+
+
+def _nearest_types(latents: dict):
+    """Fallback for a pre-v3 genome with no stored type: the two closest preset vectors by distance."""
+    v = [float(latents.get(ax, 0.0)) for ax in ALL_LATENTS]
+    ranked = sorted(PRIMARY_NAMES,
+                    key=lambda name: sum((v[i] - PRESETS[name][i]) ** 2 for i in range(len(ALL_LATENTS))))
+    return ranked[0], ranked[1]
+
+
+def nature_name(genome) -> str:
+    """The operator-facing personality label ("Curious Builder"). Read ONLY by the dashboard — NEVER
+    by the creature (invariant a: personality is felt PRESSURE, never a script the model reads). Accepts
+    a Genome or a raw snapshot dict; fail-open to a neutral name so the dashboard never breaks."""
+    try:
+        t = (getattr(genome, "type", None)
+             or (genome.get("type") if isinstance(genome, dict) else None) or {})
+        lat = (getattr(genome, "latents", None)
+               or (genome.get("latents") if isinstance(genome, dict) else None) or {})
+        primary, secondary = t.get("primary"), t.get("secondary")
+        if primary not in PRESETS or secondary not in PRESETS:
+            primary, secondary = _nearest_types(lat)   # upgraded v1/v2 genome: derive from latents
+        return "%s %s" % (_NATURE_ADJ[secondary], _NATURE_NOUN[primary])
+    except Exception:  # noqa: BLE001 - a label must never break the dashboard
+        return "Gentle Wanderer"
 
 
 # ==================================================================================================
@@ -448,8 +525,23 @@ def draw_germline(seed: int) -> dict:
     for slot_def in ALLELE_SLOTS:                                   # draws 11+ (declared order)
         pool = (None,) + tuple(v["id"] for v in slot_def["variants"])
         alleles[slot_def["slot"]] = {"variant": rng.choice(pool), "expressed_at_stage": None}
+
+    # --- v3 APPEND (drawn LAST, so nothing above shifts): the named-type pick + the 3 new axes -------
+    # Every rng.* call above keeps its exact position for any existing seed → morph/phenotype/alleles
+    # are byte-identical (test_draw_order_frozen). The type MEAN-SHIFTS all 7 axes so the matrix is
+    # genuinely distinct (the original 4 carry the strongest preset components + live consumers); the
+    # gaussian jitter above (draws 1-4) and below (the 3 new) is what keeps each birth individual.
+    primary = rng.choice(PRIMARY_NAMES)                            # draw N+1
+    secondary = rng.choice([n for n in PRIMARY_NAMES if n != primary])   # draw N+2
+    for n in LATENTS_V3:                                           # draws N+3..N+5 (jitter for new axes)
+        latents[n] = round(_clamp(rng.gauss(0.0, LATENT_SD), -LATENT_BOUND, LATENT_BOUND), 4)
+    p, s = PRESETS[primary], PRESETS[secondary]
+    for i, ax in enumerate(ALL_LATENTS):                           # mean-shift ALL 7 by the blend
+        mean = BLEND_PRIMARY * p[i] + (1.0 - BLEND_PRIMARY) * s[i]
+        latents[ax] = round(_clamp(latents[ax] + mean, -LATENT_BOUND, LATENT_BOUND), 4)
     return {
         "latents": latents,
+        "type": {"primary": primary, "secondary": secondary},
         "morph": morph,
         "phenotype": {"palette": {"accent": accent, "word": word}, "pattern": pattern,
                       "eye_family": eye_family, "build": int(build),
@@ -526,6 +618,7 @@ class Genome:
         self.seed = None
         self.born_ts = None
         self.latents: dict[str, float] = {}
+        self.type: dict = {"primary": None, "secondary": None}
         self.genes: dict[str, float] = {}
         self.stamp_baselines: dict[str, float] = {}
         self.morph: str = DEFAULT_MORPH
@@ -558,7 +651,11 @@ class Genome:
         try:
             d = json.loads(_path(self.config).read_text(encoding="utf-8"))
             lat = d.get("latents") or {}
-            self.latents = {n: _clamp(lat.get(n, 0.0), -LATENT_BOUND, LATENT_BOUND) for n in LATENTS}
+            # ALL_LATENTS: an existing v1/v2 genome has no v3 axes stored → they default to 0.0
+            # (neutral: gene 1.0 / no baseline tilt) until the creature is reborn. Fail-open.
+            self.latents = {n: _clamp(lat.get(n, 0.0), -LATENT_BOUND, LATENT_BOUND) for n in ALL_LATENTS}
+            t = d.get("type") if isinstance(d.get("type"), dict) else {}
+            self.type = {"primary": t.get("primary"), "secondary": t.get("secondary")}
             g = d.get("genes") or {}
             self.genes = {name: _clamp(g.get(name, 1.0), lo, hi)
                           for name, (_l, lo, hi) in GENE_LOADINGS.items()}
@@ -591,6 +688,7 @@ class Genome:
         self.seed = int.from_bytes(os.urandom(8), "big")
         germ = draw_germline(self.seed)
         self.latents = germ["latents"]
+        self.type = germ["type"]
         self.genes = express_genes(self.latents)
         self.stamp_baselines = express_baselines(self.latents)
         self.morph = germ["morph"]
@@ -621,6 +719,7 @@ class Genome:
 
     def snapshot(self) -> dict:
         return {"v": GENOME_V, "seed": self.seed, "born_ts": self.born_ts,
+                "type": dict(getattr(self, "type", None) or {"primary": None, "secondary": None}),
                 "latents": dict(self.latents), "genes": dict(self.genes),
                 "stamp_baselines": dict(self.stamp_baselines),
                 "morph": self.morph,
