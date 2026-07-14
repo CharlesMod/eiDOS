@@ -122,6 +122,14 @@ class RewardLearner:
         self._prev_wellbeing = None  # felt wellbeing at the previous observe (for the delta)
         self._since_save = 0
         self.last = None             # last observe() result, for the monitor
+        # Result-novelty ring (in-session): recent (situation, result-hash) pairs. An action whose
+        # RESULT repeats one seen here taught/changed nothing, so its success channel pays 0 — the
+        # VERB-AGNOSTIC form of the read-reward fix (a re-read via read_file / bash cat / a self-
+        # authored skill, or a re-write of identical content, all pay 0 alike). Not persisted: a fresh
+        # process re-learns within a few ticks; the loop it prevents is a within-session pathology.
+        self._recent_results: list[str] = []
+        self._recent_results_set: set[str] = set()
+        self._max_recent_results = 300
         self._load()
 
     # ---- reward function -------------------------------------------------------------
@@ -138,9 +146,25 @@ class RewardLearner:
         r += float(intrinsic)
         return max(-1.0, min(1.0, r))
 
+    def _result_is_stale(self, situation, result_sig) -> bool:
+        """True if this (situation, result) was produced recently — the action learned/changed
+        nothing new. Records it either way (first occurrence returns False and pays; repeats return
+        True and are gated). Bounded, in-session. Empty/None result_sig is never stale (skipped)."""
+        if not result_sig:
+            return False
+        key = (situation or "") + "\x00" + str(result_sig)
+        seen = key in self._recent_results_set
+        if not seen:
+            self._recent_results.append(key)
+            self._recent_results_set.add(key)
+            if len(self._recent_results) > self._max_recent_results:
+                old = self._recent_results.pop(0)
+                self._recent_results_set.discard(old)
+        return seen
+
     # ---- the learning step (one per acting tick) -------------------------------------
     def observe(self, *, situation="", action="", success=True, made_progress=False,
-                strain=0.0, intrinsic=0.0, tick=None, can_fail=True):
+                strain=0.0, intrinsic=0.0, tick=None, can_fail=True, result_sig=None):
         """Compute the reward + RPE for this tick's action, update the value cache, log the experience,
         and fire dopamine. Reads the felt body + mood from the bus/neuromod itself. Guarded by callers.
         `can_fail` gates the success channel; a structurally-riskless action (also caught by name via
@@ -157,6 +181,16 @@ class RewardLearner:
         # A successful inspection read is riskless — drop its free +W_SUCCESS — but a FAILED read still
         # books -W_SUCCESS (the error is a real signal). Asymmetric, unlike the CANT_FAIL set above.
         if could_fail and success and _tool in SUCCESS_RISKLESS_ACTIONS:
+            could_fail = False
+        # RESULT-NOVELTY (verb-agnostic): a successful action whose OUTPUT repeats one seen recently in
+        # this situation taught/changed nothing — pay 0 on the success channel whatever the verb. This
+        # is what the name-gate above could not catch: the re-read loop that re-formed via `bash cat`
+        # and self-authored read-wrapper skills (both booked +0.40), and `bash sleep`/idle (constant
+        # output). A genuinely-new read or a new-content write yields a novel result and still pays.
+        # Record on EVERY successful action (even riskless ones) so matching works ACROSS verbs — a
+        # read_file records content X; a later `bash cat X` then registers as stale and pays 0.
+        stale = self._result_is_stale(situation, result_sig) if success else False
+        if could_fail and stale:
             could_fail = False
         reward = self.reward_of(success=success, made_progress=made_progress,
                                 felt_delta=felt_delta, valence=valence, strain=strain,

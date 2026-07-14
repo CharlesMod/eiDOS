@@ -101,6 +101,42 @@ class TestRisklessSuccessChannel(unittest.TestCase):
         v_fail = [e for e in rl.values.values() if "ghost" in e["action"]][0]["v"]
         self.assertAlmostEqual(v_fail, -0.40, places=4)    # a genuine failed read still teaches
 
+    def test_result_novelty_gates_re_reads_across_any_verb(self):
+        # 2026-07-14: the name-gate closed read_file, but the re-read loop re-formed via `bash cat` and
+        # self-authored read-wrapper skills (both booked +0.40). Result-novelty gates by OUTPUT, not
+        # verb: an action whose result was seen recently pays 0 on the success channel — and it matches
+        # ACROSS verbs (a read_file records content; a later skill/bash returning it registers stale).
+        import hashlib
+        sig = lambda s: hashlib.md5(s.encode()).hexdigest()
+        rl = RewardLearner(alpha=1.0)
+        # first bash-cat of a file: novel -> full success reward
+        rl.observe(situation="explore", action='bash {"cmd":"cat notes.txt"}', success=True,
+                   made_progress=False, result_sig=sig("NOTES CONTENT"))
+        v_novel = [e for e in rl.values.values() if "cat notes" in e["action"]][0]["v"]
+        self.assertAlmostEqual(v_novel, 0.40, places=4)
+        # a self-authored skill returning the SAME bytes: stale cross-verb -> success channel 0
+        rl.observe(situation="explore", action="nest_check {}", success=True,
+                   made_progress=False, result_sig=sig("NOTES CONTENT"))
+        v_skill = [e for e in rl.values.values() if e["action"] == "nest_check {}"][0]["v"]
+        self.assertAlmostEqual(v_skill, 0.0, places=4)
+
+    def test_result_novelty_leaves_new_content_and_failures_alone(self):
+        import hashlib
+        sig = lambda s: hashlib.md5(s.encode()).hexdigest()
+        rl = RewardLearner(alpha=1.0)
+        # a NEW-content write (novel result + real progress) still pays fully
+        rl.observe(situation="s", action='write_file {"path":"a.txt"}', success=True,
+                   made_progress=True, result_sig=sig("Written 100 chars"))
+        v = [e for e in rl.values.values() if "write_file" in e["action"]][0]["v"]
+        self.assertGreater(v, 0.5)
+        # empty/None result is never treated as stale (no over-gating of no-output commands)
+        rl.observe(situation="s", action='bash {"cmd":"mkdir d"}', success=True,
+                   made_progress=False, result_sig=None)
+        rl.observe(situation="s", action='bash {"cmd":"mkdir d"}', success=True,
+                   made_progress=False, result_sig=None)
+        vm = [e for e in rl.values.values() if "mkdir" in e["action"]][0]["v"]
+        self.assertAlmostEqual(vm, 0.40, places=4)   # None result_sig -> normal success reward, not gated
+
     def test_a_successful_read_never_distills_into_a_habit(self):
         # "you reliably read garden_summary.txt" is the loop coaching itself — must never distill,
         # via EITHER the lesson path (_distill_lessons) or the habit path (habits(), previously unguarded).

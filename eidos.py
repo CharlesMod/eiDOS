@@ -2882,10 +2882,14 @@ def run_loop(config: Config, persona=None, wal=None):
                 # discriminator (the richer _act_readable label is for the value key, not the gate).
                 from nervous.reward import CANT_FAIL_ACTIONS as _CANT_FAIL
                 _can_fail = tick_tool_name not in _CANT_FAIL
+                # Result hash for verb-agnostic novelty gating: a re-read/re-cat/re-skill/re-write that
+                # returns identical output taught/changed nothing, so its success channel pays 0.
+                _result_sig = (hashlib.md5(tick_output.encode("utf-8", "ignore")).hexdigest()
+                               if tick_output else None)
                 nervous_learner.observe(situation=tick_situation, action=_act_readable,
                                         success=tick_tool_success, made_progress=_made_progress,
                                         strain=_strain_bump, intrinsic=_intrinsic, tick=tick_number,
-                                        can_fail=_can_fail)
+                                        can_fail=_can_fail, result_sig=_result_sig)
                 _wm_prev_sit, _wm_prev_act = tick_situation, _act_readable
             except Exception as _le:  # noqa: BLE001 - learning must never break the tick
                 logger.warning("reward learning failed: %s", _le)
