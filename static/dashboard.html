@@ -2018,7 +2018,8 @@ function update(data) {
     let ident = (spec && spec.identity) || {};
     nameEl.textContent =
         (p.name || 'eiDOS') + ' ✦ Lv.' + (p.level || 1) + ' ' + ((spec && spec.stage) || cr.stage || '')
-        + (ident.morph ? ' · ' + ident.morph : '');
+        + (ident.morph ? ' · ' + ident.morph : '')
+        + (ident.nature ? ' · ' + ident.nature : '');   // operator-only personality label
     nameEl.title = ident.seed ? 'germline seed ' + ident.seed : '';
     let moodEl = document.getElementById('mood-display');
     if (spec && spec.expr && spec.expr.condition) {

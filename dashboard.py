@@ -510,7 +510,13 @@ def _identity_payload(config: Config) -> dict:
     nameplate. Operator-facing — the fourth wall doesn't apply to the forge's window."""
     try:
         g = json.loads((config.workspace / "genome.json").read_text(encoding="utf-8"))
-        return {"morph": str(g.get("morph") or ""), "seed": str(g.get("seed") or "")}
+        out = {"morph": str(g.get("morph") or ""), "seed": str(g.get("seed") or "")}
+        try:
+            import genome as _genome
+            out["nature"] = _genome.nature_name(g)   # operator-only personality label — never the creature's
+        except Exception:  # noqa: BLE001 — label is best-effort, never breaks the nameplate
+            pass
+        return out
     except Exception:  # noqa: BLE001 — pre-genome workspace: the pane just omits the line
         return {}
 
