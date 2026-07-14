@@ -1560,6 +1560,26 @@ class _Pillars:
         c = self.config
         if not getattr(c, "pillars_sleep_engine_enabled", False):
             return None
+        # DREAM vs NAP — the body decides, never a clock. This window is a NAP only when real
+        # wake pressure had accumulated by the boundary (NAP_PRESSURE_MIN of the stage ceiling);
+        # otherwise it is a DREAM: a context-compaction doze. Both run the memory jobs and keep
+        # the System responsive (quest settlement below, cadence + issuance later). Only a NAP
+        # rests the body (adenosine clear), advances the gates' sleep counters and the ladder's
+        # sleeps.total, and wakes the Administrator — an infant that dozes every few minutes
+        # must still get genuinely tired, genuinely nap, and genuinely digest between levels.
+        # No adenosine organ → NAP (fail-open to the pre-split semantics). Computed FIRST because the
+        # quest stall-clock below must advance on NAPS only, never on frequent context-compaction
+        # dreams — else a hatchling (dreams every few min, naps every ~2.5 h) burns a quest's whole
+        # QUEST_STALL_SLEEPS budget in minutes and FAILS it before its first nap, suspending the tier
+        # and welding the level gate shut (the 2026-07-14 stuck-at-Lv.1 stall).
+        nap = True
+        try:
+            from nervous.neuromod import NAP_PRESSURE_MIN as _nap_min
+            _aden = getattr(self.neuromod, "adenosine", None)
+            if _aden is not None:
+                nap = float(_aden.pressure()) >= _nap_min
+        except Exception:  # noqa: BLE001 - classification failure must never skip a sleep
+            nap = True
         if self.quests is not None:
             try:
                 active = self.quests.store.active()
@@ -1577,32 +1597,17 @@ class _Pillars:
                         if ep is not None:
                             self._on_quest_closed({"expired": True, "episode": ep,
                                                    "quest": active}, persona, tick=tick)
-                        else:
+                        elif nap:
                             # K-sleep abandon (TOOL_PROGRESSION stall handling): a quest whose
-                            # criteria haven't moved across QUEST_STALL_SLEEPS sleeps closes
-                            # FAILED, unfreezing the quest line for a smaller re-attack.
+                            # criteria haven't moved across QUEST_STALL_SLEEPS *naps* closes FAILED,
+                            # unfreezing the quest line for a smaller re-attack. NAPS only — a dream
+                            # is not a chance the quest was given, so it must not burn the stall clock.
                             ep = self.quests.abandon_if_stalled(self._quest_stats(persona))
                             if ep is not None:
                                 self._on_quest_closed({"abandoned": True, "episode": ep,
                                                        "quest": active}, persona, tick=tick)
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars quest expiry failed: %s", e)
-        # DREAM vs NAP — the body decides, never a clock. This window is a NAP only when real
-        # wake pressure had accumulated by the boundary (NAP_PRESSURE_MIN of the stage ceiling);
-        # otherwise it is a DREAM: a context-compaction doze. Both run the memory jobs and keep
-        # the System responsive (quest settlement above, cadence + issuance below). Only a NAP
-        # rests the body (adenosine clear), advances the gates' sleep counters and the ladder's
-        # sleeps.total, and wakes the Administrator — an infant that dozes every few minutes
-        # must still get genuinely tired, genuinely nap, and genuinely digest between levels.
-        # No adenosine organ → NAP (fail-open to the pre-split semantics).
-        nap = True
-        try:
-            from nervous.neuromod import NAP_PRESSURE_MIN as _nap_min
-            _aden = getattr(self.neuromod, "adenosine", None)
-            if _aden is not None:
-                nap = float(_aden.pressure()) >= _nap_min
-        except Exception:  # noqa: BLE001 - classification failure must never skip a sleep
-            nap = True
         report = None
         try:
             from nervous.sleep import SleepContext, run_sleep
