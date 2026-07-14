@@ -2454,8 +2454,9 @@ def run_loop(config: Config, persona=None, wal=None):
             # Clamp the STORED thought to the creature's life-stage (a newborn remembers a fragment,
             # not an essay) — post-parse, so the action already read the FULL response and is untouched.
             # This starves the self-imitation loop that makes a hatchling drift into architect-essays.
-            if getattr(self.config, "pillars_tool_unlocks_enabled", False):
-                thought = _clamp_thought_for_stage(thought, self._stage_seen)
+            if getattr(config, "pillars_tool_unlocks_enabled", False):
+                import creature_gen as _cg
+                thought = _clamp_thought_for_stage(thought, _cg.current_stage(config))
             append_thought(config, tick_number, thought)
 
         # --- Parse tool call ---
