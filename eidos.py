@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""eiDOS — the always-on house AI (Windows host gamingPC).
+"""eiDOS — the always-on autonomous agent.
 
 Entry point: crash recovery, tick loop, signal handling.
 """

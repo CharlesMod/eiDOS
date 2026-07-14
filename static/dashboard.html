@@ -936,7 +936,7 @@ async function nxCtl(action){
   nxStatus();
 }
 async function nxStop(){
-  if(!confirm('Authoritative STOP: force-kill the consciousness loop and free VRAM (stops HouseAI-Llama)?'))return;
+  if(!confirm('Authoritative STOP: force-kill the consciousness loop and free VRAM (stops the model server)?'))return;
   await nxCtl('stop');
 }
 function toggleSettings(){ const p=document.getElementById('nx-settings-panel');
@@ -1225,6 +1225,7 @@ function toggleVoice(){
     <div class="panel">
         <div class="panel-title">Health</div>
         <div id="gauges">
+            <div class="gauge"><span class="gauge-label">VRAM</span><span class="gauge-bar" id="g-vram"></span><span class="gauge-val" id="v-vram"></span></div>
             <div class="gauge"><span class="gauge-label">RAM</span><span class="gauge-bar" id="g-ram"></span><span class="gauge-val" id="v-ram"></span></div>
             <div class="gauge"><span class="gauge-label">Disk Free</span><span class="gauge-bar" id="g-disk"></span><span class="gauge-val" id="v-disk"></span></div>
             <div class="gauge"><span class="gauge-label">LLM Latency</span><span class="gauge-bar" id="g-llm"></span><span class="gauge-val" id="v-llm"></span></div>
@@ -1733,6 +1734,14 @@ async function pollActivity() {
                 var vg = g.mem_total ? (g.mem_used/1024).toFixed(1)+'/'+(g.mem_total/1024).toFixed(1)+' GB ('+Math.round(g.mem_used/g.mem_total*100)+'%)' : '—';
                 document.getElementById('gpu-readout').innerHTML =
                     '<span>'+(g.name||'GPU')+'</span><span>VRAM '+vg+'</span><span>'+Math.round(g.temp)+'°C</span><span>'+Math.round(g.power)+' W</span>';
+                // VRAM gauge bar (same figure as the readout above): used / total of the GPU.
+                var vramEl = document.getElementById('g-vram'), vramVal = document.getElementById('v-vram');
+                if (g.mem_total && vramEl) {
+                    var vpct = Math.min(100, g.mem_used / g.mem_total * 100);
+                    vramEl.textContent = makeBar(vpct);
+                    vramVal.textContent = (g.mem_used/1024).toFixed(1)+'/'+(g.mem_total/1024).toFixed(1)+' GB';
+                    vramVal.className = gaugeClass(vpct, 80, 92);
+                }
             }
             if (data.llm) {
                 var l = data.llm;

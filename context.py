@@ -540,6 +540,14 @@ def _current_focus(config: Config) -> str:
                 focus = (focus + " " + c.strip("*_").strip()).strip()
             break
     focus = focus[:300]
+    # Creature mode is self-directed (goal.md: "deciding is most of the point"), and the full plan
+    # block is already withheld from it. The plan's first line, though, is FROZEN between dreams — so
+    # injecting it as an imperative "next step" into the never-trimmed tick prompt EVERY tick nags the
+    # creature to redo a step it already finished ("analyze those two files"), a stale unresolvable
+    # command that breeds the frustrated/morose register (2026-07-13). A creature steers by its live
+    # objective + curiosity, not a frozen to-do list; only the task-driven (non-creature) mode keeps it.
+    if getattr(config, "creature_mode", False):
+        return focus
     step = _plan_next_step(config)   # capped; this string lands in the never-trimmed tick prompt
     parts = [p for p in (focus, (f"next step: {step}" if step else "")) if p]
     return " — ".join(parts)

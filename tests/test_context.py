@@ -17,6 +17,28 @@ from context import (
 from memory import write_plan, append_observation
 
 
+class TestCreaturePlanNag(unittest.TestCase):
+    """A creature must NOT be fed the frozen plan first-line as an imperative 'next step' every tick —
+    it stays stale between dreams and nags the creature to redo finished work (the morose-tone source).
+    The task-driven (non-creature) mode still gets it."""
+
+    def setUp(self):
+        import context
+        self.context = context
+        self.cfg = Config()
+        self.cfg.workspace_dir = tempfile.mkdtemp()
+        self.cfg.workspace.mkdir(parents=True, exist_ok=True)
+        write_plan(self.cfg, "1. Read and analyze the two files.\n2. Do the next thing.")
+
+    def test_creature_mode_drops_the_next_step_imperative(self):
+        self.cfg.creature_mode = True
+        self.assertNotIn("next step", self.context._current_focus(self.cfg))
+
+    def test_task_mode_keeps_the_next_step(self):
+        self.cfg.creature_mode = False
+        self.assertIn("next step", self.context._current_focus(self.cfg))
+
+
 class TestFormatElapsed(unittest.TestCase):
 
     def test_seconds(self):

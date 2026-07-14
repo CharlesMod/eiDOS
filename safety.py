@@ -43,19 +43,33 @@ class _MEMORYSTATUSEX(ctypes.Structure):
 
 
 def check_ram(max_pct: float = 85.0) -> Tuple[bool, float]:
-    """Check if RAM usage is below threshold.
+    """Check if RAM usage is below threshold. Returns (ok, used_pct).
 
-    Returns (ok, used_pct). Windows-native (GlobalMemoryStatusEx); on other
-    platforms or on error, fails open with (True, 0.0).
-    """
-    if sys.platform != "win32":
-        return True, 0.0
-    try:
-        stat = _MEMORYSTATUSEX()
-        stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
-        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+    Windows uses GlobalMemoryStatusEx; Linux reads /proc/meminfo (MemAvailable vs MemTotal — the
+    kernel's own 'how much can actually be allocated' figure, so cache doesn't read as pressure).
+    On any error / unknown platform, fails open with (True, 0.0)."""
+    if sys.platform == "win32":
+        try:
+            stat = _MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return True, 0.0
+            used_pct = float(stat.dwMemoryLoad)
+            return used_pct <= max_pct, used_pct
+        except (OSError, AttributeError, ValueError):
             return True, 0.0
-        used_pct = float(stat.dwMemoryLoad)
-        return used_pct <= max_pct, used_pct
-    except (OSError, AttributeError, ValueError):
-        return True, 0.0
+    try:
+        info = {}
+        with open("/proc/meminfo", encoding="ascii", errors="ignore") as f:
+            for line in f:
+                k, _, rest = line.partition(":")
+                if rest:
+                    info[k.strip()] = float(rest.strip().split()[0])   # values are in kB
+        total = info.get("MemTotal", 0.0)
+        avail = info.get("MemAvailable", info.get("MemFree", 0.0))
+        if total > 0:
+            used_pct = 100.0 * (total - avail) / total
+            return used_pct <= max_pct, used_pct
+    except (OSError, ValueError, IndexError):
+        pass
+    return True, 0.0

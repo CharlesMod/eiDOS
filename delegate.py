@@ -2,7 +2,7 @@
 
 The tick loop is built for presence, not deep work: a multi-step investigation,
 multi-file edit, or environment repair needs a worker that can hold ONE problem for
-minutes. `delegate` spawns the pi coding agent (same house-ai mind, its own context
+minutes. `delegate` spawns the pi coding agent (same mind, its own context
 window, read/bash/edit/write tools) detached through the shared jobs ledger; the
 result returns later as a compact [↩ delegate N] observation. ARCH #2: never block.
 
@@ -32,7 +32,7 @@ from tools import (
 
 REPO_ROOT = Path(__file__).resolve().parent
 
-_HOUSE_RULES_COMMON = """You are a delegated worker for eiDOS, the autonomous house AI on this machine.
+_HOUSE_RULES_COMMON = """You are a delegated worker for eiDOS, the autonomous agent on this machine.
 Hard rules, in addition to the task you were given:
 - NEVER create, modify, or delete anything under the eiDOS repo ({repo}) except inside
   your own working directory (a sandbox under its workspace/delegate/).
@@ -71,7 +71,7 @@ _PATH_KEYS = ("path", "file_path", "filePath", "filename")
 def _delegate_root(config: Config) -> Path:
     """Where the delegate's per-job sandboxes live. For the CREATURE this is a `workshop/` folder INSIDE
     its home burrow — so the software its builder-self makes is the creature's own to see, run, and send
-    the builder back to improve (the loop is closed). For the house-AI, a sandbox under the workspace."""
+    the builder back to improve (the loop is closed). In non-creature (task) mode, a sandbox under the workspace."""
     if getattr(config, "creature_mode", False):
         from tools import _creature_root  # single source of truth for the home root (creates it)
         return _creature_root(config) / "workshop"
