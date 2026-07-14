@@ -84,6 +84,32 @@ class TestRisklessSuccessChannel(unittest.TestCase):
         vb = [e for e in rl.values.values() if e["action"] == "bash"][0]["v"]
         self.assertAlmostEqual(vb, 0.40, places=4)     # a can-fail action still books the win
 
+    def test_successful_read_is_riskless_but_a_failed_read_still_penalizes(self):
+        # 2026-07-14 rotating re-read spiral: a SUCCESSFUL read booked the free +0.40 (an OS read of an
+        # existing file cannot fail), building V≈0.46 that pulled the creature back into re-reading.
+        # Asymmetric fix: a successful read pays 0 on the success channel; a FAILED read (missing file)
+        # STILL books -W_SUCCESS (a real error). Unlike CANT_FAIL, gated only when success is True.
+        from nervous.reward import SUCCESS_RISKLESS_ACTIONS
+        self.assertIn("read_file", SUCCESS_RISKLESS_ACTIONS)
+        rl = RewardLearner(alpha=1.0)
+        rl.observe(situation="calm", action='read_file {"path": "garden_summary.txt"}',
+                   success=True, made_progress=False)
+        v_ok = next(iter(rl.values.values()))["v"]
+        self.assertAlmostEqual(v_ok, 0.0, places=4)        # the leak: no free +0.40 for a successful read
+        rl.observe(situation="calm", action='read_file {"path": "ghost.txt"}',
+                   success=False, made_progress=False)
+        v_fail = [e for e in rl.values.values() if "ghost" in e["action"]][0]["v"]
+        self.assertAlmostEqual(v_fail, -0.40, places=4)    # a genuine failed read still teaches
+
+    def test_a_successful_read_never_distills_into_a_habit(self):
+        # "you reliably read garden_summary.txt" is the loop coaching itself — must never distill,
+        # via EITHER the lesson path (_distill_lessons) or the habit path (habits(), previously unguarded).
+        rl = RewardLearner(alpha=1.0)
+        rl.values['calm::x::read_file {"path": "garden_summary.txt"}'] = {
+            "v": 0.6, "n": 9, "situation": "calm", "action": 'read_file {"path": "garden_summary.txt"}'}
+        self.assertFalse(any("read_file" in l for l in rl._distill_lessons()))
+        self.assertFalse(any("read_file" in h for h in rl.habits(min_value=0.5, min_count=5)))
+
 
 class TestValueLearning(unittest.TestCase):
     def test_repeated_good_outcome_raises_value(self):

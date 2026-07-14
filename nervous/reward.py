@@ -58,6 +58,21 @@ CANT_FAIL_ACTIONS = frozenset({"thought", "chat_reply", "note_append", "message"
 # wall-fixation). A riskless action carries no outcome surprise, so it earns no success reward and
 # never becomes a habit-lesson.
 
+# SUCCESS-riskless INSPECTION reads (2026-07-14): actions that CAN fail (a missing file, a bad note
+# name) but whose SUCCESS is riskless — the file/note/list was simply there, and nothing durable was
+# learned by looking. Left uncovered, a SUCCESSFUL re-read booked the free +0.40 every time (an OS read
+# of an existing file cannot fail: tools.py), building a positive value cache (V≈0.46) that pulled the
+# creature back into re-reading its own files — the rotating re-read spiral. Asymmetric treatment: a
+# successful read pays ZERO on the success channel (its worth must come from information-gain intrinsic,
+# not from the act), while a genuine FAILURE (read of a file that isn't there) STILL books -W_SUCCESS —
+# that error taught something real. Unlike CANT_FAIL_ACTIONS this is applied only when success is True.
+SUCCESS_RISKLESS_ACTIONS = frozenset({
+    "read_file", "note_read", "note_list", "check_tools", "list_skills", "objective_list"})
+
+# Neither a riskless reflection nor a riskless inspection may distill into a coached lesson/habit — a
+# "reliably read garden_summary.txt" habit is exactly the loop coaching itself from the KV-stable head.
+_NO_HABIT_ACTIONS = CANT_FAIL_ACTIONS | SUCCESS_RISKLESS_ACTIONS
+
 
 def _action_tool(action) -> str:
     """The bare tool name at the head of a value-key action string ('note_append {..}' -> 'note_append',
@@ -137,7 +152,12 @@ class RewardLearner:
         valence = float(getattr(self.neuromod, "valence", 0.0) or 0.0)
         arousal = float(getattr(self.neuromod, "arousal", 0.3) or 0.3)
 
-        could_fail = bool(can_fail) and (_action_tool(action) not in CANT_FAIL_ACTIONS)
+        _tool = _action_tool(action)
+        could_fail = bool(can_fail) and (_tool not in CANT_FAIL_ACTIONS)
+        # A successful inspection read is riskless — drop its free +W_SUCCESS — but a FAILED read still
+        # books -W_SUCCESS (the error is a real signal). Asymmetric, unlike the CANT_FAIL set above.
+        if could_fail and success and _tool in SUCCESS_RISKLESS_ACTIONS:
+            could_fail = False
         reward = self.reward_of(success=success, made_progress=made_progress,
                                 felt_delta=felt_delta, valence=valence, strain=strain,
                                 intrinsic=intrinsic, can_fail=could_fail)
@@ -206,7 +226,7 @@ class RewardLearner:
         # channel is already ~0 going forward, but this also drops any already-poisoned entries.
         cand = [e for e in self.values.values()
                 if e["n"] >= self.lesson_min_count and abs(e["v"]) >= self.lesson_min_abs
-                and _action_tool(e.get("action")) not in CANT_FAIL_ACTIONS]
+                and _action_tool(e.get("action")) not in _NO_HABIT_ACTIONS]
         cand.sort(key=lambda e: abs(e["v"]) * math.log1p(e["n"]), reverse=True)
         out = []
         for e in cand[:self.lessons_top]:
@@ -225,7 +245,8 @@ class RewardLearner:
         re-deliberating (freeing the slow core). The strongest are candidates for skill-compilation."""
         with self._lock:
             cand = [e for e in self.values.values()
-                    if e["v"] >= float(min_value) and e["n"] >= int(min_count)]
+                    if e["v"] >= float(min_value) and e["n"] >= int(min_count)
+                    and _action_tool(e.get("action")) not in _NO_HABIT_ACTIONS]
         cand.sort(key=lambda e: e["v"] * math.log1p(e["n"]), reverse=True)
         out = []
         for e in cand[:int(k)]:
