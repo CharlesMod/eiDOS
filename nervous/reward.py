@@ -50,7 +50,7 @@ STRAIN_NORM = 3.0    # strain bump that counts as "fully strained"
 # progress, the felt body, and intrinsic curiosity alone, which is exactly what makes it connective
 # tissue rather than the goal. Everything that can actually fail (bash, write_file, create_skill,
 # read_file, objective work…) keeps the full ±W_SUCCESS.
-CANT_FAIL_ACTIONS = frozenset({"thought", "chat_reply", "note_append"})
+CANT_FAIL_ACTIONS = frozenset({"thought", "chat_reply", "note_append", "message"})
 # ^ note_append joined 2026-07-13: it is pure REFLECTION (write to my own notebook — never fails),
 # exactly like thought. Left uncovered, it routed around the thought/chat_reply fix — a creature
 # journaling "the wall is my horizon." booked the free +0.40 every tick, which distilled into a

@@ -114,7 +114,7 @@ UNITS: tuple[Unit, ...] = (
     # U0 — the newborn floor: paws-and-hands territory, arrives by being born. Never announced.
     Unit(
         id="body",
-        tools=("bash", "write_file", "read_file",
+        tools=("bash", "write_file", "read_file", "message",
                "note_append", "note_read", "note_list", "note_close", "check_tools"),
         criterion=None,
         requires_service=None,

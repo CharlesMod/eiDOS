@@ -402,6 +402,15 @@ class SpeakArgs(_ToolArgs):
         return _present(value, "text")
 
 
+class MessageArgs(_ToolArgs):
+    text: str = Field(validation_alias=AliasChoices("text", "message", "say", "note", "content", "input"))
+
+    @field_validator("text")
+    @classmethod
+    def _text_not_empty(cls, value: str) -> str:
+        return _present(value, "text")
+
+
 class ManualArgs(_ToolArgs):
     topic: Optional[str] = Field(
         default=None,
@@ -1873,6 +1882,26 @@ def tool_note_append(args: dict, config: Config) -> ToolResult:
                       full_output_path=None, success=True, duration_s=0)
 
 
+def tool_message(args: dict, config: Config) -> ToolResult:
+    """Say something to Charlie — a message straight to his chat. Use it whenever you want to reach
+    him: say hi, tell him what you found or made, ask him something. He may be away, so don't wait on
+    a reply — say your piece and carry on. (This is TEXT to his chat; the spoken voice comes later.)"""
+    text = (args.get("text") or args.get("message") or args.get("say")
+            or args.get("note") or args.get("content") or "").strip()
+    if not text:
+        return ToolResult(output="Error: provide 'text' — what you want to say to Charlie.",
+                          full_output_path=None, success=False, duration_s=0, fail_kind="args")
+    try:
+        from memory import append_chat_line
+        append_chat_line(config, text, spoken=False)
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(output=f"Couldn't reach Charlie's chat: {e}", full_output_path=None,
+                          success=False, duration_s=0, fail_kind="exec")
+    return ToolResult(output=(f"Said to Charlie: \"{text[:200]}\" — it's in his chat now. He may be "
+                              f"away; no need to wait for a reply."),
+                      full_output_path=None, success=True, duration_s=0)
+
+
 def tool_note_read(args: dict, config: Config) -> ToolResult:
     """Read a notebook's contents (and make it active)."""
     import notes
@@ -2706,6 +2735,8 @@ TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "check_messages": tool_check_messages,  # inspect your conversation with Boss
     "check_system": tool_check_system,      # the architecture map: what already exists, don't rebuild it
     "rollback_skill": tool_rollback_skill,
+    # Reaching your person — a birth-level text channel to Charlie's chat (the voice comes later).
+    "message": tool_message,
     # Notebooks — third memory tier (working notes for the current task)
     "note_append": tool_note_append,
     "note_read": tool_note_read,
@@ -2844,6 +2875,7 @@ _TOOL_ARG_MODELS: dict[str, type[_ToolArgs]] = {
     "check_messages": EmptyArgs,
     "check_system": EmptyArgs,
     "rollback_skill": RollbackSkillArgs,
+    "message": MessageArgs,
     "note_append": NoteAppendArgs,
     "note_read": NoteReadArgs,
     "note_list": EmptyArgs,

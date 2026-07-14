@@ -34,6 +34,23 @@ class TestTools(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    # --- message: the birth-level channel to Charlie ---
+    def test_message_reaches_charlies_chat_from_birth(self):
+        import tools
+        # granted from birth (body unit), so a newborn can always reach its person
+        self.assertIn("message", tools.visible_tools(self.config))
+        r = tools.tool_message({"text": "hi charlie, i made a thing."}, self.config)
+        self.assertTrue(r.success)
+        chat = self.config.workspace / "chat_replies.jsonl"
+        self.assertTrue(chat.exists() and "hi charlie" in chat.read_text())   # lands in the operator chat
+        self.assertFalse(tools.tool_message({}, self.config).success)         # empty is refused
+
+    def test_message_is_a_riskless_channel_no_reward_farming(self):
+        # reaching out always succeeds mechanically, so it must NOT book the free success reward —
+        # else the creature learns to spam Charlie for a reward pellet. Its value comes from his reply.
+        from nervous.reward import CANT_FAIL_ACTIONS
+        self.assertIn("message", CANT_FAIL_ACTIONS)
+
     # --- bash ---
 
     def test_bash_simple(self):

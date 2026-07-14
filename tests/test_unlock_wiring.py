@@ -45,7 +45,7 @@ from tools import TOOLS, execute_tool, tool_list_skills, tool_manual, visible_to
 
 _ROOT = Path(__file__).parent.parent
 
-_NEWBORN = frozenset({"bash", "write_file", "read_file",
+_NEWBORN = frozenset({"bash", "write_file", "read_file", "message",
                       "note_append", "note_read", "note_list", "note_close", "check_tools"})
 
 
