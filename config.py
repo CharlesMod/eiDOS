@@ -338,7 +338,11 @@ class Config:
     # M0: metabolism — the energy economy. Thinking drains the reserve; hunger is felt; when arousal
     # collapses to torpor the creature rests + recovers (hibernation, not death). The stakes that make
     # inaction costly so the creature acts like an organism instead of ruminating.
-    nervous_metabolism_enabled: bool = True
+    # DORMANT by default (2026-07-14): no deployment has a real solar/battery power feed yet, so the
+    # whole energy/hunger FEELING (the felt "running low" bar AND the prompt's battery/hunger language,
+    # both gated by this one flag) is a fiction the model would narrate. The capability is intact — flip
+    # to true once the Renogy BLE power feed is actually wired, and the feeling comes back on both paths.
+    nervous_metabolism_enabled: bool = False
     nervous_metabolism_rest_arousal: float = 0.2     # at/below this arousal the creature is resting (low-power dormancy)
     # Post-pivot (2026-06-20): food = literal battery power. archetype "plant" = recharges from
     # environmental power (solar) only; "animal" = also recharges by resting/docking. This node is a

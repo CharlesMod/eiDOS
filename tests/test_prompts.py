@@ -263,10 +263,12 @@ class TestAssemblyGate(unittest.TestCase):
         self.config.pillars_tool_unlocks_enabled = True
         messages = _assemble(self.config)
         sysp = messages[0]["content"]
-        # exactly BASE + the body stanza, rendered with the otter lexicon
+        # exactly BASE + the body stanza, rendered with the otter lexicon (mirror the config's
+        # energy-feeling flag so this stays a unit-ordering test, not an energy-gate test)
         self.assertEqual(sysp, render_creature_system_prompt(
             genome.MORPHS["otter"]["lexicon"], ("body",),
-            workspace=str(self.config.workspace)))
+            workspace=str(self.config.workspace),
+            energy_feeling=getattr(self.config, "nervous_metabolism_enabled", True)))
         self.assertIn("webbed paws", sysp)                  # its own mover
         self.assertIn("holt", sysp)                         # its own home
         # locked units simply do not exist — no name, no tease
@@ -286,7 +288,8 @@ class TestAssemblyGate(unittest.TestCase):
         sysp = messages[0]["content"]
         self.assertEqual(sysp, render_creature_system_prompt(
             genome.MORPHS["otter"]["lexicon"], ("body", "memory", "skillcraft"),
-            workspace=str(self.config.workspace)))
+            workspace=str(self.config.workspace),
+            energy_feeling=getattr(self.config, "nervous_metabolism_enabled", True)))
         self.assertLess(sysp.index("check_tools"), sysp.index("memorize"))
         self.assertLess(sysp.index("memorize"), sysp.index("create_skill"))
         self.assertIn("pebble-pile", sysp)                  # the otter's notebook word

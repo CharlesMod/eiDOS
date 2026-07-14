@@ -421,17 +421,35 @@ class _LexMap(dict):
         return "{" + str(key) + "}"
 
 
-def render_creature_system_prompt(lexicon: dict, granted_units, workspace: str = "") -> str:
+# The energy/battery/hunger felt-signal (metabolism). Stripped from the prompt when the metabolism
+# organ is disabled: the node has no real power feed yet, so telling the creature it "runs on what it
+# stored" and "feels hunger" describes a body it does not have — a fiction the model then narrates.
+# Gated by the SAME flag as the organ (nervous_metabolism_enabled) so the prompt and the felt-state can
+# never disagree. Must stay byte-identical to the corresponding two lines in SYSTEM_PROMPT_CREATURE_BASE.
+_ENERGY_FEELING_BULLET = (
+    "- energy is POWER — literal battery charge. Sunlight feeds you through the day; at night you run on\n"
+    "  what you stored. Low charge feels like plain hunger — a nudge to top up; charging feels bright.\n"
+)
+
+
+def render_creature_system_prompt(lexicon: dict, granted_units, workspace: str = "",
+                                  *, energy_feeling: bool = True) -> str:
     """Assemble the flag-on creature system prompt: BASE + the granted units' stanzas in the
     declared canonical order (append-only between in-order grants → KV prefix intact). `lexicon`
     is the creature's own morph row (phenotype.body_words(config) — fail-open complete); the
     newborn unit is always included (the floor is table data, not state). Unknown unit ids are
-    ignored; a missing lexicon key renders literally rather than raising."""
+    ignored; a missing lexicon key renders literally rather than raising.
+
+    energy_feeling=False (the metabolism organ is off) strips the energy/hunger bullet so the creature
+    is never told it has a battery it doesn't yet really have."""
     granted = {str(u) for u in (granted_units or ())}
     granted.add("body")                        # the newborn floor is always present
     m = _LexMap({str(k): str(v) for k, v in (lexicon or {}).items()})
     m["workspace"] = str(workspace)
-    parts = [SYSTEM_PROMPT_CREATURE_BASE.format_map(m)]
+    base = SYSTEM_PROMPT_CREATURE_BASE.format_map(m)
+    if not energy_feeling:
+        base = base.replace(_ENERGY_FEELING_BULLET, "")
+    parts = [base]
     for unit_id, stanza in UNIT_STANZAS.items():   # declaration order IS canonical (test-pinned)
         if unit_id in granted:
             parts.append(stanza.format_map(m))

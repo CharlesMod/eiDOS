@@ -294,8 +294,9 @@ def _creature_system_prompt(config) -> str:
         lexicon = body_words(config)
     except Exception:  # noqa: BLE001 - fail-open: placeholders render literally rather than crash
         lexicon = {}
-    return render_creature_system_prompt(lexicon, _granted_unit_ids(config),
-                                         workspace=str(config.workspace))
+    return render_creature_system_prompt(
+        lexicon, _granted_unit_ids(config), workspace=str(config.workspace),
+        energy_feeling=getattr(config, "nervous_metabolism_enabled", True))
 
 
 # ---------------------------------------------------------------------------
