@@ -422,14 +422,14 @@ def _build_tick_prompt(config, tick_number, goal_start_time, loop_detected,
             repeat_count=repeat_count,
             urgency_note=urgency_note,
             subtask_line=subtask_line,
-        )
+        ) + _stage_tone_cue(config)
     return boss_prefix + TICK_PROMPT.format(
         tick_number=tick_number,
         max_ticks=max_ticks if max_ticks else "?",
         timestamp=now, elapsed=elapsed,
         urgency_note=urgency_note,
         subtask_line=subtask_line,
-    )
+    ) + _stage_tone_cue(config)
 
 
 def _enforce_ceiling(config, messages, tick_number, n_situation: int = 0):
@@ -572,6 +572,11 @@ def _objective_focus_block(config: Config) -> str:
     """High-salience focus: the ACTIVE objective + its WHY (so the mechanic never eclipses the goal)
     + the plan's next concrete step + a frustration gauge that names the automatic park. Falls back to
     the legacy single-focus line when the backlog is empty."""
+    # A hatchling has no projects — hide the whole project frame so its world reads as play, not a
+    # work-status dashboard (which the model narrates in project/architect register). Sustained goals
+    # arrive at juvenile. objective_done/block/list stay live so inherited state is never stranded.
+    if not _undertakings_visible(config):
+        return ""
     try:
         import objectives
         o = objectives.get_active(config)
@@ -809,6 +814,53 @@ def _creature_identity_block(config: Config) -> str:
         lines.append(f"Your thoughts sound about like this right now (the TONE — your own words, not "
                      f"these): {ex}")
     return "\n".join(lines)
+
+
+def _current_stage(config: Config) -> str:
+    """The creature's live life-stage (shared derivation — persona level + creature.json). Fail-open
+    to 'hatchling' so a read glitch never mis-promotes a newborn into grown-up privileges."""
+    try:
+        import creature_gen
+        return creature_gen.current_stage(config)
+    except Exception:  # noqa: BLE001
+        return "hatchling"
+
+
+# Undertakings (self-set projects) are for a creature old enough to SUSTAIN a commitment. A hatchling
+# has no projects — it orients and plays; its ventral-striatum goal-tension should have nothing to grip
+# (which also keeps the goal-tension arousal floor from delaying its first sleep). So the project frame
+# is hidden and objective_add is a gentle play-reframe until juvenile — sustained goals become EARNED.
+_NO_UNDERTAKINGS_STAGES = ("egg", "hatchling")
+
+
+def _undertakings_visible(config: Config) -> bool:
+    """True unless the creature is too young for projects (creature-mode egg/hatchling). House/task
+    mode is unaffected."""
+    if not _unlocks_active(config):
+        return True
+    return _current_stage(config) not in _NO_UNDERTAKINGS_STAGES
+
+
+# A short register nudge for a YOUNG creature, planted at the VERY END of the tick prompt (highest
+# attention), where it competes directly with the recent history for the register the model imitates —
+# the 3 stage exemplars buried once in the low-attention head were losing to ~12 of the creature's own
+# recent essays. Empty for house mode and for adult/guardian (they've earned their own voice).
+_STAGE_TONE_CUE_STAGES = ("egg", "hatchling", "juvenile")
+
+
+def _stage_tone_cue(config: Config) -> str:
+    """One short line drawn from _STAGE_VOICE for the current young stage, or '' when it shouldn't fire."""
+    if not _unlocks_active(config):
+        return ""
+    stage = _current_stage(config)
+    if stage not in _STAGE_TONE_CUE_STAGES:
+        return ""
+    voice = _STAGE_VOICE.get(stage, [])
+    if not voice:
+        return ""
+    ex = "  ".join(f'"{v}"' for v in voice[:2])
+    return (f"\n\n(you're {stage}-small — a thought sounds about like {ex}: that plain, that short; "
+            f"the long, worked-out kind is something you grow into later.)")
 
 
 THOUGHT_ECHO_SIM = 0.6   # consecutive thoughts this token-similar collapse into one "circled N×" turn

@@ -2376,6 +2376,17 @@ def tool_objective_add(args: dict, config: Config) -> ToolResult:
     """Add a new open commitment to your backlog. Each objective MUST carry its 'why' (the purpose it
     serves) so you never lose the bigger picture while working the mechanics."""
     import objectives
+    # A hatchling is too young to carry a project — its job is to orient and play, not to commit to and
+    # grind an undertaking (that pressure would also keep it awake past its first sleep). Reframe to
+    # play as a gentle SUCCESS (not a failure that pumps frustration). Undertakings arrive at juvenile.
+    if getattr(config, "pillars_tool_unlocks_enabled", False):
+        import creature_gen
+        if creature_gen.current_stage(config) in ("egg", "hatchling"):
+            return ToolResult(
+                output=("You're still too new for projects — no need to set yourself tasks yet. Just "
+                        "poke around and see what's here; noticing and playing is the whole of it right "
+                        "now. Bigger undertakings are something you grow into."),
+                full_output_path=None, success=True, duration_s=0)
     title = (args.get("title") or args.get("objective") or "").strip()
     why = (args.get("why") or args.get("because") or args.get("purpose") or "").strip()
     if not title:

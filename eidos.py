@@ -552,6 +552,34 @@ def _extract_thought(response: str) -> str:
     return _THOUGHT_TAG_RE.sub("", response).strip()
 
 
+# A newborn should THINK like a newborn — a fragment, not a treatise. But the stored thought is what
+# the creature re-reads as its own recent voice (the history thread) and what thoughts.jsonl / the
+# dashboard show, so a young creature that writes a 70-word essay then marinates in a dozen of its own
+# essays next tick locks into an over-elaborate register (self-imitation). We clamp the STORED thought
+# by life-stage — the young remember a fragment; depth (length) is EARNED, so adult/guardian are never
+# clamped. This runs AFTER parse_tool_call has read the FULL response, so it NEVER truncates an action;
+# it only shortens the memory, which is what starves the self-imitation loop. (Register — word choice —
+# is shaped elsewhere: the stage tone-cue, the flatter base prompt, and the no-projects gate.)
+_STAGE_THOUGHT_MAX_SENTENCES = {"egg": 2, "hatchling": 2, "juvenile": 3}   # adult/guardian: unclamped
+_STAGE_THOUGHT_MAX_WORDS = {"egg": 22, "hatchling": 22, "juvenile": 55}
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?…])\s+')
+
+
+def _clamp_thought_for_stage(thought: str, stage: str) -> str:
+    """Trim a stored thought to a life-stage-appropriate length — whole sentences first (never a
+    mid-word cut), then a hard word backstop for a single run-on. Young stages only; a mature creature
+    keeps the full thought it has earned. Fail-open: unknown stage or empty text → returned unchanged."""
+    if not thought or stage not in _STAGE_THOUGHT_MAX_WORDS:
+        return thought
+    parts = _SENTENCE_SPLIT_RE.split(thought.strip())
+    clipped = " ".join(parts[:_STAGE_THOUGHT_MAX_SENTENCES[stage]]).strip()
+    words = clipped.split()
+    cap = _STAGE_THOUGHT_MAX_WORDS[stage]
+    if len(words) > cap:
+        clipped = " ".join(words[:cap]).rstrip(",;:—- ") + "…"
+    return clipped or thought
+
+
 # --- Phase 1.1: per-tick hooks for the 2 drive organs migrated onto the organ registry
 #     (goal-tension, curiosity). Each is a pure f(ctx) closure over the tick's locals, which the loop
 #     packs into `ctx` (a SimpleNamespace) and hands to `organ_registry.run_post_tick(ctx)`. The
@@ -2423,6 +2451,11 @@ def run_loop(config: Config, persona=None, wal=None):
             log_degeneration(config, tick_number, response,
                              reason="junk_run" if has_junk_run(response) else "loop")
         if thought:
+            # Clamp the STORED thought to the creature's life-stage (a newborn remembers a fragment,
+            # not an essay) — post-parse, so the action already read the FULL response and is untouched.
+            # This starves the self-imitation loop that makes a hatchling drift into architect-essays.
+            if getattr(self.config, "pillars_tool_unlocks_enabled", False):
+                thought = _clamp_thought_for_stage(thought, self._stage_seen)
             append_thought(config, tick_number, thought)
 
         # --- Parse tool call ---

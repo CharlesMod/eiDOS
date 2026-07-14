@@ -103,6 +103,30 @@ def stage_for(level: int, hatched: bool) -> str:
     return "guardian"
 
 
+def current_stage(config) -> str:
+    """The creature's LIVE life-stage, derived the one true way (persona level + creature.json's
+    hatched flag over stage_for), preferring the body's rendered `last_stage` when present so this
+    agrees with the "## You" block, the nap curve, and the dashboard. Read-only; introduces no new
+    stage system. Fail-open to 'hatchling' — a read glitch must never mis-promote a newborn into the
+    privileges (projects, long thoughts, depth) that are supposed to be EARNED by growing up."""
+    try:
+        import persona as _persona
+        level = int((_persona.load_persona(config.workspace) or {}).get("level", 1) or 1)
+    except Exception:  # noqa: BLE001
+        return "hatchling"
+    hatched = level > 1
+    try:
+        import json as _json
+        cj = _json.loads((config.workspace / "creature.json").read_text(encoding="utf-8"))
+        st = cj.get("last_stage")
+        if st in STAGES:
+            return st
+        hatched = bool(cj.get("hatched", hatched))
+    except Exception:  # noqa: BLE001 - no creature.json yet: infer hatched from level
+        pass
+    return stage_for(level, hatched)
+
+
 # --- Part libraries -------------------------------------------------------
 
 EYE_FAMILIES = {
