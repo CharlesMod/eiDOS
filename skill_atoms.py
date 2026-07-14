@@ -256,7 +256,15 @@ def build_atoms(config) -> dict:
             return default
 
     def sh(cmd, timeout=20):
-        return _out(tools.tool_bash({"cmd": cmd, "wait": True, "timeout": timeout}, config))
+        # Accept the dict-style the creature naturally writes — sh({"cmd": "..."}), mirroring the bash
+        # TOOL it learned — as well as a bare string, and coerce to str. Do NOT forward `timeout` to
+        # tool_bash: BashArgs is extra="forbid", so the old {"cmd":.., "timeout":..} made EVERY sh-using
+        # skill fail with "timeout: Extra inputs are not permitted" (a fatal, un-fixable-by-the-creature
+        # contract bug — the reported "my skills are hard to control"). bash self-bounds via
+        # cmd_timeout_s + the async ceiling; the param is kept for back-compat but is advisory.
+        if isinstance(cmd, dict):
+            cmd = cmd.get("cmd") or cmd.get("command") or ""
+        return _out(tools.tool_bash({"cmd": str(cmd), "wait": True}, config))
 
     def read(path):
         return _out(tools.tool_read_file({"path": path}, config))
@@ -404,7 +412,7 @@ def atoms_reference(config=None) -> str:
         "- http_get(url, headers=None, timeout=15) -> {ok,status,text,json}\n"
         "- http_post(url, json=None, data=None, headers=None, timeout=15) -> {ok,status,text,json}\n"
         "- json_parse(text, default=None) -> obj\n"
-        "- sh(cmd, timeout=20) -> str        # run a shell command, wait for output\n"
+        "- sh(cmd) -> str                    # run a shell command string, wait for its output\n"
         "- read(path) -> str  /  write(path, content) -> str\n"
         "- recall(query, k=5) -> str  /  memorize(fact, tags=None) -> str  /  note(text) -> str\n"
         "- look(image, question) -> str      # vision\n"

@@ -46,6 +46,27 @@ class TestSkillAtoms(unittest.TestCase):
         for name in ("http_get", "sh", "recall", "json_parse"):
             self.assertIn(name, RESERVED_NAMES)   # a skill can't shadow an atom
 
+    def test_sh_atom_does_not_pass_the_forbidden_timeout(self):
+        # 2026-07-14 "my skills are hard to control": the sh atom forwarded a `timeout` key to
+        # tool_bash, but BashArgs is extra="forbid", so EVERY sh-using skill failed with
+        # "timeout: Extra inputs are not permitted" — un-fixable by the creature. sh must run clean.
+        atoms = build_atoms(self.config)
+        out = atoms["sh"]("echo controlworks")
+        self.assertIn("controlworks", out)
+        self.assertNotIn("not permitted", out)
+        self.assertNotIn("Extra inputs", out)
+        # back-compat: an old skill that still passes timeout must not error
+        self.assertIn("controlworks", atoms["sh"]("echo controlworks", timeout=5))
+
+    def test_sh_atom_accepts_the_dict_style_the_creature_writes(self):
+        # the creature learned the bash TOOL (bash {"cmd":...}) and naturally writes sh({"cmd":...});
+        # the atom must meet it there instead of choking with "cmd: Input should be a valid string".
+        atoms = build_atoms(self.config)
+        out = atoms["sh"]({"cmd": "echo dictworks"})
+        self.assertIn("dictworks", out)
+        self.assertNotIn("valid string", out)
+        self.assertIn("cmdaliasworks", atoms["sh"]({"command": "echo cmdaliasworks"}))
+
     # --- M2.1: a skill that COMPOSES atoms validates + activates (no imports) ---
     def test_skill_using_atoms_activates(self):
         code = "def tool_demoatom(args, config):\n" \
