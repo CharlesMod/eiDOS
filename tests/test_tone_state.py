@@ -55,6 +55,29 @@ class TestThoughtClamp(unittest.TestCase):
         self.assertTrue(ESSAY.startswith(base.rstrip("…").strip()[:len(base) - 5]))
 
 
+class TestLeadingEllipsisStrip(unittest.TestCase):
+    """The 'stream of consciousness / mid-thought' framing made the model open ~every thought with a
+    leading ellipsis (its 'I'm continuing' marker). _extract_thought strips it; a thought begins where
+    it begins. Mid-sentence ellipses are meaningful and must survive."""
+
+    def test_leading_ellipsis_forms_are_stripped(self):
+        for raw, want in [("...muffled.", "muffled."), ("…quiet.", "quiet."),
+                          ("..still", "still"), ("   ...  quiet.", "quiet."),
+                          ("...the map is bigger", "the map is bigger")]:
+            self.assertEqual(eidos._extract_thought(raw), want)
+
+    def test_mid_sentence_ellipsis_survives(self):
+        self.assertEqual(eidos._extract_thought("wait... what next"), "wait... what next")
+
+    def test_no_ellipsis_is_untouched(self):
+        self.assertEqual(eidos._extract_thought("i like the words i'm choosing"),
+                         "i like the words i'm choosing")
+
+    def test_strip_composes_with_tag_removal(self):
+        self.assertEqual(
+            eidos._extract_thought("...quiet.<tool>bash</tool><args>{}</args>"), "quiet.")
+
+
 class TestCurrentStageFailOpen(unittest.TestCase):
     def test_missing_workspace_fails_open_to_a_young_stage(self):
         # a read glitch must degrade to a NON-privileged stage (egg/hatchling — both no-projects,

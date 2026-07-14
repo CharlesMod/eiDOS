@@ -545,11 +545,19 @@ _THOUGHT_TAG_RE = re.compile(r"<tool>.*?</tool>|<args>.*?</args>|<reply>.*?</rep
                              re.DOTALL | re.IGNORECASE)
 
 
+_LEADING_ELLIPSIS_RE = re.compile(r"^\s*(?:\.{2,}|…)\s*")
+
+
 def _extract_thought(response: str) -> str:
     """This tick's reasoning — the model's raw output minus the action/reply tags."""
     if not response:
         return ""
-    return _THOUGHT_TAG_RE.sub("", response).strip()
+    thought = _THOUGHT_TAG_RE.sub("", response).strip()
+    # The 'continuous stream / mid-thought' framing makes the model open nearly EVERY thought with a
+    # leading ellipsis (its "I'm continuing the stream" marker) — 100% of thoughts, incl. the very
+    # first. A thought is a thought, not a perpetual mid-sentence; strip the artifact. (The tick-prompt
+    # framing that induces it is also softened, so this is a backstop, not the only fix.)
+    return _LEADING_ELLIPSIS_RE.sub("", thought)
 
 
 # A newborn should THINK like a newborn — a fragment, not a treatise. But the stored thought is what

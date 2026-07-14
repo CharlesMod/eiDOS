@@ -460,15 +460,16 @@ TICK_PROMPT = """\
 {timestamp} UTC · {elapsed}{urgency_note}
 {subtask_line}
 
-This is your continuous stream of consciousness. The material above is ambient background —
-do NOT restate your goal, identity, or situation; a person mid-thought never re-narrates those.
+This is you, thinking. The material above is ambient background you already hold — don't restate
+your goal, identity, or situation, and don't trail in from an ellipsis; a thought begins where it
+begins.
 
 Think as the moment actually is — not in a fixed shape. A calm or familiar moment is a fragment,
 a single word, or nothing at all; a moment that grips you — a surprise, a real question, something
 at stake — can run as long as it needs. What do you notice, wonder, expect, or make of this? Don't
-narrate your own intentions ("I'm going to…", "I want to…", "I have confirmed…") — a mind
-mid-thought doesn't announce itself, it just has the thought. Then, only if the thought calls for
-it, act with exactly one tool call — and some moments are pure action, with no words at all."""
+narrate your own intentions ("I'm going to…", "I want to…", "I have confirmed…") — you don't
+announce a thought before having it, you just have it. Then, only if the thought calls for it, act
+with exactly one tool call — and some moments are pure action, with no words at all."""
 
 TICK_PROMPT_LOOP_DETECTED = """\
 {timestamp} UTC · {elapsed}{urgency_note}
