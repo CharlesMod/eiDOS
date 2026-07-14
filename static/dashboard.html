@@ -567,6 +567,7 @@ body::after {
 #thought-bubble {
     --bub: #1a3a1a;
     position: relative;
+    top: 20px;                       /* nudged down toward the creature (tail moves with it) */
     background: #0d120d;
     border: 1px solid var(--bub);
     border-radius: 12px;
@@ -586,12 +587,12 @@ body::after {
 #thought-bubble.kind-thought { border-radius: 18px; }
 #thought-bubble.kind-thought #thought-text { font-style: italic; }
 #thought-bubble.kind-thought::after {         /* cloud tail: two shrinking puffs */
-    content: ''; position: absolute; bottom: -8px; left: 47%;
+    content: ''; position: absolute; bottom: -8px; left: 70%;
     width: 10px; height: 10px; border-radius: 50%;
     background: #0d120d; border: 1px solid var(--bub);
 }
 #thought-bubble.kind-thought::before {
-    content: ''; position: absolute; bottom: -15px; left: 44%;
+    content: ''; position: absolute; bottom: -15px; left: 67%;
     width: 5px; height: 5px; border-radius: 50%;
     background: #0d120d; border: 1px solid var(--bub);
 }
@@ -637,6 +638,10 @@ body::after {
 @keyframes tb-pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 .tb-spin { animation: tb-spin 1.1s linear infinite; }
 .tb-pulse { animation: tb-pulse 1.3s ease-in-out infinite; }
+
+/* Everything below the dialog bubble lifts up 10px (matching the bubble's 10px nudge down), opening
+   void space between the panel's bottom border and the closest content. */
+#creature-art, #tool-bubble, .creature-info { position: relative; top: -10px; }
 
 /* Blue tool-call bubble — below the creature, updates independently of thoughts */
 #tool-bubble {
