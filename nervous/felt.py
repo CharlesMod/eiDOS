@@ -28,8 +28,19 @@ _PHRASE = {
     "gpu_temp": {"elevated": "warming", "high": "running hot", "critical": "overheating"},
     # Metabolism (M0): hunger = a depleting energy reserve. NOT baseline — a hungry body genuinely
     # feels worse, which is the whole point (it rides wellbeing→reward so the creature seeks to feed).
-    "energy": {"elevated": "peckish", "high": "hungry", "critical": "starving"},
+    # Plainspoken battery words, not literary suffering: "running low", never "starving" (the felt line
+    # is read every tick and the model elaborates whatever tone we hand it — see DRIVE_SYSTEMS).
+    "energy": {"elevated": "peckish", "high": "hungry", "critical": "running low"},
 }
+
+# DRIVE systems press the creature to ACT (hunger → seek power) but are not body-DAMAGE alarms the way
+# a thermal/OOM critical is. So a drive contributes its felt phrase and raises arousal, but its pull is
+# capped at "strained" for the OVERALL body-feeling — a low battery reads as run-down, never the top-tier
+# "in distress" (which stays reserved for real emergencies). This is also why a starving body no longer
+# zeroes wellbeing→reward (it lands at "strained"=0.33, not "in distress"=0.0): being low on charge is a
+# reason to feed, not a punishment that teaches gloom.
+DRIVE_SYSTEMS = ("energy",)
+DRIVE_OVERALL_CAP = 2       # _FEELING index: "strained" (a drive never reads as full-body "in distress")
 
 # Baseline systems are felt as calm POSTURE, never stress. The mind is resident on the GPU and fills
 # VRAM by design (~98% at rest) — the creature notices its own brain at home there, without alarm.
@@ -53,6 +64,16 @@ def stress_bars(bars):
     return {k: v for k, v in bars.items() if v is not None and k not in BASELINE_SYSTEMS}
 
 
+def _overall_idx(system, level):
+    """The severity a system contributes to the OVERALL body-feeling. A DRIVE (hunger) is capped at
+    DRIVE_OVERALL_CAP — it presses but never reads as full-body 'in distress'; that tier stays for real
+    emergencies (thermal, OOM). The per-system felt phrase is unaffected (it still shows 'running low')."""
+    idx = _LEVEL_IDX.get(level, 0)
+    if system in DRIVE_SYSTEMS:
+        idx = min(idx, DRIVE_OVERALL_CAP)
+    return idx
+
+
 def system_phrase(system, level):
     """The felt phrase for ONE system at ONE level — the per-sense sub-function the monitor surfaces in
     the 'behind the curtain' transduction stack. Baseline systems (VRAM = the resident mind) use the calm
@@ -70,7 +91,7 @@ def to_felt(bars):
     Baseline systems (BASELINE_SYSTEMS — expected-high by design, e.g. the mind resident in VRAM) are
     felt as calm posture: they contribute a felt phrase but NEVER raise the overall body-feeling."""
     present = {k: v for k, v in bars.items() if v is not None}
-    worst = max((_LEVEL_IDX.get(v, 0) for v in stress_bars(present).values()), default=0)
+    worst = max((_overall_idx(k, v) for k, v in stress_bars(present).items()), default=0)
     felt = []
     for k, v in present.items():
         if v == "ok":

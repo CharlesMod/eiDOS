@@ -1810,7 +1810,10 @@ def run_loop(config: Config, persona=None, wal=None):
         try:
             from nervous.metabolism import Metabolism
             nervous_metabolism = Metabolism(bus=nervous_bus, config=config,
-                                            archetype=getattr(config, "nervous_metabolism_archetype", "plant"))
+                                            archetype=getattr(config, "nervous_metabolism_archetype", "plant"),
+                                            basal=getattr(config, "nervous_metabolism_basal_drain", 0.0006),
+                                            cognition=getattr(config, "nervous_metabolism_cognition_drain", 0.002),
+                                            action=getattr(config, "nervous_metabolism_action_drain", 0.001))
             print(f"{pfx} metabolism started — energy {nervous_metabolism.energy:.2f}; "
                   f"archetype={nervous_metabolism.archetype}; it can tire and hunger")
         except Exception as _e:  # noqa: BLE001

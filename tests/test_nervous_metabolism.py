@@ -135,8 +135,13 @@ class TestHungerIsFelt(unittest.TestCase):
     def test_hunger_worsens_the_body_feeling(self):
         self.assertEqual(to_felt({"energy": "ok"})["overall"], "at ease")
         self.assertEqual(to_felt({"energy": "elevated"})["overall"], "a little tense")
-        self.assertEqual(to_felt({"energy": "critical"})["overall"], "in distress")
-        self.assertIn("starving", to_felt({"energy": "critical"})["felt"])
+        # Hunger is a DRIVE, not a body-damage alarm: it presses but its overall pull is capped at
+        # "strained" — a low battery reads as run-down, never the top-tier "in distress" (reserved for
+        # real emergencies like thermal/OOM). The felt phrase is plainspoken ("running low").
+        self.assertEqual(to_felt({"energy": "critical"})["overall"], "strained")
+        self.assertIn("running low", to_felt({"energy": "critical"})["felt"])
+        # a genuine emergency (thermal) still reaches the top tier — the cap is drive-specific
+        self.assertEqual(to_felt({"gpu_temp": "critical"})["overall"], "in distress")
 
     def test_high_vram_plus_hunger_feels_only_the_hunger(self):
         # The resident mind (VRAM critical) is calm posture; the hunger is what the creature feels.
@@ -157,7 +162,7 @@ class TestHungerIsFelt(unittest.TestCase):
         self.assertIsNotNone(ev)
         proj = json.loads(bus.payloads.get(ev.payload_ref).decode("utf-8"))
         self.assertEqual(proj["bars"].get("energy"), "critical")
-        self.assertEqual(proj["overall"], "in distress")     # a starving body is in distress
+        self.assertEqual(proj["overall"], "strained")        # hunger is a drive, capped below "in distress"
 
 
 if __name__ == "__main__":

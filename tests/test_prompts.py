@@ -55,7 +55,7 @@ from prompts import (
 # The legacy constants are the FLAG-OFF surface: byte-identical rendering is doctrine, so their
 # bytes are pinned. Changing either is a conscious act: update the hash in the same commit that
 # proves flag-off behavior was meant to change.
-_LEGACY_CREATURE_SHA256 = "5de18ad8e7e4321c5351a5455002f594c1eb2c93ce43ecfc7dddd19ed95e3d49"
+_LEGACY_CREATURE_SHA256 = "94da241b3784e5254ac16e0e975b69d71410057201c8e85c7a1a5c41c4f413a1"
 _LEGACY_LOOP_SHA256 = "39d237e1bf0ca5befef58a031fc39e1d0575c6455362e0bb4d532e227b96dd01"
 
 # Every tool of every unit, mapped to its owning unit (unlocks is the single source of truth).

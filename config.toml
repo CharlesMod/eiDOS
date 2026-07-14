@@ -214,8 +214,14 @@ temperament_enabled = true    # DMN: slow initiative/persistence/caution drift �
 # placeholder; the real power source is the Renogy Rover 20A BLE (SOC + PV watts) — set
 # metabolism_solar_enabled = false once that reader is wired.
 metabolism_archetype = "plant"
+# Per-tick energy drains — sized so a full day's charge coasts most of the ~10h solar-dark night rather
+# than flooring at empty a few hours after sunset (the old 0.001/0.004/0.002 kept the creature pinned
+# "running low" ~1/3 of its life, which the model narrated as relentless somatic gloom).
+metabolism_basal_drain = 0.0006      # just being alive, per tick
+metabolism_cognition_drain = 0.002   # one LLM "thought" — the dearest metabolic event
+metabolism_action_drain = 0.001      # a world-touching tool action
 metabolism_solar_enabled = true    # FALLBACK only — used when the real power feed below is stale/absent
-metabolism_solar_peak = 0.03       # per-tick charge at solar noon
+metabolism_solar_peak = 0.05       # per-tick charge at solar noon
 metabolism_solar_sunrise_h = 6.0
 metabolism_solar_sunset_h = 20.0
 

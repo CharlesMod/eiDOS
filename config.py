@@ -345,8 +345,13 @@ class Config:
     # stationary solar-powered desktop → plant. Real power source = the Renogy Rover BLE (SOC + PV
     # watts); until that reader exists, a plant uses the solar_charge_in() daylight placeholder.
     nervous_metabolism_archetype: str = "plant"
+    # Per-tick energy drains (tunable; see nervous/metabolism.py for the sizing rationale — a full day's
+    # charge must coast most of the solar-dark night, else the creature lives pinned "running low").
+    nervous_metabolism_basal_drain: float = 0.0006       # just being alive, per tick
+    nervous_metabolism_cognition_drain: float = 0.002    # one LLM "thought" — the dearest metabolic event
+    nervous_metabolism_action_drain: float = 0.001       # a world-touching tool action
     nervous_metabolism_solar_enabled: bool = True    # interim solar daylight curve (plant); off once Renogy is wired
-    nervous_metabolism_solar_peak: float = 0.03      # per-tick charge at solar noon
+    nervous_metabolism_solar_peak: float = 0.05      # per-tick charge at solar noon
     nervous_metabolism_solar_sunrise_h: float = 6.0  # local-hour daylight window (placeholder; PV reading replaces it)
     nervous_metabolism_solar_sunset_h: float = 20.0
     # M4 real power — the Renogy MPPT over BLE (the real food source; replaces the solar placeholder).
@@ -742,6 +747,9 @@ def load_config(path: str = "config.toml") -> Config:
         config.nervous_metabolism_enabled = nervous.get("metabolism_enabled", config.nervous_metabolism_enabled)
         config.nervous_metabolism_rest_arousal = float(nervous.get("metabolism_rest_arousal", config.nervous_metabolism_rest_arousal))
         config.nervous_metabolism_archetype = str(nervous.get("metabolism_archetype", config.nervous_metabolism_archetype))
+        config.nervous_metabolism_basal_drain = float(nervous.get("metabolism_basal_drain", config.nervous_metabolism_basal_drain))
+        config.nervous_metabolism_cognition_drain = float(nervous.get("metabolism_cognition_drain", config.nervous_metabolism_cognition_drain))
+        config.nervous_metabolism_action_drain = float(nervous.get("metabolism_action_drain", config.nervous_metabolism_action_drain))
         config.nervous_metabolism_solar_enabled = nervous.get("metabolism_solar_enabled", config.nervous_metabolism_solar_enabled)
         config.nervous_metabolism_solar_peak = float(nervous.get("metabolism_solar_peak", config.nervous_metabolism_solar_peak))
         config.nervous_metabolism_solar_sunrise_h = float(nervous.get("metabolism_solar_sunrise_h", config.nervous_metabolism_solar_sunrise_h))

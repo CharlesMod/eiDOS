@@ -34,14 +34,18 @@ import time
 from .event import NervousEvent, Kind, Modality, Delivery, SCHEMA_VERSION
 
 # Per-tick energy costs / recovery (defaults; all overridable via config). Thinking is the dearest act.
-BASAL_DRAIN = 0.001       # just being alive, per tick
-COGNITION_DRAIN = 0.004   # one LLM "thought" — the dearest metabolic event
-ACTION_DRAIN = 0.002      # a world-touching tool action
+# Sized so a full daytime charge COASTS most of the way through the ~10h solar-dark night rather than
+# flooring at empty ~3h after sunset (the old 0.001/0.004/0.002 left the creature pinned "running low"
+# ~a third of its life, which read as relentless somatic gloom). At ~1 tick/min a night is ~570 ticks;
+# the reserve (cap 1.0) must stretch across most of that, so the per-tick drain has to stay small.
+BASAL_DRAIN = 0.0006      # just being alive, per tick
+COGNITION_DRAIN = 0.002   # one LLM "thought" — the dearest metabolic event
+ACTION_DRAIN = 0.001      # a world-touching tool action
 REST_RECOVERY = 0.02      # an ANIMAL resting/docked recharges; a PLANT does not (it uses charge_in)
 
 # Solar placeholder (until the Renogy BLE reader lands). A daylight triangle: zero before sunrise /
 # after sunset, peaking at solar noon. Per-tick charge rate, so it composes with the per-tick drains.
-SOLAR_PEAK = 0.03         # per-tick charge at solar noon (must out-pace daytime drain to net-charge)
+SOLAR_PEAK = 0.05         # per-tick charge at solar noon (must out-pace daytime drain to net-charge)
 SOLAR_SUNRISE_H = 6.0
 SOLAR_SUNSET_H = 20.0
 
