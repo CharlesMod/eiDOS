@@ -980,22 +980,24 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                 jobname = (str(parsed.name or "").strip() or f"j{proc.pid}")
                 intent = str(parsed.intent or "").strip()
                 try:
-                    jobs = _read_jobs(config)
-                    jobs.append({
-                        "name": jobname,
-                        "pid": proc.pid,
-                        "cmd": cmd,
-                        "intent": intent,
-                        "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        "started_ts": time.time(),
-                        "status": "running",
-                        "kind": "async",
-                        "output_path": str(out_path),
-                        "exit_path": exit_path,
-                        "notified": False,
-                        "waited": True,
-                    })
+                    # read-modify-write under ONE lock: a _job_waiter completing a prior
+                    # job must not slip a status flip between our read and our write.
                     with _jobs_lock:
+                        jobs = _read_jobs(config)
+                        jobs.append({
+                            "name": jobname,
+                            "pid": proc.pid,
+                            "cmd": cmd,
+                            "intent": intent,
+                            "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "started_ts": time.time(),
+                            "status": "running",
+                            "kind": "async",
+                            "output_path": str(out_path),
+                            "exit_path": exit_path,
+                            "notified": False,
+                            "waited": True,
+                        })
                         _write_jobs(config, jobs)
                     threading.Thread(target=_job_waiter, args=(config, proc, jobname, exit_path),
                                      daemon=True, name=f"job-waiter-{jobname}").start()
@@ -1019,21 +1021,22 @@ def tool_bash(args: dict, config: Config) -> ToolResult:
                 # rather than block: the process keeps running and writing to out_path.
                 jobname = f"auto_{proc.pid}"
                 try:
-                    jobs = _read_jobs(config)
-                    jobs.append({
-                        "name": jobname,
-                        "pid": proc.pid,
-                        "cmd": cmd,
-                        "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        "started_ts": time.time(),
-                        "status": "running",
-                        "kind": "auto",
-                        "output_path": str(out_path),
-                        "exit_path": exit_path,
-                        "notified": False,
-                        "waited": True,
-                    })
+                    # read-modify-write under ONE lock (see the async-dispatch path above).
                     with _jobs_lock:
+                        jobs = _read_jobs(config)
+                        jobs.append({
+                            "name": jobname,
+                            "pid": proc.pid,
+                            "cmd": cmd,
+                            "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "started_ts": time.time(),
+                            "status": "running",
+                            "kind": "auto",
+                            "output_path": str(out_path),
+                            "exit_path": exit_path,
+                            "notified": False,
+                            "waited": True,
+                        })
                         _write_jobs(config, jobs)
                     threading.Thread(target=_job_waiter, args=(config, proc, jobname, exit_path),
                                      daemon=True, name=f"job-waiter-{jobname}").start()
@@ -2996,7 +2999,11 @@ def execute_tool(call: ToolCall, config: Config) -> ToolResult:
             fail_kind="no_such_tool",
         )
     try:
-        if call.tool in _BUILTIN_TOOL_NAMES:
+        # Classify against _EVER_BUILTIN_NAMES (incl. flag-registered platform tools like predict/
+        # commission_*/weigh_options), NOT the import-time snapshot — those register after import and
+        # are platform tools, never self-authored skills, so they get builtin arg-validation and skip
+        # the skill watchdog just like the statically-registered builtins.
+        if call.tool in _EVER_BUILTIN_NAMES:
             validated_call = _validate_builtin_tool_call(call)
             if isinstance(validated_call, ToolResult):
                 return validated_call
@@ -3004,7 +3011,7 @@ def execute_tool(call: ToolCall, config: Config) -> ToolResult:
         # Self-authored skills are time-bounded: they run in the tick with no internal cap, so a hung
         # one would freeze the loop. Built-in tools are already bounded (bash auto-backgrounds, the net
         # primitives self-time-out) — run them directly.
-        if call.tool not in _BUILTIN_TOOL_NAMES:
+        if call.tool not in _EVER_BUILTIN_NAMES:
             if getattr(config, "pillars_killable_skills_enabled", False):
                 # Pillars 1.2 (flag ON): the skill's own runner executes it in a fresh, HARD-KILLABLE
                 # subprocess bounded by its derived (p95×3-clamped) timeout, so a hang dies with the
