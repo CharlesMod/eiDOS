@@ -230,8 +230,10 @@ def append_chat_line(config: Config, text: str, *, spoken: bool = False, tick=No
                 last["spoken"] = bool(spoken or last.get("spoken"))
                 last = validate_chat_reply_record(last)
                 lines[-1] = json.dumps(last)
-                try:
-                    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                try:  # atomic rewrite: a crash mid-write must not truncate chat history
+                    tmp = path.with_suffix(path.suffix + ".tmp")
+                    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                    replace_with_retry(tmp, path)
                 except OSError:
                     pass
                 return
