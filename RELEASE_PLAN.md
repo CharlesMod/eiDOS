@@ -14,13 +14,13 @@ Judged against the pillar: **autonomy — persist toward a goal without derailin
 - [x] **H1** exposure-cap weak-progress immortality → strong-progress stall clock `objectives.py` (HIGH)
 - [x] **H2** exposure-cap `objective_block` bypass → death check at the `_thaw` choke point `objectives.py` (HIGH)
 - [x] reward "varying-output freebie" → `normalize_result` before the novelty hash `reward.py`/`eidos.py` (MED)
-- [ ] loop-detector arg-vary-defeatable + toothless → normalize all tool sigs; give `loop_detected` a structural consequence `eidos.py:2596` (LOW)
-- [ ] backlog-exhaustion soft-stall → mint a bounded exploratory objective on full-park `objectives.py:517` (LOW)
-- [ ] level_gates stale DARK docstring → correct it `level_gates.py:23` (LOW)
-- [ ] **SOTA#1** wire the built-but-dark learning-progress signal into curiosity + enable LP-XP `learning_progress.py`/`nervous/curiosity.py` (feature)
-- [ ] **SOTA#3** ReasoningBank-style strategy memory (distill each quest, success+failure → retrievable guardrail) (feature)
-- [ ] **SOTA#5** durable externalized per-objective PLAN artifact injected every tick (feature)
-- [ ] **SOTA#7** AgentDebug-style error-attribution post-mortem on park/loop → strategy memory (feature)
+- [x] loop-detector arg-vary-defeatable → normalize non-bash tool sigs (arg-varied loops now caught) `eidos.py` (LOW)
+- [x] level_gates stale DARK docstring → corrected `level_gates.py` (LOW)
+- [ ] backlog-exhaustion soft-stall → mint a bounded exploratory objective on full-park (behavior-changing; **FEATURE**) `objectives.py:517` (LOW)
+- [ ] **SOTA#1** per-domain learning-progress → curiosity cutover (critical anti-farming already handled live; **FEATURE**, Pillar 6) (feature)
+- [ ] **SOTA#3** ReasoningBank-style strategy memory (distill each quest → retrievable guardrail) — **FEATURE EPIC** (feature)
+- [ ] **SOTA#5** durable externalized per-objective PLAN artifact injected every tick — **FEATURE EPIC** (feature)
+- [ ] **SOTA#7** AgentDebug-style error-attribution post-mortem on park/loop → strategy memory — **FEATURE EPIC** (feature)
 
 ## Pillar 2 — Context & recall efficacy
 - [x] BM25 cache invalidates on content change, not just length `knowledge.py` (LOW)
@@ -55,30 +55,31 @@ Judged against the pillar: **autonomy — persist toward a goal without derailin
 
 ## Pillar 6 — Reward & motivation integrity
 - [x] reward freebie (Pillar 1) + PROTECT_PATHS fences `reward.py` (done)
-- [ ] restlessness_signal + its genome gene dark → do the 4.2 cutover into curiosity (pairs with SOTA#1) `learning_progress.py:237` (MED)
-- [ ] 3 GENOME_V3 genes (`operator_pull`/`levity`/`press_scale`) read by nobody → wire at their intended press sites `genome.py:138` (MED)
+- [x] express `levity`→curiosity floor + `press_scale`→goal-tension floor (bounded, fail-open) `eidos.py` — 2 of 3 dead genes now reach behavior (MED)
+- [~] `operator_pull` (affiliation) — **DEFERRED**: no clean behavioral site yet; needs a creature-design decision on where operator-bond should express (not a mechanical wire) (MED)
+- [~] restlessness per-domain cutover — **DEFERRED**: the live curiosity path already uses re-encounter-gated learning progress (not raw surprise), so the critical noisy-TV pitfall is already avoided; per-domain frontier-following + genome-shaped restlessness is a motivation-tuning increment best done with live observation (MED→LOW)
 
-## Pillar 7 — Correctness & concurrency
+## Pillar 7 — Correctness & concurrency ✅
 - [x] jobs.json read-modify-write under one lock `tools.py` (MED)
 - [x] flag-registered builtins classified correctly at dispatch `tools.py` (LOW)
 - [x] uniform WAL tick numbering on LLM-failure paths `eidos.py` (LOW)
 - [x] atomic chat-merge write `memory.py` (LOW)
-- [ ] first-boot seed disunity (dashboard mints its own seed) → eidos is sole seed authority `dashboard.py:394` (LOW)
+- [x] first-boot seed disunity → eidos sole seed authority, dashboard adopts-or-waits `dashboard.py:374` (LOW)
 
-## Pillar 8 — Portability & host-truth (model-swappable, Linux)
-- [ ] free-vram STOP is a Linux no-op naming Windows services → `systemctl` path or remove the false guarantee `dashboard.py:1844` (LOW)
-- [ ] SYSTEM_PROMPT_BRIEFING still says Windows/PowerShell/:8081 → Linux/bash reality or parameterize `prompts.py:5` (LOW)
-- [ ] ~200 lines of PowerShell/WSL lint-translate dead on POSIX → move behind a win32-only module `tools.py:749` (LOW)
-- [ ] committed config.toml aims the mind at the dead :8088 tap → canonical gemma@:8080 base `config.toml:16` (LOW)
-- [ ] embedding route unreachable via committed config; model/dim drift → one source of truth `embedding.py:217` (LOW)
-- [ ] deploy/ field-node units would run two eidos + wrong user/interpreter → one topology `deploy/eidos.service:10` (MED)
+## Pillar 8 — Portability & host-truth (model-swappable, Linux) ✅
+- [x] free-vram STOP Linux no-op → honest "separate llama-swap service" note (no dangerous auto-stop of the mind) `dashboard.py:1844` (LOW)
+- [x] SYSTEM_PROMPT_BRIEFING Windows/PowerShell/:8081 → Linux/bash reality + guard test `prompts.py:5` (LOW)
+- [~] ~200 lines of PowerShell/WSL lint — **KEEP**: it is guarded (`os.name != "nt"` early-returns) cross-platform Windows support; the README ships Windows/Pi, so removing it drops a supported OS. Not deadweight — intentional. `tools.py:749` (decision: keep)
+- [x] committed config.toml dead :8088 tap → canonical gemma@:8080 base `config.toml:16` (LOW)
+- [x] embedding route unreachable / model drift → committed `embedding_endpoint=:8082` + `embedding_model=nomic-embed` `config.toml` (LOW)
+- [x] deploy/ field-node split-brain → systemd `Conflicts=` both ways + documented canonical topology `deploy/*.service` (MED)
 
 ## Pillar 9 — Safety & self-modification
 - [x] PROTECT_PATHS: fence reward.py + settlement organs + prompts.py `git_safety.py` (MED)
-- [ ] **H5** dashboard control plane unauth on 0.0.0.0 → default-deny + auto-token + `/api/control/*` gated `dashboard.py:2518` (HIGH, operator-posture)
-- [ ] autorollback reverts ALL non-protected source → `restore_file_to` the applied file only `selfedit.py:322` (MED)
-- [ ] creature bash firewall is literal-regex ($HOME escapes) → resolve/expand before matching `tools.py:840` (MED)
-- [ ] crash-loop auto-rollback `time.sleep(3)` → event-driven wait `dashboard.py:2274` (LOW)
+- [x] autorollback reverts ALL non-protected source → `restore_file_to` the applied file only `selfedit.py` (MED)
+- [x] crash-loop auto-rollback `time.sleep(3)` → event-driven `_child_died.wait` `dashboard.py` (LOW)
+- [ ] **H5** dashboard control plane unauth on 0.0.0.0 → **OPERATOR DECISION** (lockout risk): default-deny+auto-token+`/api/control/*` gated `dashboard.py:2518` (HIGH)
+- [ ] creature bash firewall literal-regex ($HOME escapes) → resolve/expand before match, or OS-jail `tools.py:840` (MED — needs care)
 
 ## Pillar 10 — Measurement & test integrity
 - [ ] **SOTA#9** METR-style coherent-goal-pursuit horizon KPI (the missing yardstick) (feature)
