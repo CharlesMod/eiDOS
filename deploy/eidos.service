@@ -1,7 +1,13 @@
 [Unit]
-Description=eiDOS autonomous LLM agent
+Description=eiDOS autonomous LLM agent (standalone — headless node with NO dashboard)
 After=network.target llama-server.service
 Wants=llama-server.service
+# dashboard.py is a SUPERVISOR that spawns eidos as its CHILD (not a read-only viewer). Running this
+# standalone eidos.service AND dashboard.service together = two eidos on one workspace (split-brain,
+# corrupted WAL/state). Conflicts= makes systemd refuse to run both. The canonical topology is
+# dashboard-as-supervisor: enable dashboard.service ALONE (it spawns eidos). Use THIS unit only on a
+# headless node with no dashboard. (Also: set User=/WorkingDirectory/python to the real deploy user.)
+Conflicts=dashboard.service
 
 [Service]
 Type=simple

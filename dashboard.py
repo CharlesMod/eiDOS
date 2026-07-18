@@ -1842,10 +1842,19 @@ _GPU_SERVICES_START = (
 
 
 def _free_llama_vram():
-    """Stop all GPU-resident services to fully free VRAM. Returns a status string."""
+    """Stop all GPU-resident services to fully free VRAM. Returns a status string.
+
+    Windows (gaming/Pi era): stop the HouseAI-* services so an eidos stop frees the GPU.
+    Linux (canonical host): the mind runs as a SEPARATE always-on llama-swap service that
+    lazily unloads its model after idle — stopping eidos deliberately does NOT stop it (you may
+    restart eidos and want the mind resident). To fully free VRAM for an eval, the operator stops
+    llama-swap.service explicitly (RUNTIME_SPRINTER.md); we do NOT do it here (killing the mind on
+    every stop would be surprising and wrong). So: an honest note, not a false "VRAM freed" claim,
+    and no silent no-op that reads as if it acted."""
     import subprocess, os
     if os.name != "nt":
-        return ""
+        return " (mind runs as a separate llama-swap service — not stopped by an eidos stop; "\
+               "stop llama-swap.service manually to free its VRAM)"
     svc_list = ",".join(f"'{s}'" for s in _GPU_SERVICES_STOP)
     ps = (
         f"foreach ($s in @({svc_list})) "
