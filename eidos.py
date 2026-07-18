@@ -2406,14 +2406,17 @@ def run_loop(config: Config, persona=None, wal=None):
                 except LLMError as ce:
                     logger.error("Forced compaction failed: %s", ce)
 
+            # Increment BEFORE persisting so the WAL records the NEXT tick, matching the happy
+            # path (2975-2982). Otherwise a crash in this failure window resumes and re-runs this
+            # same tick number, replaying its pre-LLM organ effects.
+            tick_number += 1
+            ticks_since_compaction += 1
             write_wal(config, tick_number, ticks_since_compaction,
                       goal_start_time, consecutive_failures,
                       reasoning_exhaustions, current_max_tokens,
                       last_progress_tick)
             # Interruptible (ARCH #1): during a failure storm a Boss message still wakes the loop.
             _interruptible_sleep(config)
-            tick_number += 1
-            ticks_since_compaction += 1
             continue
 
         except LLMError as e:
@@ -2436,14 +2439,17 @@ def run_loop(config: Config, persona=None, wal=None):
                 print(f"{pfx} LLM unreachable after {consecutive_failures} consecutive failures "
                       f"— it is an external service; waiting for it to return")
 
+            # Increment BEFORE persisting so the WAL records the NEXT tick, matching the happy
+            # path (2975-2982). Otherwise a crash in this failure window resumes and re-runs this
+            # same tick number, replaying its pre-LLM organ effects.
+            tick_number += 1
+            ticks_since_compaction += 1
             write_wal(config, tick_number, ticks_since_compaction,
                       goal_start_time, consecutive_failures,
                       reasoning_exhaustions, current_max_tokens,
                       last_progress_tick)
             # Interruptible (ARCH #1): during a failure storm a Boss message still wakes the loop.
             _interruptible_sleep(config)
-            tick_number += 1
-            ticks_since_compaction += 1
             continue
 
         if config.mock_mode:
