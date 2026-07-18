@@ -1929,7 +1929,16 @@ def run_loop(config: Config, persona=None, wal=None):
             from nervous.sleep import SleepCycle
             nervous_learner = RewardLearner(bus=nervous_bus, neuromod=nervous_neuromod, config=config)
             nervous_worldmodel = WorldModel(config=config)            # predicts situation transitions (T2)
-            nervous_curiosity = CuriosityDrive(bus=nervous_bus, neuromod=nervous_neuromod)  # novelty → intrinsic reward
+            # levity (v3 playfulness gene) scales HOW HARD a predictable lull presses the body to move —
+            # the curiosity restless-arousal floor cap. Congenital, bounded (gene clamps [0.6,1.6]); the
+            # accessor is fail-open ×1.0, so an absent genome leaves behavior byte-identical.
+            try:
+                from genome import gene as _gene
+                _levity = float(_gene(config, "levity"))
+            except Exception:  # noqa: BLE001
+                _levity = 1.0
+            nervous_curiosity = CuriosityDrive(bus=nervous_bus, neuromod=nervous_neuromod,
+                                               restless_arousal_max=0.5 * _levity)  # novelty → intrinsic reward
             SleepCycle(nervous_bus, neuromod=nervous_neuromod, learner=nervous_learner,
                        sleep_arousal=getattr(config, "nervous_learning_sleep_arousal", 0.32),
                        min_consolidate_interval_s=getattr(config, "nervous_learning_consolidate_interval_s", 120.0)
@@ -1964,7 +1973,15 @@ def run_loop(config: Config, persona=None, wal=None):
     if nervous_bus is not None and getattr(config, "nervous_goaltension_enabled", True):
         try:
             from nervous.goaltension import GoalTensionDrive
-            nervous_goaltension = GoalTensionDrive(bus=nervous_bus, neuromod=nervous_neuromod)
+            # press_scale (v3 boldness gene) scales how hard an unfinished goal presses — the
+            # goal-tension arousal floor cap. Congenital, bounded (gene clamps [0.7,1.4]); fail-open ×1.0.
+            try:
+                from genome import gene as _gene
+                _press = float(_gene(config, "press_scale"))
+            except Exception:  # noqa: BLE001
+                _press = 1.0
+            nervous_goaltension = GoalTensionDrive(bus=nervous_bus, neuromod=nervous_neuromod,
+                                                   tension_arousal_max=0.4 * _press)
             print(f"{pfx} goal-tension drive started — an unfinished objective now keeps it awake")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} goal-tension start failed (continuing): {_e}")
