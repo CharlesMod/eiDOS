@@ -9,7 +9,7 @@ tick loop is inert until P1a (interoception) arrives.
 """
 import json
 
-from .event import Kind
+from .event import Kind, Modality
 
 
 class AfferentContext:
@@ -49,6 +49,19 @@ class AfferentContext:
             if ev.kind in self._PLUMBING_KINDS:
                 continue                                # acked, logged by the bus — not a sense
             events.append(ev)
+        # Backfill the felt body from the RETAINED snapshot when no fresh interoceptive event arrived
+        # this tick. Interoception free-runs on its own ~5s timer, decoupled from tick cadence, so on
+        # most ticks nothing fresh sits in the mailbox — yet the current felt-state is still on the bus
+        # as a retained (last-value) value. Reading ONLY the transient mailbox made the "body feels …"
+        # line blink in and out of the prompt across ticks (intermittent numbness, no signal for
+        # "unchanged" vs "unknown"); the whole point of retained delivery is to always read the current
+        # body state. Only backfill when the retained payload is still renderable (retained payloads
+        # aren't pinned, so a rare eviction leaves payloads.get() → None; skip rather than emit a
+        # contentless generic line).
+        if not any(ev.kind == Kind.interoceptive for ev in events):
+            snap = self._retained_intero()
+            if snap is not None and snap.payload_ref and self.bus.payloads.get(snap.payload_ref):
+                events.append(snap)
         if not events:
             return "", 0
         # Coalesce: first-seen order, freshest payload wins, duplicates counted.
@@ -67,6 +80,14 @@ class AfferentContext:
         if len(block) > self.max_chars:
             block = block[:self.max_chars].rsplit("\n", 1)[0] + "\n… (afferent truncated)"
         return block, len(events)
+
+    def _retained_intero(self):
+        """The current felt-state as a retained (last-value) event, or None. Mirrors reward._current_felt
+        / monitor._retained_json, which already read the snapshot rather than the transient mailbox."""
+        try:
+            return self.bus.retained_snapshot(Kind.interoceptive, Modality.intero)
+        except Exception:  # noqa: BLE001 - intake must never break the tick
+            return None
 
     def _render(self, ev):
         payload = self.bus.payloads.get(ev.payload_ref) if ev.payload_ref else None

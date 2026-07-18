@@ -44,6 +44,32 @@ class TestAfferentBridge(unittest.TestCase):
         self.assertEqual(n, 3)
         aff.close()
 
+    def test_idle_tick_backfills_felt_body_from_retained_snapshot(self):
+        # Interoception publishes the felt-state RETAINED (last-value) on its own ~5s timer. On a tick
+        # with no fresh interoceptive event, the intake must still show the body via the retained
+        # snapshot instead of blinking it out of the prompt (intermittent numbness).
+        aff = AfferentContext(self.bus, max_events=10, max_chars=2000)
+        self.bus.publish(NervousEvent(SCHEMA_VERSION, "intero", Kind.interoceptive, Modality.intero,
+                                      Delivery.retained, salience=0.2),
+                         b'{"overall":"a little tense","felt":["running warm"]}')
+        block1, _n1 = aff.drain_block()                     # consumes the freshly-delivered event
+        self.assertIn("body feels a little tense", block1)
+        block2, _n2 = aff.drain_block()                     # mailbox empty -> backfilled from retained
+        self.assertIn("body feels a little tense", block2)
+        self.assertIn("running warm", block2)
+        aff.close()
+
+    def test_backfill_does_not_duplicate_a_fresh_interoceptive_event(self):
+        # When a fresh interoceptive event IS drained this tick, we must NOT also append the retained
+        # snapshot (it would double-render the felt body).
+        aff = AfferentContext(self.bus, max_events=10, max_chars=2000)
+        self.bus.publish(NervousEvent(SCHEMA_VERSION, "intero", Kind.interoceptive, Modality.intero,
+                                      Delivery.retained, salience=0.2),
+                         b'{"overall":"at ease","felt":["mind resident on the GPU"]}')
+        block, _n = aff.drain_block()
+        self.assertEqual(block.count("body feels"), 1)      # exactly one felt-body line
+        aff.close()
+
 
 class TestContextInjection(unittest.TestCase):
     def setUp(self):
