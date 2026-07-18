@@ -382,20 +382,31 @@ def _load_or_create_creature(config: Config) -> dict:
     with _CREATURE_LOCK:
         doc = _read_json(_creature_path(config))
         genome = doc.get("genome") or {}
-        if doc.get("seed") and genome.get("v") == creature_gen.GENOME_VERSION:
-            return doc
-        seed = None
+        # eidos is the SOLE seed authority (workspace/genome.json, drawn once at first breath).
+        # Read its germline seed first so the egg can ADOPT it.
+        germ_seed = None
         try:
             germ = _read_json(config.workspace / "genome.json")
             if germ.get("seed"):
-                seed = int(germ["seed"])
+                germ_seed = int(germ["seed"])
         except Exception:  # noqa: BLE001 - a missing/corrupt germline never blocks the egg
-            seed = None
-        if seed is None:
-            seed = int.from_bytes(os.urandom(8), "big")
+            germ_seed = None
+        # An existing creature of the current genome version is authoritative — UNLESS it was laid
+        # PROVISIONALLY (dashboard polled before eidos birthed the germline) and the real germline has
+        # since appeared with a DIFFERENT seed: then re-lay to adopt eidos's seed so seed unity
+        # (CREATURE_GENETICS red gate #5) holds on first boot instead of two uncoordinated draws.
+        if (doc.get("seed") and genome.get("v") == creature_gen.GENOME_VERSION
+                and not (doc.get("seed_provisional") and germ_seed is not None
+                         and germ_seed != int(doc["seed"]))):
+            return doc
+        # Prefer the germline seed; fall back to a self-drawn PROVISIONAL seed only when eidos hasn't
+        # birthed the germline yet — that egg is re-adopted (above) the moment genome.json appears.
+        provisional = germ_seed is None
+        seed = germ_seed if germ_seed is not None else int.from_bytes(os.urandom(8), "big")
         doc = {
             "v": 1,
             "seed": seed,
+            "seed_provisional": provisional,
             "genome": creature_gen.genome_from_seed(seed),
             "born_ts": time.time(),
             "hatched": False,
