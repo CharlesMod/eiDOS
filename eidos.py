@@ -2109,6 +2109,19 @@ def run_loop(config: Config, persona=None, wal=None):
                 emit_flavor(config, persona)
                 ticks_since_compaction = 0
                 tick_compacted = True
+                # H3: bring the dream's newly-distilled knowledge into the ENGRAM store. With
+                # memory_manager on, the relevance-recall cascade the model sees each tick reads
+                # ENGRAMS — but the importer otherwise runs only once at boot, so everything learned
+                # since the last restart (dream-distilled facts, memorized facts) was invisible to
+                # relevance recall (the "wakes amnesiac / re-derives what it stored" failure). Re-run
+                # the idempotent importer here so the engram store stays current with new learning.
+                if pillars is not None and getattr(pillars, "manager", None) is not None:
+                    try:
+                        _n = pillars.manager.import_knowledge()
+                        if _n:
+                            logger.info("dream: imported %d new knowledge entries into engrams", _n)
+                    except Exception as _ie:  # noqa: BLE001 - a memory sync fault never breaks the dream
+                        logger.warning("post-dream knowledge import failed: %s", _ie)
                 if persona and config.persona_enabled:
                     record_compaction(persona, config=config)
                     pfx = _pfx(persona, config)
