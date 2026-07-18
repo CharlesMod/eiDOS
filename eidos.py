@@ -2890,8 +2890,13 @@ def run_loop(config: Config, persona=None, wal=None):
                 _can_fail = tick_tool_name not in _CANT_FAIL
                 # Result hash for verb-agnostic novelty gating: a re-read/re-cat/re-skill/re-write that
                 # returns identical output taught/changed nothing, so its success channel pays 0.
-                _result_sig = (hashlib.md5(tick_output.encode("utf-8", "ignore")).hexdigest()
-                               if tick_output else None)
+                # Normalize volatile scalars (job PIDs in the async dispatch ack, timestamps, $RANDOM,
+                # byte counts) first — otherwise `date`/`uptime`/ANY async bash looks novel every tick
+                # and books a free +0.40 that can crystallize into a "when idle, run <probe>" habit.
+                from nervous.reward import normalize_result as _norm_result
+                _result_sig = (hashlib.md5(
+                    _norm_result(tick_output).encode("utf-8", "ignore")).hexdigest()
+                    if tick_output else None)
                 nervous_learner.observe(situation=tick_situation, action=_act_readable,
                                         success=tick_tool_success, made_progress=_made_progress,
                                         strain=_strain_bump, intrinsic=_intrinsic, tick=tick_number,

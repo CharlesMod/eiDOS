@@ -80,6 +80,19 @@ def _action_tool(action) -> str:
     m = re.match(r"[a-z_]+", str(action or ""))
     return m.group(0) if m else ""
 
+
+def normalize_result(text: str) -> str:
+    """Collapse volatile scalars in a tool's output BEFORE it is hashed into a result-novelty
+    signature, so an action whose only 'novelty' is a changing number reads as the SAME result and
+    pays 0 on the success channel. This closes the reward freebie the exact-byte signature left open:
+    a `date`/`uptime`/`echo $RANDOM`/growing-log probe, and — critically — EVERY async `bash`, whose
+    dispatch ack embeds a fresh job PID (`j12345`) each tick so an identical command looked novel
+    forever. Collapse digit runs and whitespace (mirrors context._norm_cmd) but keep the rest and do
+    NOT truncate, so genuinely-different textual content still reads as novel."""
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", re.sub(r"\d+", "#", text)).strip()
+
 # felt overall -> a 0..1 wellbeing scalar (more at ease = higher)
 _WELLBEING = {"at ease": 1.0, "a little tense": 0.66, "strained": 0.33, "in distress": 0.0}
 
