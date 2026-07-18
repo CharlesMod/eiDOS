@@ -10,12 +10,12 @@ creature_shell = "wsl"
 creature_wsl_distro = "Ubuntu-24.04"
 
 [llm]
-# House nexus mind — Gemma-4-12B "house-ai" on gamingPC via llama.cpp (OpenAI-compatible).
-# Routed through the live-monitor tap (:8088 -> :8081) so Nexus's token stream + tok/s
-# appear on the :9100 dashboard. For a direct connection (no monitor), set url to :8081.
-url = "http://127.0.0.1:8088"
-model = "house-ai"
-# Alt (uncensored, LM Studio): url="http://127.0.0.1:1234" model="qwen3.5-4b-uncensored-hauhaucs-aggressive"
+# The mind — gemma-4-12b served by llama-swap at :8080 (OpenAI-compatible), the canonical default on
+# the Linux host (RUNTIME_SPRINTER.md). Model is swappable: point [llm] at any OpenAI-compatible
+# server (Ollama/LM Studio/llama.cpp) via config.local.toml or Settings. (The old :8088 url was the
+# retired Windows monitor-tap; :8081 was the Windows-era house-ai port — both gone on this host.)
+url = "http://127.0.0.1:8080"
+model = "gemma4-12b"
 temperature = 0.6
 max_tokens = 4096
 request_timeout_s = 300
@@ -165,7 +165,12 @@ dedup_threshold = 0.65
 recall_max_chars = 3000
 embedding_enabled = true
 embedding_cohost = true
-embedding_model_dir = "models/all-MiniLM-L6-v2"
+# Semantic recall routes to the RESIDENT llama.cpp embedding server in spare VRAM (nomic-embed,
+# 768-dim) on the canonical host — set embedding_endpoint so embed_texts POSTs there instead of
+# falling back to the in-process ONNX all-MiniLM (384-dim). Leave endpoint empty to use ONNX.
+embedding_endpoint = "http://127.0.0.1:8082"
+embedding_model = "nomic-embed"
+embedding_model_dir = "models/all-MiniLM-L6-v2"   # in-process ONNX fallback when the endpoint is down
 
 [delegate]
 # Hand long-horizon coding/investigation tasks to the pi coding agent (background job,
