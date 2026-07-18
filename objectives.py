@@ -42,6 +42,15 @@ EXPOSURE_CAP = 2      # a SELF-set goal that re-parks after this many tested tha
                       # tick refutes the block and resets exposures to 0 (a hard-but-doable goal keeps
                       # its full budget). Provenance-safe: only self-set objectives reach this gate —
                       # operator commissions / System quests / survival live in other systems untouched.
+STRONG_STALL_PARK_TICKS = 60   # a goal that makes no STRONG progress (new knowledge/skill/completion)
+                      # for this many ticks is force-parked — even if it keeps its frustration low by
+                      # minting cosmetic files (WEAK progress relieves frustration by design, so an
+                      # impossible file-minting self-goal would otherwise never park, never accrue
+                      # exposures, and never reach the death gate). Parking (not death) routes it into
+                      # the exposure/death cascade; a single strong-progress tick resets the clock, so
+                      # a legitimately-deep goal that periodically lands real progress never trips it.
+                      # Generous on purpose (~2.5 min of ticks) so genuine deep work is rarely parked;
+                      # operator-tunable.
 
 
 def _path(config):
@@ -130,6 +139,7 @@ def _new(title: str, why: str, priority: int, tick: int, oid: Optional[str] = No
         "wake_condition": None,
         "created_tick": tick,
         "last_progress_tick": tick,
+        "last_strong_progress_tick": tick,   # STRONG-only clock (see STRONG_STALL_PARK_TICKS)
         "last_active_tick": tick,
         "exposures": 0,          # times thawed from a block — an "impossibility" belief RE-TESTED
     }
@@ -147,6 +157,21 @@ def _thaw(o: dict, tick: int) -> None:
     o["_thawed_from_block"] = True
     o["ticks_since_progress"] = 0
     o["last_active_tick"] = tick
+
+
+def _dead_if_exposure_spent(o: dict) -> Optional[dict]:
+    """A blocked objective about to be re-thawed but whose exposure budget is already spent (thawed
+    EXPOSURE_CAP times with no STRONG progress in between — strong progress resets exposures to 0) is
+    RELEASED DEAD instead of thawed. This is the single choke point EVERY re-activation passes
+    through, so a futile goal can't dodge the death gate by ping-ponging through the model's own
+    objective_block tool (which re-blocks without ever routing through the frustration-park branch
+    where the death check used to live exclusively). Returns the died-event dict, or None to thaw."""
+    if int(o.get("exposures", 0)) >= EXPOSURE_CAP:
+        o["state"] = "dead"
+        o["blocked_reason"] = (f"released: {o.get('exposures')} tested retrials without real "
+                               f"progress — accepted as not mine to do")
+        return {"title": o["title"], "reason": o["blocked_reason"]}
+    return None
 
 
 def _by_id(data: dict, oid: Optional[str]) -> Optional[dict]:
@@ -438,6 +463,13 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
         nxt = _pick_next(data, exclude_id=(active["id"] if active else "")) or _thaw_candidate(data, tick_number)
         if nxt:
             if nxt["state"] == "blocked":
+                died = _dead_if_exposure_spent(nxt)   # spent its budget → release dead, don't re-thaw
+                if died:
+                    data["active_id"] = None          # the released goal must not remain the active id
+                    esc = _maybe_escalate(data, tick_number)
+                    _save(config, data)
+                    return {"rotated": False, "parked": False, "escalate": esc, "active": None,
+                            "died": died, "refuted_block": None}
                 _thaw(nxt, tick_number)             # exposure: re-test the belief
             nxt["ticks_since_progress"] = 0
             nxt["last_active_tick"] = tick_number
@@ -451,6 +483,9 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
 
     active["last_active_tick"] = tick_number
     active["attempts"] += 1
+    # Grandfather objectives created before this field existed: treat "unknown" as "strong progress
+    # just happened" so the upgrade never force-parks an in-flight goal on its first observed tick.
+    active.setdefault("last_strong_progress_tick", tick_number)
 
     # Update frustration from this tick's outcome.
     refuted_block = None
@@ -466,6 +501,7 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
                 refuted_block = {"title": active["title"],
                                  "reason": str(active.get("blocked_reason") or "")}
             active["exposures"] = 0                     # controllability proven → full budget restored
+            active["last_strong_progress_tick"] = tick_number   # reset the strong-stall clock
         active["frustration"] = max(0, active["frustration"] - FRUST_RELIEF)
         active["ticks_since_progress"] = 0
         active["last_progress_tick"] = tick_number
@@ -473,13 +509,18 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
         active["frustration"] += (FRUST_FAIL if tool_failed else FRUST_STALL) + max(0, extra_frustration)
         active["ticks_since_progress"] += 1
 
-    # Has it earned a park? (Frustration over threshold → auto-block + rotate — or DIE if it has
-    # already spent its exposure budget without ever proving controllability.)
+    # Has it earned a park? Two independent triggers, then the same block/DIE decision:
+    #   · frustration over threshold (the ordinary stall/strain path), OR
+    #   · STRONG-progress stall — no new knowledge/skill/completion for STRONG_STALL_PARK_TICKS.
+    # The second closes the "immortal impossible goal" hole: WEAK progress (a cosmetic file) relieves
+    # frustration by design, so a goal that mints files forever would never trip the frustration gate;
+    # the strong-stall clock parks it anyway and routes it into the exposure/death cascade.
     rotated = False
     parked = False
     escalate = False
     died = None
-    if active["frustration"] >= park_at:
+    strong_stall = tick_number - int(active.get("last_strong_progress_tick", tick_number))
+    if active["frustration"] >= park_at or strong_stall >= STRONG_STALL_PARK_TICKS:
         active.pop("_thawed_from_block", None)   # re-parking without progress confirms the belief
         if int(active.get("exposures", 0)) >= EXPOSURE_CAP:
             # RELEASE: tested EXPOSURE_CAP times, never any strong progress → futile. Dead is terminal
@@ -494,13 +535,21 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
             parked = True
             active["state"] = "blocked"
             active["blocked_reason"] = active.get("blocked_reason") or (
-                f"stalled — {active['ticks_since_progress']} ticks without progress")
+                f"stalled — {active['ticks_since_progress']} ticks without progress"
+                if active["frustration"] >= park_at
+                else f"no real (strong) progress in {strong_stall} ticks — parking to try other work")
             # leave wake_condition as set by the model if any
         nxt = _pick_next(data, exclude_id=active["id"])
         if nxt is None:
             nxt = _thaw_candidate(data, tick_number)
             if nxt:
-                _thaw(nxt, tick_number)             # exposure: re-test the belief
+                _cand_died = _dead_if_exposure_spent(nxt)   # spent → release dead instead of thaw
+                if _cand_died:
+                    if died is None:
+                        died = _cand_died
+                    nxt = None                              # nothing workable → escalate below
+                else:
+                    _thaw(nxt, tick_number)             # exposure: re-test the belief
         if nxt:
             nxt["ticks_since_progress"] = 0
             nxt["last_active_tick"] = tick_number
