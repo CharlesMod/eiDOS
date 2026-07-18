@@ -2629,13 +2629,16 @@ def run_loop(config: Config, persona=None, wal=None):
                 call_hash = hashlib.md5(("bash:" + _norm_cmd(_cmd)).encode()).hexdigest()
                 tick_action_label = f"bash: {_norm_cmd(_cmd)[:60]}"
             else:
-                call_hash = hashlib.md5(
-                    json.dumps({"tool": call.tool, "args": call.args}, sort_keys=True).encode()
-                ).hexdigest()
+                # Normalize the args (collapse digit runs / quoting, like bash) so an ARG-VARIED loop of
+                # the SAME tool — read_file a1.txt/a2.txt…, port_probe :8001/:8002…, a re-numbered
+                # notebook — collapses to ONE signature and is caught as rumination, instead of looking
+                # novel every tick and slipping past the loop detector.
                 try:
-                    _args_terse = json.dumps(call.args, sort_keys=True, ensure_ascii=False)[:60]
+                    _args_json = json.dumps(call.args, sort_keys=True, ensure_ascii=False)
                 except (TypeError, ValueError):
-                    _args_terse = ""
+                    _args_json = str(call.args)
+                call_hash = hashlib.md5(_norm_cmd(call.tool + ":" + _args_json).encode()).hexdigest()
+                _args_terse = _args_json[:60]
                 tick_action_label = f"{call.tool} {_args_terse}".strip()
             recent_hashes.append(call_hash)
 

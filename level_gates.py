@@ -20,9 +20,10 @@ Suspension, not de-leveling: sustained tier failure re-locks the tier pending a 
 (proposed through the 5.1 System's `propose()` seam). Standing is recoverable; the scar stays
 (an episode-shaped engram records the suspension).
 
-DARK (Pillars): a pure library behind `pillars_mastery_gates_enabled`. Nothing imports it from
-the tick loop yet; the cutover (Phase 5.5) wires `record_sleep_cycle` to the sleep boundary,
-`record_tier_outcome` to glue's adjudication, and the level-up path to `apply_level_up`.
+LIVE behind `pillars_mastery_gates_enabled` (Phase 5.5 cutover DONE, not dark): the tick loop wires
+`record_sleep_cycle` to the sleep boundary, `record_tier_outcome`/candidacy to glue's adjudication,
+and the level-up path to `apply_level_up` (the only level mover under the flag). A sustained tier
+failure suspends + proposes a remedial quest; standing is recoverable.
 """
 from __future__ import annotations
 
