@@ -258,6 +258,15 @@ class TestAssemblyGate(unittest.TestCase):
         self.assertEqual(messages[0]["content"],
                          SYSTEM_PROMPT_BRIEFING.format(workspace=str(cfg.workspace)))
 
+    def test_briefing_describes_the_linux_host_not_windows(self):
+        # Host-truth: the house-AI briefing must not tell the mind it's on Windows/PowerShell @ :8081
+        # (Windows-era residue). It names the live Linux/bash reality.
+        b = SYSTEM_PROMPT_BRIEFING
+        for stale in ("Windows", "PowerShell", "gamingPC", ":8081", ":8004", "RTX"):
+            self.assertNotIn(stale, b, f"stale Windows-era token {stale!r} in the briefing")
+        self.assertIn("Linux", b)
+        self.assertIn(":8080", b)
+
     def test_flag_on_newborn_units_body_only(self):
         _write_genome(self.config, "otter")
         self.config.pillars_tool_unlocks_enabled = True
