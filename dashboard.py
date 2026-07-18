@@ -2291,8 +2291,14 @@ def _watchdog_loop(config):
                                 pass
                             restarts = []  # fresh chance on good code
                             new_pid = _spawn_eidos(config)
-                            time.sleep(3)
-                            alive = _ctrl_pid_alive(new_pid)
+                            # Event-driven liveness (ARCH#1, no sleep-and-hope): _spawn_eidos re-armed
+                            # _child_died and is watching the new child, so wait on its death up to a
+                            # bounded window — this returns the INSTANT an immediate re-crash fires,
+                            # instead of always sleeping a fixed 3s. We do NOT consume the event
+                            # (no .clear()): a real re-death is still handled by the main watchdog loop's
+                            # own _child_died wait. `alive` here only annotates the log note below.
+                            died_again = _child_died.wait(timeout=3)
+                            alive = (not died_again) and _ctrl_pid_alive(new_pid)
                             _watchdog_event(config, f"respawned pid {new_pid} alive={alive}")
                             print(f"[watchdog] rolled back to {lg}, respawned pid {new_pid} alive={alive}")
                         else:
