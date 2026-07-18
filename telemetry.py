@@ -21,38 +21,59 @@ _prev_cpu_times = None
 def get_cpu_pct() -> float:
     """Return total system CPU usage as 0–100%, normalized across all cores.
 
-    Windows-native: delta between two GetSystemTimes() reads (idle vs
-    kernel+user; kernel time includes idle). First call primes the counter
-    and returns 0.0; on non-Windows platforms or error, returns 0.0.
+    Substrate-agnostic (interoception reads this every tick, on whatever host the creature inhabits):
+    - Windows: delta between two GetSystemTimes() reads (idle vs kernel+user; kernel includes idle).
+    - Linux / Raspberry Pi: delta between two /proc/stat 'cpu' aggregate reads (busy = total − idle−iowait).
+    - Other POSIX (macOS): a coarse load-average proxy (loadavg / core-count) — better than a blind 0.0.
+    First call primes the counter and returns 0.0; any error returns 0.0.
     """
     global _prev_cpu_times
     import sys
-    if sys.platform != "win32":
-        return 0.0
-    try:
-        import ctypes
 
-        idle_t = ctypes.c_ulonglong()
-        kernel_t = ctypes.c_ulonglong()
-        user_t = ctypes.c_ulonglong()
-        if not ctypes.windll.kernel32.GetSystemTimes(
-                ctypes.byref(idle_t), ctypes.byref(kernel_t), ctypes.byref(user_t)):
-            return 0.0
-        idle = idle_t.value
-        total = kernel_t.value + user_t.value
-
+    def _delta_pct(idle: int, total: int) -> float:
+        """Shared idle/total delta → busy% (both the win32 and /proc/stat paths feed (idle, total))."""
+        global _prev_cpu_times
         if _prev_cpu_times is None:
             _prev_cpu_times = (idle, total)
             return 0.0
-
         prev_idle, prev_total = _prev_cpu_times
         _prev_cpu_times = (idle, total)
-
         d_total = total - prev_total
         d_idle = idle - prev_idle
         if d_total <= 0:
             return 0.0
         return round((1.0 - d_idle / d_total) * 100.0, 1)
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            idle_t = ctypes.c_ulonglong()
+            kernel_t = ctypes.c_ulonglong()
+            user_t = ctypes.c_ulonglong()
+            if not ctypes.windll.kernel32.GetSystemTimes(
+                    ctypes.byref(idle_t), ctypes.byref(kernel_t), ctypes.byref(user_t)):
+                return 0.0
+            # Windows kernel time INCLUDES idle, so total = kernel + user.
+            return _delta_pct(idle_t.value, kernel_t.value + user_t.value)
+        except (OSError, AttributeError, ValueError):
+            return 0.0
+
+    # Linux / Pi: /proc/stat first line is the aggregate 'cpu' counters (jiffies), already summed
+    # across every core, so busy% is normalized by construction.
+    try:
+        with open("/proc/stat", "r") as f:
+            fields = f.readline().split()
+        if fields and fields[0] == "cpu":
+            vals = [int(x) for x in fields[1:]]
+            idle = vals[3] + (vals[4] if len(vals) > 4 else 0)   # idle + iowait
+            return _delta_pct(idle, sum(vals))
+    except (OSError, ValueError, IndexError):
+        pass
+
+    # Other POSIX (no /proc/stat, e.g. macOS): coarse run-queue proxy, clamped to 0–100.
+    try:
+        n = os.cpu_count() or 1
+        return round(min(100.0, (os.getloadavg()[0] / n) * 100.0), 1)
     except (OSError, AttributeError, ValueError):
         return 0.0
 
