@@ -409,20 +409,23 @@ def rebuild_index(config: Config) -> int:
 
 _bm25_instance = None
 _bm25_corpus_ids: list[str] = []
+_bm25_mtime: float = -1.0  # the _index_mtime this BM25 was built against (-1 = never built)
 
 
 def _invalidate_bm25_cache():
-    global _bm25_instance, _bm25_corpus_ids
+    global _bm25_instance, _bm25_corpus_ids, _bm25_mtime
     _bm25_instance = None
     _bm25_corpus_ids = []
+    _bm25_mtime = -1.0
 
 
 def _build_bm25(config: Config):
     """Build/rebuild BM25 index from the knowledge index."""
-    global _bm25_instance, _bm25_corpus_ids
+    global _bm25_instance, _bm25_corpus_ids, _bm25_mtime
     from rank_bm25 import BM25Okapi
 
     index = load_index(config)
+    _bm25_mtime = _index_mtime  # stamp the corpus with the index version it reflects
     if not index:
         _bm25_instance = None
         _bm25_corpus_ids = []
@@ -456,7 +459,12 @@ def search_bm25(config: Config, query: str, top_k: int = 5) -> list[dict]:
     if not index:
         return []
 
-    if _bm25_instance is None or len(_bm25_corpus_ids) != len(index):
+    # Rebuild when the instance is cold, the corpus SIZE changed, OR the index CONTENT changed at
+    # the same length (a cross-process supersede/correction edits an entry in place — length-only
+    # invalidation would keep ranking against the stale text). _index_mtime is refreshed by the
+    # load_index call above.
+    if (_bm25_instance is None or len(_bm25_corpus_ids) != len(index)
+            or _bm25_mtime != _index_mtime):
         _build_bm25(config)
 
     if _bm25_instance is None:
