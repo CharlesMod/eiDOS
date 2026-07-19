@@ -31,15 +31,15 @@ Judged against the pillar: **autonomy — persist toward a goal without derailin
 - [ ] **SOTA#4** novelty/prediction-error store-admission gate over lexical dedup (feature)
 - [ ] **SOTA#10** bi-temporal "invalidate-not-delete" fact model in the supersede path (feature)
 
-## Pillar 3 — Memory scale & longevity (runs-forever)
-- [ ] engram-commit full-store rewrite per acting tick (O(n²) at import) → append-mostly + compact on sleep `engram.py:615` (MED)
-- [ ] knowledge store unbounded; most_similar/BM25 O(n) on live path → budget + sleep-time prune `knowledge.py:48` (LOW)
-- [ ] manager.recall scans whole store each tick → vector shortcut / within-tick cache `memory_manager.py:321` (LOW)
-- [ ] read_recent_observations slurps whole file per call → bounded tail read `memory.py:303` (LOW)
-- [ ] rotate_if_needed readlines whole file → stat size pre-check `rotation.py:22` (LOW)
-- [ ] **SOTA#2** decay + bounded eviction on the engram strength field (MemoryBank/Ebbinghaus) (feature)
-- [ ] **SOTA#6** embedded incremental vector store (sqlite-vec / LanceDB) (feature)
-- [ ] **SOTA#14** retire dual bookkeeping — engram economy as single source of truth (feature)
+## Pillar 3 — Memory scale & longevity (runs-forever) ✅ scaling addressed
+- [x] engram-commit O(n²)-at-import → `commit_many()` (one load + one rewrite, kind-shortlisted dedup); importers batched `engram.py`/`memory_manager.py` (MED)
+- [x] read_recent_observations whole-file slurp → bounded `deque(maxlen)` tail read `memory.py` (LOW)
+- [x] rotate_if_needed whole-file readlines → O(1) stat size pre-gate `rotation.py` (LOW)
+- [x] **SOTA#2** decay + bounded eviction — **ALREADY EXISTS + LIVE**: `StrengthDecayPruneJob` (SHY decay + prune lowest-strength to `LONGTERM_BUDGET=5000`) runs every sleep via `default_sleep_engine`/`run_sleep` (`sleep_engine_enabled=true`). Store bounded → per-tick commit O(n≤5000). Verified wired + tested.
+- [~] manager.recall O(n) scan — **bounded** (n≤5000 via prune); vector shortcut fires once embeddings are ON (base config points at `:8082`; live overlay is the operator's call) `memory_manager.py:321` (LOW, mitigated)
+- [~] knowledge store growth — **LOW/slow**: with memory_manager on, recall reads engrams; the BM25 store is append-only import-source (idempotent), a disk concern only `knowledge.py:48`
+- [~] **SOTA#6** incremental vector store (sqlite-vec) — **not needed given the bounded store** (npy sidecar already incremental, trivial at ≤5000×768). Deferred.
+- [~] **SOTA#14** retire dual bookkeeping — focused refactor, not a scaling blocker. Deferred.
 
 ## Pillar 4 — Sensory wiring / afferent completeness
 - [x] felt body persists across idle ticks via the retained snapshot `nervous/afferent.py` (MED)
