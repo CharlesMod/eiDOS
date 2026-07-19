@@ -248,6 +248,10 @@ class Config:
     embedding_model: str = "nomic-embed"         # payload "model" field (llama-server ignores it)
     embedding_query_prefix: str = ""             # nomic wants "search_query: " on queries
     embedding_doc_prefix: str = ""               # ...and "search_document: " on stored documents
+    # systemd unit that serves the embedding endpoint (Linux host). When set, the dashboard's
+    # Start/GO buttons start it and Pause/STOP stop it, so its resident GPU VRAM tracks the
+    # creature's run state (it does NOT idle-unload like the llama-swap mind). Empty = leave it be.
+    embedding_service: str = ""                  # e.g. "llama-embedding.service"
 
     # Planning model (hot-swap for subgoal generation)
 
@@ -691,6 +695,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.embedding_model = knowledge.get("embedding_model", config.embedding_model)
         config.embedding_query_prefix = knowledge.get("embedding_query_prefix", config.embedding_query_prefix)
         config.embedding_doc_prefix = knowledge.get("embedding_doc_prefix", config.embedding_doc_prefix)
+        config.embedding_service = knowledge.get("embedding_service", config.embedding_service)
 
         dlg = data.get("delegate", {})
         config.delegate_enabled = dlg.get("enabled", config.delegate_enabled)

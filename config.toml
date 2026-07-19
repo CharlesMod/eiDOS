@@ -176,6 +176,11 @@ embedding_cohost = true
 embedding_endpoint = "http://127.0.0.1:8082"
 embedding_model = "nomic-embed-text-v1.5"
 embedding_model_dir = "models/all-MiniLM-L6-v2"   # in-process ONNX fallback when the endpoint is down
+# systemd unit backing the endpoint above. When set, the dashboard Start/GO buttons start it and
+# Pause/STOP stop it — so the embedder's resident GPU VRAM is freed whenever the creature is parked
+# and restored when it runs (unlike the llama-swap mind, this server does NOT idle-unload). The
+# dashboard manages it best-effort via `sudo -n systemctl` (POSIX only; empty = don't touch it).
+embedding_service = "llama-embedding.service"
 
 [delegate]
 # Hand long-horizon coding/investigation tasks to the pi coding agent (background job,

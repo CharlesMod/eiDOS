@@ -1813,6 +1813,9 @@ def _ctrl_start(config):
         (config.state_dir / "rollback_attempted").unlink()  # fresh operator start re-arms auto-recovery
     except OSError:
         pass
+    # Warm the embedder (POSIX) so it's resident by the time the operator clicks GO — mirrors the
+    # Windows GPU-service warm-up above. Survives the dashboard restart below (independent service).
+    emb = _set_embedder_running(config, True)
     if _under_supervisor():
         # Under a supervisor (nssm/systemd): restart the whole service — drop a breadcrumb (boot
         # force-respawns fresh eidos + quiets the outgoing watchdog), then exit so the supervisor
@@ -1820,7 +1823,7 @@ def _ctrl_start(config):
         _eidos_restart_breadcrumb(config).write_text(str(time.time()))
         _schedule_dashboard_exit()
         return {"ok": True, "restarting": True,
-                "message": f"restarting service to load current code — reconnecting, then click GO{llama_note}",
+                "message": f"restarting service to load current code — reconnecting, then click GO{llama_note}{emb}",
                 **_ctrl_status(config)}
     # Standalone (`python dashboard.py`, any OS): (re)start the eidos child in place on fresh code.
     st = _ctrl_status(config)
@@ -1833,7 +1836,7 @@ def _ctrl_start(config):
         except Exception:  # noqa: BLE001
             pass
     pid = _spawn_eidos(config)
-    return {"ok": True, "message": f"started PAUSED (pid {pid}) - click GO to wake it{llama_note}",
+    return {"ok": True, "message": f"started PAUSED (pid {pid}) - click GO to wake it{llama_note}{emb}",
             **_ctrl_status(config)}
 
 
@@ -1882,6 +1885,41 @@ def _free_llama_vram():
         return f"; GPU services stop err: {e}"
 
 
+def _set_embedder_running(config, running: bool) -> str:
+    """Start or stop the embedding model's systemd unit alongside the creature, so the UI's
+    Start/GO (bring up) and Pause/STOP (free VRAM) buttons also govern the embedder — which,
+    unlike the mind's llama-swap server, does NOT idle-unload and would otherwise pin GPU VRAM
+    the whole time the creature is parked.
+
+    Deliberately narrow and best-effort: POSIX only, and only when semantic embeddings are enabled
+    AND a unit name is configured ([knowledge] embedding_service). `sudo -n` stays non-interactive
+    so a host without passwordless sudo fails fast instead of hanging on a password prompt, and
+    `--no-block` returns immediately — the unit comes up/down asynchronously (recall degrades to
+    BM25 until it's ready; a control click never blocks on model load). The mind (llama-swap) is
+    left alone; it unloads on its own idle timer. Returns a short note to append to the control
+    message ("" when there is nothing to do)."""
+    import os, re, subprocess
+    if os.name == "nt":
+        return ""
+    if not getattr(config, "knowledge_embedding_enabled", False):
+        return ""
+    svc = (getattr(config, "embedding_service", "") or "").strip()
+    if not svc:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9@._\-]+(?:\.(?:service|socket|target))?", svc):
+        return f"; embedder unit {svc!r} looks unsafe — skipped"
+    verb = "start" if running else "stop"
+    try:
+        r = subprocess.run(["sudo", "-n", "systemctl", "--no-block", verb, svc],
+                           capture_output=True, text=True, timeout=15)
+    except Exception as e:  # noqa: BLE001
+        return f"; embedder {verb} error: {type(e).__name__}"
+    if r.returncode == 0:
+        return f"; embedder {verb} requested ({svc})"
+    tail = (r.stderr or r.stdout or "").strip().splitlines()
+    return f"; embedder {verb} failed ({svc}): {tail[-1] if tail else 'rc=' + str(r.returncode)}"
+
+
 def _ctrl_stop(config):
     import subprocess, os
     pidfile, pausefile, _ = _ctrl_paths(config)
@@ -1895,7 +1933,7 @@ def _ctrl_stop(config):
             pidfile.unlink()
         except OSError:
             pass
-        vram_msg = _free_llama_vram()
+        vram_msg = _free_llama_vram() + _set_embedder_running(config, False)
         return {"ok": True, "message": f"not running{vram_msg}", **_ctrl_status(config)}
     pid = st["pid"]
     if os.name == "nt":
@@ -1914,7 +1952,7 @@ def _ctrl_stop(config):
         reaped = tools.reap_jobs(config, kill_all=True)
     except Exception:  # noqa: BLE001
         pass
-    vram_msg = _free_llama_vram()
+    vram_msg = _free_llama_vram() + _set_embedder_running(config, False)
     msg = f"force-killed pid {pid} (and children)" + (f"; reaped {reaped} bg job(s)" if reaped else "") + vram_msg
     return {"ok": True, "message": msg, **_ctrl_status(config)}
 
@@ -1926,14 +1964,16 @@ def _ctrl_resume(config):
     except OSError:
         pass
     control_notify("resume")   # wake eidos's control channel the instant the operator resumes
-    return {"ok": True, "message": "resumed - consciousness running", **_ctrl_status(config)}
+    emb = _set_embedder_running(config, True)   # bring the embedder back up as the loop starts ticking
+    return {"ok": True, "message": "resumed - consciousness running" + emb, **_ctrl_status(config)}
 
 
 def _ctrl_pause(config):
     _, pausefile, _ = _ctrl_paths(config)
     pausefile.write_text("paused by operator")
     control_notify("pause")
-    return {"ok": True, "message": "paused", **_ctrl_status(config)}
+    emb = _set_embedder_running(config, False)  # a paused loop makes no recall calls — free its VRAM
+    return {"ok": True, "message": "paused" + emb, **_ctrl_status(config)}
 
 
 def _ctrl_sleep(config):
