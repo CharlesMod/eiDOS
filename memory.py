@@ -301,8 +301,12 @@ def read_recent_observations(
         max_count = config.context_obs_max_count
 
     try:
+        import collections
         with open(config.observations_path, encoding="utf-8") as f:
-            lines = f.readlines()
+            # Keep only the TAIL in memory (bounded), not the whole file. The slack over max_count
+            # covers blank/malformed lines that get skipped below, so we still fill the count from
+            # the tail — same result as reading the whole file, at O(max_count) memory.
+            lines = list(collections.deque(f, maxlen=max_count + 64))
     except FileNotFoundError:
         return []
 
