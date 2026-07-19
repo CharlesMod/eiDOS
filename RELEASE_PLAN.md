@@ -72,12 +72,12 @@ Judged against the pillar: **autonomy — persist toward a goal without derailin
 - [x] embedding route unreachable / model drift → committed `embedding_endpoint=:8082` + `embedding_model=nomic-embed` `config.toml` (LOW)
 - [x] deploy/ field-node split-brain → systemd `Conflicts=` both ways + documented canonical topology `deploy/*.service` (MED)
 
-## Pillar 9 — Safety & self-modification
+## Pillar 9 — Safety & self-modification ✅
 - [x] PROTECT_PATHS: fence reward.py + settlement organs + prompts.py `git_safety.py` (MED)
 - [x] autorollback reverts ALL non-protected source → `restore_file_to` the applied file only `selfedit.py` (MED)
 - [x] crash-loop auto-rollback `time.sleep(3)` → event-driven `_child_died.wait` `dashboard.py` (LOW)
-- [ ] **H5** dashboard control plane unauth on 0.0.0.0 → **OPERATOR DECISION** (lockout risk): default-deny+auto-token+`/api/control/*` gated `dashboard.py:2518` (HIGH)
-- [ ] creature bash firewall literal-regex ($HOME escapes) → resolve/expand before match, or OS-jail `tools.py:840` (MED — needs care)
+- [x] **H5** — control plane was ALREADY token-gated on every POST (phase 8.1; finding stale). Added `[dashboard] host` (bind 127.0.0.1 to restrict) + a loud open-control-plane boot warning — securable without lockout `dashboard.py`/`config.py` (HIGH)
+- [x] firewall env-expansion escapes → deny `$HOME`/`$OLDPWD`/`$USERPROFILE`/… in creature mode (general `$vars`/`$(...)` still allowed) `tools.py` (MED)
 
 ## Pillar 10 — Measurement & test integrity ✅
 - [x] **SOTA#9** coherent-goal-pursuit horizon KPI → `telemetry.record_goal_horizon` (bounded rolling summary; derail = loop/rotation/park/death/escalation) `eidos.py`/`telemetry.py` (feature)
