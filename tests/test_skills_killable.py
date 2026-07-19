@@ -92,6 +92,11 @@ class TestKillableExecution(unittest.TestCase):
         self.assertEqual(left, [], f"harness files left behind: {left}")
 
     def test_good_skill_runs_in_subprocess_and_returns_result(self):
+        # A GOOD skill has ample headroom, so give it a generous watchdog: the tight 1s ceiling is
+        # only needed for the KILL-path test above, and it made THIS test load-flaky — spawning a
+        # fresh Python subprocess can exceed 1s under CPU contention and get false-killed. 5s covers
+        # subprocess startup even under heavy load while a real good skill still returns in ms.
+        self.config = _cfg(floor=5.0, ceiling=5.0)
         create_skill(self.config, "adder", _GOOD, args_schema={"n": "int"})
         res = execute_tool(ToolCall(tool="adder", args={"n": 5}, raw=""), self.config)
         self.assertTrue(res.success, res.output)
