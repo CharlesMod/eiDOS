@@ -59,6 +59,27 @@ class TestAfferentBridge(unittest.TestCase):
         self.assertIn("running warm", block2)
         aff.close()
 
+    def test_attach_gate_routes_intake_through_ranked_admission(self):
+        # H4: with the salience gate attached, the core intake reads the gate's RANKED admission
+        # (and releases its own sub so nothing is double-delivered), while retained/guaranteed events
+        # like the felt body still come through first.
+        from nervous.salience import SalienceGate
+        from config import Config
+        cfg = Config(); cfg.pillars_salience_gate_enabled = True
+        gate = SalienceGate(self.bus, config=cfg)
+        aff = AfferentContext(self.bus, max_events=5, max_chars=2000)
+        aff.attach_gate(gate)
+        self.assertIsNone(aff.sub)                         # own subscription released (no double-delivery)
+        self.bus.publish(NervousEvent(SCHEMA_VERSION, "intero", Kind.interoceptive, Modality.intero,
+                                      Delivery.retained, salience=0.2),
+                         b'{"overall":"at ease","felt":["mind resident on the GPU"]}')
+        self.bus.publish(NervousEvent(SCHEMA_VERSION, "mic", Kind.percept, Modality.audio,
+                                      Delivery.fungible, salience=0.9), b"loud sound")
+        block, _n = aff.drain_block()
+        self.assertIn("body feels at ease", block)         # felt body still surfaced via the gate
+        self.assertIn("loud sound", block)                 # the fungible sense admitted
+        aff.close()
+
     def test_backfill_does_not_duplicate_a_fresh_interoceptive_event(self):
         # When a fresh interoceptive event IS drained this tick, we must NOT also append the retained
         # snapshot (it would double-render the felt body).

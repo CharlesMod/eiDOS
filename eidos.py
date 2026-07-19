@@ -2034,6 +2034,17 @@ def run_loop(config: Config, persona=None, wal=None):
                                learner=nervous_learner)
             pillars.temperament = nervous_temperament
             pillars.metabolism = nervous_metabolism
+            # H4 cutover: when the salience gate is live, route the core's afferent intake THROUGH its
+            # ranked admission (top-down relevance × arousal gain × habituation × exploration floor),
+            # instead of the core reading a separate raw-bus-order subscription the gate never fed.
+            # attach_gate unsubscribes afferent's own sub so nothing is double-delivered; flag-off has
+            # no gate so this never fires and the intake stays byte-identical.
+            if afferent is not None and getattr(pillars, "salience", None) is not None:
+                try:
+                    afferent.attach_gate(pillars.salience)
+                    print(f"{pfx} afferent intake routed through the salience gate (ranked admission live)")
+                except Exception as _ge:  # noqa: BLE001 - a wiring fault must never break boot
+                    print(f"{pfx} salience-gate afferent routing failed (raw intake continues): {_ge}")
             print(f"{pfx} pillars wiring up — {pillars.describe()}")
         except Exception as _e:  # noqa: BLE001 - the hub must never break boot (I5)
             print(f"{pfx} pillars wiring init failed (continuing dark): {_e}")
