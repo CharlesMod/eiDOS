@@ -128,6 +128,18 @@ class AfferentContext:
                     return "- body feels %s (%s)" % (d["overall"], felt)
             except Exception:
                 pass
+        # Neuromodulatory state (Pillar 6): render the MOOD as felt language ("mind feels vigilant"),
+        # the same projection neuromod._mood produces — not raw {arousal,valence,mood} JSON. This is
+        # new felt info (mood/arousal), distinct from the interoceptive body line above; hunger is
+        # already folded into that body line by interoception, so metabolism is not re-rendered here.
+        if ev.kind == Kind.modulation and payload:
+            try:
+                d = json.loads(payload.decode("utf-8"))
+                mood = d.get("mood") if isinstance(d, dict) else None
+                if mood:
+                    return "- mind feels %s" % mood
+            except Exception:
+                pass
         bits = ["- [%s/%s]" % (ev.modality.value, ev.kind.value)]
         if ev.source_organ:
             bits.append("from %s" % ev.source_organ)
