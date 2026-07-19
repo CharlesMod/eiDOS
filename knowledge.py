@@ -180,9 +180,17 @@ def _supersede_entry(config: Config, entry_id: str, content: str, tags: list[str
         path = config.knowledge_dir / cat / f"{entry_id}.md"
         merged_tags = sorted(set(item.get("tags", [])) | set(tags))
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # Bi-temporal correction (SOTA#10 idea, no external dep): record the PRIOR belief and WHEN it
+        # was superseded instead of silently dropping it — the correction becomes non-destructive and
+        # auditable ("I used to think X until T, now Y"), which is temporal self-consistency, part of
+        # not-going-off-track. Only the newest link is kept (bounded, not a full history log).
+        prior = {"content_preview": (item.get("content_preview") or "")[:300],
+                 "confidence": item.get("confidence", ""),
+                 "at": item.get("updated") or item.get("created") or now}
         meta = {"id": entry_id, "category": cat, "tags": merged_tags, "confidence": confidence,
                 "source_goal": item.get("source_goal", ""), "source_tick": item.get("source_tick", 0),
-                "created": item.get("created", now), "updated": now}
+                "created": item.get("created", now), "updated": now,
+                "superseded_at": now, "prior": prior}
         try:
             ensure_dirs(config)
             fd, tmp = tempfile.mkstemp(dir=str(config.knowledge_dir / cat), prefix=".kn_", suffix=".tmp")
@@ -192,7 +200,7 @@ def _supersede_entry(config: Config, entry_id: str, content: str, tags: list[str
         except Exception:  # noqa: BLE001 - a failed correction must not corrupt the store
             return False
         item.update({"tags": merged_tags, "confidence": confidence, "updated": now,
-                     "content_preview": content[:1500]})
+                     "content_preview": content[:1500], "superseded_at": now, "prior": prior})
         _write_index(config, index)
         _invalidate_bm25_cache()
         logger.info("superseded knowledge entry %s → confidence=%s", entry_id, confidence)
