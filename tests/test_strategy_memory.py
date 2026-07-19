@@ -128,6 +128,36 @@ class TestStoreIntegration:
         hits = mgr.recall("scan the lan for hosts", situation="obj7|scan the lan", explore_ratio=0.0)
         assert any(h.kind == "strategy" for h in hits), "guardrail should surface via the recall cascade"
 
+    def test_distinct_deaths_stay_distinct_not_merged(self, tmp_path):
+        # Regression: the template's death guardrail must be lean enough that two GENUINELY-DISTINCT
+        # doom-loop deaths don't collide at the 0.85 merge threshold (which would silently fold the
+        # second into the first and lose its trigger + situation key — the feature's headline case).
+        cfg = _cfg(tmp_path)
+        mgr = MemoryManager(cfg)
+        for obj, title in (("objA", "fix the wifi driver crash"),
+                           ("objB", "configure the network printer")):
+            body = strategy.distill_strategy(
+                {"title": title, "outcome": "released", "success": False,
+                 "reason": "released: 6 tested retrials without real progress",
+                 "situation": f"{obj}|{title}"}, llm=None)
+            mgr.encode("strategy", body, tick=1, strength=strategy.STRATEGY_STRENGTH_LOSS,
+                       stats={"situation": f"{obj}|{title}"})
+        strat = [e for e in LongTermStore(cfg).load() if e.kind == "strategy"]
+        assert len(strat) == 2, "two distinct doom-loop deaths must yield two distinct guardrails"
+        sits = {e.stats.get("situation") for e in strat}
+        assert sits == {"objA|fix the wifi driver crash", "objB|configure the network printer"}
+
+    def test_near_duplicate_deaths_do_merge(self, tmp_path):
+        # The flip side: genuinely-similar goals SHOULD still fold into one guardrail (correct dedup).
+        cfg = _cfg(tmp_path)
+        mgr = MemoryManager(cfg)
+        for title in ("fix the wifi driver crash", "fix the wifi driver bug"):
+            body = strategy.distill_strategy(
+                {"title": title, "outcome": "released", "success": False, "situation": "x"}, llm=None)
+            mgr.encode("strategy", body, tick=1, stats={"situation": "x"})
+        strat = [e for e in LongTermStore(cfg).load() if e.kind == "strategy"]
+        assert len(strat) == 1, "near-duplicate goals should merge into one guardrail"
+
     def test_repeated_guardrail_merges_not_duplicates(self, tmp_path):
         cfg = _cfg(tmp_path)
         con = Consolidator(cfg)

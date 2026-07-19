@@ -71,7 +71,7 @@ _STRATEGY_GRAMMAR = (
     'root ::= "TRIGGER: " trigger " || PRINCIPLE: " principle "\\n"\n'
     f'trigger ::= char{{4,{STRATEGY_TRIGGER_MAX}}}\n'
     f'principle ::= char{{4,{STRATEGY_PRINCIPLE_MAX}}}\n'
-    'char ::= [^\\n|]\n'
+    'char ::= [^\\n\\x00-\\x1F|]\n'   # visible text only; "|" reserved as the field delimiter
 )
 
 _LINE_RE = re.compile(r"TRIGGER:\s*(.+?)\s*\|\|\s*PRINCIPLE:\s*(.+?)\s*$", re.IGNORECASE | re.DOTALL)
@@ -140,23 +140,33 @@ def _distill_via_llm(closure: dict, llm: Callable) -> Optional[dict]:
 
 def _template(closure: dict) -> dict:
     """A mechanical guardrail when the mind is unavailable — a closed goal is ground truth, so we still
-    capture something useful (mirrors SettlementLessonsJob's no-LLM distillation)."""
+    capture something useful (mirrors SettlementLessonsJob's no-LLM distillation).
+
+    The TITLE leads and the generic advice is kept SHORT on purpose: the store's Consolidator folds
+    same-kind engrams whose bodies overlap >= 0.85 (engram.py), so a long fixed principle string would
+    dominate the token set and make two GENUINELY-DISTINCT deaths collide into one (losing the second's
+    trigger + situation key on the fold). A lean, title-led body keeps distinct goals distinct while
+    still letting genuinely-similar goals merge — which is the correct behaviour."""
     title = (closure.get("title") or "a goal").strip()
     reason = (closure.get("reason") or "").strip()
     outcome = (closure.get("outcome") or "closed").strip().lower()
     if closure.get("success"):
-        principle = "this approach worked — reuse it here"
-        if reason:
-            principle = f"worked via {reason} — reuse this approach"
+        # reason here is goal-specific (what worked) → it both sharpens the guardrail and keeps
+        # distinct wins distinct.
+        principle = f"{reason} — reuse this" if reason else "this worked — reuse it"
     elif outcome in ("released", "dead", "died"):
-        principle = ("repeated tries made no real progress — this goal shape is a dead end; "
-                     "decompose it or drop it, don't retry as-is")
+        # NO generic release reason in the body — it is the same for every death and would inflate
+        # the shared token set. The title carries the discrimination; the advice stays terse so two
+        # distinct deaths stay well under the 0.85 merge threshold (measured ~0.67-0.75 for realistic
+        # multi-word titles).
+        principle = "a dead end; decompose or drop it"
     elif outcome in ("abandoned",):
-        principle = f"abandoned ({reason or 'dead end'}) — recognise this sooner and pivot"
+        principle = f"abandoned ({reason}); spot it sooner and pivot" if reason else \
+            "abandoned; spot it sooner and pivot"
     elif outcome in ("archived", "expired"):
-        principle = "went stale without progress — take a smaller concrete step or let it go"
+        principle = "went stale; take a smaller step or let it go"
     else:
-        principle = reason or "closed without a clear win — reassess the approach"
+        principle = reason or "no clear win; reassess the approach"
     return {"trigger": _clip(title, STRATEGY_TRIGGER_MAX),
             "principle": _clip(principle, STRATEGY_PRINCIPLE_MAX)}
 
