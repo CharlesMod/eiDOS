@@ -40,6 +40,7 @@ one-line justification; §0.2 the harness asserts MECHANISMS (bounds, triggers, 
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import sys
 import tempfile
@@ -310,6 +311,21 @@ class SimCreature:
         self.rng = random.Random(self.seed)
         self.workdir = Path(workdir)
         self.config = _build_config(self.workdir)
+
+        # Determinism (the sim promises "deterministic, seeded; no wall-clock dependence"): seed a
+        # FIXED germline from the sim seed so every congenital value the real organs read — the
+        # temperament caution BASELINE and its gene-scaled SPRING RATE, the curiosity/genome
+        # multipliers — is reproducible. Without a genome.json those birth from os.urandom, which
+        # made boundary dampers like springs_recover_bad_streak flip run-to-run (~50% flake). A bare
+        # v1 genome.json is derived deterministically from the seed on load.
+        try:
+            import genome as _genome
+            gpath = self.config.workspace / _genome.GENOME_FILENAME
+            if not gpath.exists():
+                gpath.write_text(json.dumps({"v": 1, "seed": self.seed}), encoding="utf-8")
+            _genome._cache.pop(str(gpath), None)
+        except Exception:  # noqa: BLE001 - a missing genome falls back to os.urandom (prior behavior)
+            pass
 
         # --- the real organs/libraries under test -----------------------------------------------
         self.bus = NervousBus()
