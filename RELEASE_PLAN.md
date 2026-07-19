@@ -18,18 +18,18 @@ Judged against the pillar: **autonomy — persist toward a goal without derailin
 - [x] level_gates stale DARK docstring → corrected `level_gates.py` (LOW)
 - [ ] backlog-exhaustion soft-stall → mint a bounded exploratory objective on full-park (behavior-changing; **FEATURE**) `objectives.py:517` (LOW)
 - [ ] **SOTA#1** per-domain learning-progress → curiosity cutover (critical anti-farming already handled live; **FEATURE**, Pillar 6) (feature)
-- [ ] **SOTA#3** ReasoningBank-style strategy memory (distill each quest → retrievable guardrail) — **FEATURE EPIC** (feature)
-- [ ] **SOTA#5** durable externalized per-objective PLAN artifact injected every tick — **FEATURE EPIC** (feature)
-- [ ] **SOTA#7** AgentDebug-style error-attribution post-mortem on park/loop → strategy memory — **FEATURE EPIC** (feature)
+- [~] **SOTA#5** durable plan artifact — **LARGELY EXISTS**: `plan.md` is a durable working-memory plan, injected in the stable head every tick, updatable via `update_plan`. The refinement (per-objective *structured* subgoal lists with done/blocked state) is an enhancement on top, observation-gated (feature)
+- [~] **SOTA#7** error-attribution post-mortem — **PARTIALLY EXISTS**: a goal death writes a verified OBITUARY engram and a refuted block writes a verified correction (`eidos.py`). The structured wrong-belief/bad-action/stuck/missing-capability classification is the enhancement (feature)
+- [~] **SOTA#3** strategy memory (distill each quest → retrievable guardrail) — **GENUINE GAP** but needs a distillation pass (LLM or template) + live tuning of what's stored; the highest-value observation-gated feature epic. Design: hook quest-close → compact strategy engram (trigger + principle) → surfaces via the existing recall cascade (feature)
 
-## Pillar 2 — Context & recall efficacy
+## Pillar 2 — Context & recall efficacy ✅
 - [x] BM25 cache invalidates on content change, not just length `knowledge.py` (LOW)
-- [ ] **H3** post-boot facts never recalled by relevance → route memorize/dream writes through `manager.encode` (or periodic idempotent re-import) `eidos.py:755` (HIGH)
-- [ ] est_tokens telemetry is digit-length nonsense → real token estimate `context.py:1380` (LOW)
-- [ ] compaction gate byte-inflation → count content tokens, not JSONL bytes `compaction.py:47` (LOW)
-- [ ] stable-head cache defeated every tick → sign on semantic inputs, not persona/creature mtime `context.py:1102` (LOW)
-- [ ] **SOTA#4** novelty/prediction-error store-admission gate over lexical dedup (feature)
-- [ ] **SOTA#10** bi-temporal "invalidate-not-delete" fact model in the supersede path (feature)
+- [x] **H3** post-boot facts recalled → re-import engrams each dream (idempotent) `eidos.py` (HIGH)
+- [x] est_tokens → real token estimate `context.py` (LOW)
+- [x] stable-head cache → sign on semantic inputs, not persona/creature mtime (KV no longer churns) `context.py` (LOW)
+- [~] compaction byte-count — **KEPT**: it biases dreams to fire slightly EARLY, the safe direction vs amnesia; a discount factor risks late-dreaming (LOW)
+- [x] **SOTA#10** bi-temporal non-destructive corrections (prior belief + superseded_at) `knowledge.py` (feature)
+- [~] **SOTA#4** novelty store-gate — overlap-coefficient near-dup rejection **ALREADY EXISTS** (`knowledge.most_similar`, store-time). The upgrade to prediction-error / "already-implied" gating needs a semantic predictor (embeddings-on) or an LLM pass; scoped as an enhancement, observation-gated (feature)
 
 ## Pillar 3 — Memory scale & longevity (runs-forever) ✅ scaling addressed
 - [x] engram-commit O(n²)-at-import → `commit_many()` (one load + one rewrite, kind-shortlisted dedup); importers batched `engram.py`/`memory_manager.py` (MED)
