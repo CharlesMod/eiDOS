@@ -92,6 +92,7 @@ KINDS = frozenset({
     "prediction",  # an open expectation awaiting closure (the expectation ledger, §M-4)
     "news",        # something worth telling Dean, held until presence (§M-5)
     "identity",    # a self-model fact — who the creature is
+    "strategy",    # a distilled trigger→principle GUARDRAIL from a closed quest/objective (ReasoningBank, SOTA #3)
 })
 
 # Valid provenance values (§M-2: source monitoring — "I saw it" vs "I was told").

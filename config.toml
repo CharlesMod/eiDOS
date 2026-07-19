@@ -273,6 +273,7 @@ expectations_enabled = true       # 4.1 expectation ledger: typed predictions cl
 max_open_predictions = 12         # 4.1 bound on simultaneously-open predictions
 salience_gate_enabled = true      # 1.3 salience-gate organ: admission bias = salience × relevance × neuromod gain
 bet_ledger_enabled = true         # 2.3 recall-utility loop: injected engrams are bets settled by glue (never self-report)
+strategy_memory_enabled = true    # SOTA#3 ReasoningBank: distil a trigger→principle guardrail when a quest/objective closes (success OR failure); surfaced via the same recall cascade
 learning_xp_enabled = true        # 4.2 XP weighted by learning progress (falling error slope); grind/noise pay ~0
 news_enabled = true               # 4.4 news queue: deferred communication, presence-gated, engagement-ranked
 news_max_items = 20               # 4.4 bound on queued news (eviction/expiry past this)
