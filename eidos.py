@@ -2670,6 +2670,14 @@ def run_loop(config: Config, persona=None, wal=None):
                     if isinstance(call.args, dict):
                         _summary = str(call.args.get("key") or call.args.get("title") or "")
                     record_goal_complete(persona, _summary, config=config)
+                    # SOTA#3: a finished self-goal → a "reuse this" guardrail the recall cascade
+                    # can surface next time (event-driven, own flag, fail-open inside).
+                    if pillars is not None:
+                        pillars._distill_strategy({
+                            "title": _summary or "a self-chosen objective", "outcome": "done",
+                            "success": True, "reason": tick_summary,
+                            "situation": tick_situation or "", "trajectory": tick_summary,
+                        }, tick=tick_number)
                 last_tick_failed = not result.success
                 pfx = _pfx(persona, config)
 
@@ -2918,6 +2926,15 @@ def run_loop(config: Config, persona=None, wal=None):
                         source_tick=tick_number)
                 except Exception:  # noqa: BLE001
                     pass
+                # SOTA#3: this derailment → an "avoid this" guardrail, so the recall cascade warns
+                # the creature BEFORE it re-attempts the same doom-loop goal shape (the whole point:
+                # convert each derailment into a retrieved guardrail). Failure → born strong (a scar).
+                if pillars is not None:
+                    pillars._distill_strategy({
+                        "title": _died["title"], "outcome": "released", "success": False,
+                        "reason": _died["reason"], "situation": tick_situation or "",
+                        "trajectory": tick_summary,
+                    }, tick=tick_number)
         except Exception as _e:  # noqa: BLE001
             logger.warning("objective gate failed: %s", _e)
 

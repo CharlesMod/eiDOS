@@ -178,6 +178,19 @@ class TestPillarsWiring:
         assert hub.manager is None
         hub._distill_strategy(_closure(), tick=1)        # must not raise, must not mint
 
+    def test_objective_done_closure_mints_a_reuse_guardrail(self, tmp_path):
+        # Mirrors the loop's objective_done hook (eidos.py): a finished self-goal → a WIN guardrail.
+        hub, cfg = self._hub(tmp_path)
+        hub._distill_strategy({
+            "title": "wire the porch light schedule", "outcome": "done", "success": True,
+            "reason": "a cron entry did it", "situation": "obj3|wire the porch light",
+            "trajectory": "a cron entry did it",
+        }, tick=9)
+        strat = [e for e in LongTermStore(cfg).load() if e.kind == "strategy"]
+        assert len(strat) == 1
+        assert strat[0].strength == strategy.STRATEGY_STRENGTH_WIN     # a win encodes just above neutral
+        assert "porch light" in strat[0].body.lower()
+
     def test_quest_close_hook_mints_a_guardrail(self, tmp_path):
         hub, cfg = self._hub(tmp_path, pillars_quests_enabled=True)
 
