@@ -48,7 +48,7 @@ from persona import (
 )
 from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rotate_metrics, rotate_thoughts, cleanup_old_snapshots
 from safety import check_ram, check_disk_space
-from telemetry import write_heartbeat, append_metrics, write_activity, get_cpu_pct
+from telemetry import write_heartbeat, append_metrics, write_activity, get_cpu_pct, record_goal_horizon
 from tools import execute_tool, refresh_jobs, collect_finished_jobs, reap_jobs, _BUILTIN_TOOL_NAMES
 
 logger = logging.getLogger("eidos")
@@ -1718,6 +1718,7 @@ def run_loop(config: Config, persona=None, wal=None):
     reasoning_exhaustions = wal.get("reasoning_exhaustions", 0)
     current_max_tokens = wal.get("current_max_tokens", 0) or config.llm_max_tokens
     recent_hashes: collections.deque = collections.deque(maxlen=config.loop_detect_window)
+    goal_horizon = 0   # SOTA#9 autonomy KPI: consecutive on-track acting ticks since the last derail
     last_tick_failed = False
     idle_since = None  # timestamp when goal went missing
     operator_paused = False
@@ -1826,8 +1827,15 @@ def run_loop(config: Config, persona=None, wal=None):
             import nervous
             nervous_bus = nervous.build_bus(config)
             afferent = nervous.AfferentContext.from_config(nervous_bus, config)
-            # P2: the GPU lease arbiter (mind / TTS / escalated perception). Available for the
-            # speech-gate migration + escalated perception (P6); inert until a claimant acquires.
+            # P2: the GPU lease arbiter (mind / TTS / escalated perception). DISPOSITION on this host:
+            # deliberately a MONITOR-only holder display, NOT wired into the mind's decode. The host
+            # keeps ONE model resident (llama-swap, ttl:0) and the ONLY real GPU contender is TTS,
+            # which is already arbitrated event-driven by voice.py's speech-gate (gpu_gate.py +
+            # /api/gpu/wait, ARCH#1). Routing the mind's blocking decode through acquire() here would
+            # add a lease round-trip for zero benefit (nothing else holds the GPU) and risk serializing
+            # the hot path. Leases become load-bearing only under MULTI-model residency or escalated
+            # foveal perception (P6) — a future-host manifest, not this one. Constructed so the
+            # behind-the-curtain monitor can show the holder; inert by design until such a claimant exists.
             nervous_gpu = nervous.GpuArbiter(bus=nervous_bus, log_path=str(config.nervous_gpu_leases_log_path))
             try:
                 # config threads the genome's ±10% wake_budget gene into adenosine (fail-open ×1.0).
@@ -1929,7 +1937,16 @@ def run_loop(config: Config, persona=None, wal=None):
             from nervous.sleep import SleepCycle
             nervous_learner = RewardLearner(bus=nervous_bus, neuromod=nervous_neuromod, config=config)
             nervous_worldmodel = WorldModel(config=config)            # predicts situation transitions (T2)
-            nervous_curiosity = CuriosityDrive(bus=nervous_bus, neuromod=nervous_neuromod)  # novelty → intrinsic reward
+            # levity (v3 playfulness gene) scales HOW HARD a predictable lull presses the body to move —
+            # the curiosity restless-arousal floor cap. Congenital, bounded (gene clamps [0.6,1.6]); the
+            # accessor is fail-open ×1.0, so an absent genome leaves behavior byte-identical.
+            try:
+                from genome import gene as _gene
+                _levity = float(_gene(config, "levity"))
+            except Exception:  # noqa: BLE001
+                _levity = 1.0
+            nervous_curiosity = CuriosityDrive(bus=nervous_bus, neuromod=nervous_neuromod,
+                                               restless_arousal_max=0.5 * _levity)  # novelty → intrinsic reward
             SleepCycle(nervous_bus, neuromod=nervous_neuromod, learner=nervous_learner,
                        sleep_arousal=getattr(config, "nervous_learning_sleep_arousal", 0.32),
                        min_consolidate_interval_s=getattr(config, "nervous_learning_consolidate_interval_s", 120.0)
@@ -1964,7 +1981,15 @@ def run_loop(config: Config, persona=None, wal=None):
     if nervous_bus is not None and getattr(config, "nervous_goaltension_enabled", True):
         try:
             from nervous.goaltension import GoalTensionDrive
-            nervous_goaltension = GoalTensionDrive(bus=nervous_bus, neuromod=nervous_neuromod)
+            # press_scale (v3 boldness gene) scales how hard an unfinished goal presses — the
+            # goal-tension arousal floor cap. Congenital, bounded (gene clamps [0.7,1.4]); fail-open ×1.0.
+            try:
+                from genome import gene as _gene
+                _press = float(_gene(config, "press_scale"))
+            except Exception:  # noqa: BLE001
+                _press = 1.0
+            nervous_goaltension = GoalTensionDrive(bus=nervous_bus, neuromod=nervous_neuromod,
+                                                   tension_arousal_max=0.4 * _press)
             print(f"{pfx} goal-tension drive started — an unfinished objective now keeps it awake")
         except Exception as _e:  # noqa: BLE001
             print(f"{pfx} goal-tension start failed (continuing): {_e}")
@@ -2017,6 +2042,17 @@ def run_loop(config: Config, persona=None, wal=None):
                                learner=nervous_learner)
             pillars.temperament = nervous_temperament
             pillars.metabolism = nervous_metabolism
+            # H4 cutover: when the salience gate is live, route the core's afferent intake THROUGH its
+            # ranked admission (top-down relevance × arousal gain × habituation × exploration floor),
+            # instead of the core reading a separate raw-bus-order subscription the gate never fed.
+            # attach_gate unsubscribes afferent's own sub so nothing is double-delivered; flag-off has
+            # no gate so this never fires and the intake stays byte-identical.
+            if afferent is not None and getattr(pillars, "salience", None) is not None:
+                try:
+                    afferent.attach_gate(pillars.salience)
+                    print(f"{pfx} afferent intake routed through the salience gate (ranked admission live)")
+                except Exception as _ge:  # noqa: BLE001 - a wiring fault must never break boot
+                    print(f"{pfx} salience-gate afferent routing failed (raw intake continues): {_ge}")
             print(f"{pfx} pillars wiring up — {pillars.describe()}")
         except Exception as _e:  # noqa: BLE001 - the hub must never break boot (I5)
             print(f"{pfx} pillars wiring init failed (continuing dark): {_e}")
@@ -2109,6 +2145,19 @@ def run_loop(config: Config, persona=None, wal=None):
                 emit_flavor(config, persona)
                 ticks_since_compaction = 0
                 tick_compacted = True
+                # H3: bring the dream's newly-distilled knowledge into the ENGRAM store. With
+                # memory_manager on, the relevance-recall cascade the model sees each tick reads
+                # ENGRAMS — but the importer otherwise runs only once at boot, so everything learned
+                # since the last restart (dream-distilled facts, memorized facts) was invisible to
+                # relevance recall (the "wakes amnesiac / re-derives what it stored" failure). Re-run
+                # the idempotent importer here so the engram store stays current with new learning.
+                if pillars is not None and getattr(pillars, "manager", None) is not None:
+                    try:
+                        _n = pillars.manager.import_knowledge()
+                        if _n:
+                            logger.info("dream: imported %d new knowledge entries into engrams", _n)
+                    except Exception as _ie:  # noqa: BLE001 - a memory sync fault never breaks the dream
+                        logger.warning("post-dream knowledge import failed: %s", _ie)
                 if persona and config.persona_enabled:
                     record_compaction(persona, config=config)
                     pfx = _pfx(persona, config)
@@ -2406,14 +2455,17 @@ def run_loop(config: Config, persona=None, wal=None):
                 except LLMError as ce:
                     logger.error("Forced compaction failed: %s", ce)
 
+            # Increment BEFORE persisting so the WAL records the NEXT tick, matching the happy
+            # path (2975-2982). Otherwise a crash in this failure window resumes and re-runs this
+            # same tick number, replaying its pre-LLM organ effects.
+            tick_number += 1
+            ticks_since_compaction += 1
             write_wal(config, tick_number, ticks_since_compaction,
                       goal_start_time, consecutive_failures,
                       reasoning_exhaustions, current_max_tokens,
                       last_progress_tick)
             # Interruptible (ARCH #1): during a failure storm a Boss message still wakes the loop.
             _interruptible_sleep(config)
-            tick_number += 1
-            ticks_since_compaction += 1
             continue
 
         except LLMError as e:
@@ -2436,14 +2488,17 @@ def run_loop(config: Config, persona=None, wal=None):
                 print(f"{pfx} LLM unreachable after {consecutive_failures} consecutive failures "
                       f"— it is an external service; waiting for it to return")
 
+            # Increment BEFORE persisting so the WAL records the NEXT tick, matching the happy
+            # path (2975-2982). Otherwise a crash in this failure window resumes and re-runs this
+            # same tick number, replaying its pre-LLM organ effects.
+            tick_number += 1
+            ticks_since_compaction += 1
             write_wal(config, tick_number, ticks_since_compaction,
                       goal_start_time, consecutive_failures,
                       reasoning_exhaustions, current_max_tokens,
                       last_progress_tick)
             # Interruptible (ARCH #1): during a failure storm a Boss message still wakes the loop.
             _interruptible_sleep(config)
-            tick_number += 1
-            ticks_since_compaction += 1
             continue
 
         if config.mock_mode:
@@ -2593,13 +2648,16 @@ def run_loop(config: Config, persona=None, wal=None):
                 call_hash = hashlib.md5(("bash:" + _norm_cmd(_cmd)).encode()).hexdigest()
                 tick_action_label = f"bash: {_norm_cmd(_cmd)[:60]}"
             else:
-                call_hash = hashlib.md5(
-                    json.dumps({"tool": call.tool, "args": call.args}, sort_keys=True).encode()
-                ).hexdigest()
+                # Normalize the args (collapse digit runs / quoting, like bash) so an ARG-VARIED loop of
+                # the SAME tool — read_file a1.txt/a2.txt…, port_probe :8001/:8002…, a re-numbered
+                # notebook — collapses to ONE signature and is caught as rumination, instead of looking
+                # novel every tick and slipping past the loop detector.
                 try:
-                    _args_terse = json.dumps(call.args, sort_keys=True, ensure_ascii=False)[:60]
+                    _args_json = json.dumps(call.args, sort_keys=True, ensure_ascii=False)
                 except (TypeError, ValueError):
-                    _args_terse = ""
+                    _args_json = str(call.args)
+                call_hash = hashlib.md5(_norm_cmd(call.tool + ":" + _args_json).encode()).hexdigest()
+                _args_terse = _args_json[:60]
                 tick_action_label = f"{call.tool} {_args_terse}".strip()
             recent_hashes.append(call_hash)
 
@@ -2830,6 +2888,25 @@ def run_loop(config: Config, persona=None, wal=None):
         except Exception as _e:  # noqa: BLE001
             logger.warning("objective gate failed: %s", _e)
 
+        # --- Autonomy KPI (SOTA#9): the coherent-goal-pursuit HORIZON. Count consecutive on-track
+        #     acting ticks; when the creature DERAILS (a detected loop, a forced rotation/park, a gate
+        #     death, or a whole-backlog escalation) record the horizon that just ended and reset. The
+        #     distribution over these samples is the yardstick for "persists toward a goal without
+        #     derailing" — so any future anti-derailment change can actually be judged. ---
+        _derail = ("loop" if loop_detected else
+                   "goal_died" if _gate.get("died") else
+                   "forced_rotation" if _gate.get("rotated") else
+                   "parked" if _gate.get("parked") else
+                   "backlog_blocked" if _gate.get("escalate") else None)
+        if _derail:
+            try:
+                record_goal_horizon(config, goal_horizon, _derail, tick_number)
+            except Exception:  # noqa: BLE001 - a KPI write must never break the tick
+                pass
+            goal_horizon = 0
+        else:
+            goal_horizon += 1
+
         # --- Temperament (DMN): drift the slow personality setpoints from this tick. A forced park is
         #     an "override" of the model's choice to keep going (the strongest teacher); progress is
         #     autonomy paying off; a failure teaches caution. Slow — one tick barely moves it. ---
@@ -2884,8 +2961,13 @@ def run_loop(config: Config, persona=None, wal=None):
                 _can_fail = tick_tool_name not in _CANT_FAIL
                 # Result hash for verb-agnostic novelty gating: a re-read/re-cat/re-skill/re-write that
                 # returns identical output taught/changed nothing, so its success channel pays 0.
-                _result_sig = (hashlib.md5(tick_output.encode("utf-8", "ignore")).hexdigest()
-                               if tick_output else None)
+                # Normalize volatile scalars (job PIDs in the async dispatch ack, timestamps, $RANDOM,
+                # byte counts) first — otherwise `date`/`uptime`/ANY async bash looks novel every tick
+                # and books a free +0.40 that can crystallize into a "when idle, run <probe>" habit.
+                from nervous.reward import normalize_result as _norm_result
+                _result_sig = (hashlib.md5(
+                    _norm_result(tick_output).encode("utf-8", "ignore")).hexdigest()
+                    if tick_output else None)
                 nervous_learner.observe(situation=tick_situation, action=_act_readable,
                                         success=tick_tool_success, made_progress=_made_progress,
                                         strain=_strain_bump, intrinsic=_intrinsic, tick=tick_number,

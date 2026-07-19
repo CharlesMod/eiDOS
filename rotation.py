@@ -8,6 +8,10 @@ from pathlib import Path
 from config import Config
 
 
+_MIN_OBS_BYTES_PER_LINE = 24   # a valid observation JSON record (ts+type+content) is well over this;
+                               # used only as a conservative floor for the cheap size pre-gate below.
+
+
 def rotate_if_needed(config: Config) -> bool:
     """Rotate observations.jsonl if it exceeds the line limit.
 
@@ -17,6 +21,15 @@ def rotate_if_needed(config: Config) -> bool:
     """
     obs_path = config.observations_path
     if not obs_path.exists():
+        return False
+
+    # Cheap O(1) pre-gate: a file smaller than the smallest possible over-cap size CANNOT exceed the
+    # line cap, so skip materializing the whole file (readlines) in the common under-cap case. Every
+    # valid record is far more than _MIN_OBS_BYTES_PER_LINE bytes, so this never skips a real rotation.
+    try:
+        if obs_path.stat().st_size < config.obs_max_lines * _MIN_OBS_BYTES_PER_LINE:
+            return False
+    except OSError:
         return False
 
     with open(obs_path) as f:

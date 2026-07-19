@@ -249,6 +249,29 @@ class TestBM25Search:
         top_ids = [r["id"] for r in results[:3]]
         assert any("pip" in rid for rid in top_ids)
 
+    def test_search_rebuilds_on_same_length_content_edit(self, knowledge_fixture):
+        """A cross-process in-place edit (same entry COUNT, new content) must invalidate the
+        BM25 cache. Length-only invalidation used to keep ranking against the stale corpus."""
+        import json
+        import os
+        import time
+        cfg = _make_config(knowledge_fixture)
+        _ = search_bm25(cfg, "pip install error", top_k=5)  # warm the BM25 cache
+        idx_path = cfg.knowledge_index_path
+        idx = json.loads(idx_path.read_text())
+        n_before = len(idx)
+        # Simulate ANOTHER process editing one entry in place — no store_entry, so this process's
+        # explicit _invalidate_bm25_cache never fires; only the mtime check can save us.
+        idx[0]["content_preview"] = "uniquetoken_mqttbroker relocated to a fresh host"
+        idx[0]["tags"] = ["uniquetoken_mqttbroker"]
+        time.sleep(0.02)
+        idx_path.write_text(json.dumps(idx))
+        os.utime(idx_path, None)  # bump mtime — the cross-process change signal
+        assert len(json.loads(idx_path.read_text())) == n_before  # COUNT unchanged
+        results = search_bm25(cfg, "uniquetoken_mqttbroker", top_k=3)
+        assert results, "BM25 cache did not rebuild — still ranking the stale corpus"
+        assert results[0]["id"] == idx[0]["id"]
+
     def test_search_dht22_sensor(self, knowledge_fixture):
         cfg = _make_config(knowledge_fixture)
         results = search_bm25(cfg, "DHT22 temperature sensor reading", top_k=5)

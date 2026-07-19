@@ -382,20 +382,31 @@ def _load_or_create_creature(config: Config) -> dict:
     with _CREATURE_LOCK:
         doc = _read_json(_creature_path(config))
         genome = doc.get("genome") or {}
-        if doc.get("seed") and genome.get("v") == creature_gen.GENOME_VERSION:
-            return doc
-        seed = None
+        # eidos is the SOLE seed authority (workspace/genome.json, drawn once at first breath).
+        # Read its germline seed first so the egg can ADOPT it.
+        germ_seed = None
         try:
             germ = _read_json(config.workspace / "genome.json")
             if germ.get("seed"):
-                seed = int(germ["seed"])
+                germ_seed = int(germ["seed"])
         except Exception:  # noqa: BLE001 - a missing/corrupt germline never blocks the egg
-            seed = None
-        if seed is None:
-            seed = int.from_bytes(os.urandom(8), "big")
+            germ_seed = None
+        # An existing creature of the current genome version is authoritative — UNLESS it was laid
+        # PROVISIONALLY (dashboard polled before eidos birthed the germline) and the real germline has
+        # since appeared with a DIFFERENT seed: then re-lay to adopt eidos's seed so seed unity
+        # (CREATURE_GENETICS red gate #5) holds on first boot instead of two uncoordinated draws.
+        if (doc.get("seed") and genome.get("v") == creature_gen.GENOME_VERSION
+                and not (doc.get("seed_provisional") and germ_seed is not None
+                         and germ_seed != int(doc["seed"]))):
+            return doc
+        # Prefer the germline seed; fall back to a self-drawn PROVISIONAL seed only when eidos hasn't
+        # birthed the germline yet — that egg is re-adopted (above) the moment genome.json appears.
+        provisional = germ_seed is None
+        seed = germ_seed if germ_seed is not None else int.from_bytes(os.urandom(8), "big")
         doc = {
             "v": 1,
             "seed": seed,
+            "seed_provisional": provisional,
             "genome": creature_gen.genome_from_seed(seed),
             "born_ts": time.time(),
             "hatched": False,
@@ -1842,10 +1853,19 @@ _GPU_SERVICES_START = (
 
 
 def _free_llama_vram():
-    """Stop all GPU-resident services to fully free VRAM. Returns a status string."""
+    """Stop all GPU-resident services to fully free VRAM. Returns a status string.
+
+    Windows (gaming/Pi era): stop the HouseAI-* services so an eidos stop frees the GPU.
+    Linux (canonical host): the mind runs as a SEPARATE always-on llama-swap service that
+    lazily unloads its model after idle — stopping eidos deliberately does NOT stop it (you may
+    restart eidos and want the mind resident). To fully free VRAM for an eval, the operator stops
+    llama-swap.service explicitly (RUNTIME_SPRINTER.md); we do NOT do it here (killing the mind on
+    every stop would be surprising and wrong). So: an honest note, not a false "VRAM freed" claim,
+    and no silent no-op that reads as if it acted."""
     import subprocess, os
     if os.name != "nt":
-        return ""
+        return " (mind runs as a separate llama-swap service — not stopped by an eidos stop; "\
+               "stop llama-swap.service manually to free its VRAM)"
     svc_list = ",".join(f"'{s}'" for s in _GPU_SERVICES_STOP)
     ps = (
         f"foreach ($s in @({svc_list})) "
@@ -2271,8 +2291,14 @@ def _watchdog_loop(config):
                                 pass
                             restarts = []  # fresh chance on good code
                             new_pid = _spawn_eidos(config)
-                            time.sleep(3)
-                            alive = _ctrl_pid_alive(new_pid)
+                            # Event-driven liveness (ARCH#1, no sleep-and-hope): _spawn_eidos re-armed
+                            # _child_died and is watching the new child, so wait on its death up to a
+                            # bounded window — this returns the INSTANT an immediate re-crash fires,
+                            # instead of always sleeping a fixed 3s. We do NOT consume the event
+                            # (no .clear()): a real re-death is still handled by the main watchdog loop's
+                            # own _child_died wait. `alive` here only annotates the log note below.
+                            died_again = _child_died.wait(timeout=3)
+                            alive = (not died_again) and _ctrl_pid_alive(new_pid)
                             _watchdog_event(config, f"respawned pid {new_pid} alive={alive}")
                             print(f"[watchdog] rolled back to {lg}, respawned pid {new_pid} alive={alive}")
                         else:
@@ -2515,7 +2541,17 @@ def main():
         print(f"[dashboard] boot-respawn error: {_bre2}")
 
     handler = _make_handler(config)
-    server = ThreadingHTTPServer(("0.0.0.0", port), handler)
+    _host = (getattr(config, "dashboard_host", "0.0.0.0") or "0.0.0.0")
+    # Posture note (H5): the privileged control plane (kill-switch, git restore, self-edit apply,
+    # self-guide) is gated by _token_ok, but an EMPTY token means open — the intentional trusted-LAN/
+    # Tailscale accident-safety default (CLAUDE.md). If it's open AND bound to all interfaces, say so
+    # LOUDLY so the exposure is an informed choice: set [dashboard] token to require auth, or host to
+    # "127.0.0.1" to restrict to localhost.
+    if not getattr(config, "dashboard_token", "") and _host in ("0.0.0.0", "::"):
+        print(f"[dashboard] ⚠ OPEN CONTROL PLANE: no dashboard_token set and bound to {_host}:{port} — "
+              f"any host that can reach this port can stop/wipe/roll-back/hijack eiDOS. Set "
+              f"[dashboard] token (auth) or host=\"127.0.0.1\" (localhost only) to close it.")
+    server = ThreadingHTTPServer((_host, port), handler)
     server.daemon_threads = True
     global _HTTP_SERVER
     _HTTP_SERVER = server   # so a control action can gracefully stop the server to restart the service

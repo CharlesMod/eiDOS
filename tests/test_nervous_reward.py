@@ -137,6 +137,37 @@ class TestRisklessSuccessChannel(unittest.TestCase):
         vm = [e for e in rl.values.values() if "mkdir" in e["action"]][0]["v"]
         self.assertAlmostEqual(vm, 0.40, places=4)   # None result_sig -> normal success reward, not gated
 
+    def test_normalize_result_collapses_volatile_scalars(self):
+        from nervous.reward import normalize_result
+        # Two async-bash dispatch acks for the SAME command differ only in the job PID -> same sig.
+        a = "⟳ dispatched [job j12345]: date — running in the background"
+        b = "⟳ dispatched [job j67890]: date — running in the background"
+        self.assertEqual(normalize_result(a), normalize_result(b))
+        # date/uptime output differing only in the changing scalars -> same sig
+        self.assertEqual(normalize_result("Fri Jul 18 16:30:01 UTC 2026"),
+                         normalize_result("Fri Jul 18 16:30:59 UTC 2026"))
+        # genuinely different TEXT still reads as distinct
+        self.assertNotEqual(normalize_result("broker at host alpha"),
+                            normalize_result("broker at host beta"))
+        self.assertEqual(normalize_result(""), "")
+
+    def test_result_novelty_gates_scalar_only_varying_output(self):
+        # The reward freebie: `date`/`uptime`/ANY async bash returns a fresh number every tick, so the
+        # exact-byte sig looked novel forever and booked +0.40. With normalize_result, a result whose
+        # only novelty is a changing scalar is stale on the second occurrence -> success channel 0.
+        import hashlib
+        from nervous.reward import normalize_result
+        sig = lambda s: hashlib.md5(normalize_result(s).encode()).hexdigest()  # noqa: E731 - mirror eidos.py
+        rl = RewardLearner(alpha=1.0)
+        rl.observe(situation="idle", action='bash {"cmd":"date"}', success=True,
+                   made_progress=False, result_sig=sig("Fri Jul 18 16:30:01 UTC 2026"))
+        v1 = [e for e in rl.values.values() if "date" in e["action"]][0]["v"]
+        self.assertAlmostEqual(v1, 0.40, places=4)          # first probe: novel -> pays
+        rl.observe(situation="idle", action='bash {"cmd":"date"}', success=True,
+                   made_progress=False, result_sig=sig("Fri Jul 18 16:31:44 UTC 2026"))
+        v2 = [e for e in rl.values.values() if "date" in e["action"]][0]["v"]
+        self.assertAlmostEqual(v2, 0.0, places=4)           # second probe: scalar-only novelty -> gated
+
     def test_a_successful_read_never_distills_into_a_habit(self):
         # "you reliably read garden_summary.txt" is the loop coaching itself — must never distill,
         # via EITHER the lesson path (_distill_lessons) or the habit path (habits(), previously unguarded).

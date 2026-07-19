@@ -515,10 +515,26 @@ class TestAdenosine:
 class TestStockJobs:
     def test_backup_snapshot_job_writes_a_tarball(self, tmp_path):
         cfg = _cfg(tmp_path)
+        cfg.pillars_backup_enabled = True
         (cfg.workspace / "a_memory.txt").write_text("worth keeping", encoding="utf-8")
         summary = BackupSnapshotJob().run(SleepContext(config=cfg))
         snap = Path(summary["snapshot"])
         assert snap.exists() and snap.name.endswith(".tar.gz")
+
+    def test_backup_snapshot_job_honors_disabled_flag(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        cfg.pillars_backup_enabled = False
+        summary = BackupSnapshotJob().run(SleepContext(config=cfg))
+        assert summary == {"skipped": "backup disabled"}
+
+    def test_backup_snapshot_job_throttles_repeat_snapshots(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        cfg.pillars_backup_enabled = True
+        first = BackupSnapshotJob().run(SleepContext(config=cfg))
+        assert "snapshot" in first
+        # a second run moments later must NOT take another tarball (throttle window)
+        second = BackupSnapshotJob().run(SleepContext(config=cfg))
+        assert second.get("skipped") == "recent snapshot"
 
     def test_telemetry_rederive_bounded_and_fault_isolated(self, tmp_path):
         cfg = _cfg(tmp_path)

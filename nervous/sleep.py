@@ -602,18 +602,35 @@ class DistillationJob:
         return "\n".join(lines) or "(no observations)"
 
 
+BACKUP_MIN_INTERVAL_S = 6 * 3600   # at most one workspace tarball per this window (see BackupSnapshotJob)
+
+
 class BackupSnapshotJob:
     """Call the existing 0.4 backup snapshot (backup.snapshot) — a durable tar.gz of workspace/ taken
     while the creature is quiescent (sleep is the safe moment to snapshot: nothing is mutating memory).
-    Guarded like every job; a snapshot failure is isolated and the sleep still completes."""
+    Guarded like every job; a snapshot failure is isolated and the sleep still completes.
+
+    Two guards the naive version lacked: (1) honor pillars_backup_enabled — the sleep engine can run
+    this job even when the operator turned backups off; (2) throttle — consolidation/sleep can fire
+    every couple of minutes, so snapshot at most once per BACKUP_MIN_INTERVAL_S instead of every dream."""
     name = "backup_snapshot"
     priority = 40
 
     def run(self, ctx: "SleepContext") -> dict:
+        if not getattr(ctx.config, "pillars_backup_enabled", False):
+            return {"skipped": "backup disabled"}
         try:
             import backup
         except Exception as e:  # noqa: BLE001
             return {"skipped": f"backup unavailable: {e}"}
+        try:  # skip if a snapshot already exists within the throttle window
+            snaps = backup.list_snapshots(ctx.config)
+            if snaps:
+                age = time.time() - snaps[0].epoch
+                if age < BACKUP_MIN_INTERVAL_S:
+                    return {"skipped": "recent snapshot", "age_s": round(age)}
+        except Exception:  # noqa: BLE001 - if we can't read prior snapshots, fall through and snapshot
+            pass
         path = backup.snapshot(ctx.config)
         return {"snapshot": str(path)}
 

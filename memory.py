@@ -230,8 +230,10 @@ def append_chat_line(config: Config, text: str, *, spoken: bool = False, tick=No
                 last["spoken"] = bool(spoken or last.get("spoken"))
                 last = validate_chat_reply_record(last)
                 lines[-1] = json.dumps(last)
-                try:
-                    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                try:  # atomic rewrite: a crash mid-write must not truncate chat history
+                    tmp = path.with_suffix(path.suffix + ".tmp")
+                    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                    replace_with_retry(tmp, path)
                 except OSError:
                     pass
                 return
@@ -299,8 +301,12 @@ def read_recent_observations(
         max_count = config.context_obs_max_count
 
     try:
+        import collections
         with open(config.observations_path, encoding="utf-8") as f:
-            lines = f.readlines()
+            # Keep only the TAIL in memory (bounded), not the whole file. The slack over max_count
+            # covers blank/malformed lines that get skipped below, so we still fill the count from
+            # the tail — same result as reading the whole file, at O(max_count) memory.
+            lines = list(collections.deque(f, maxlen=max_count + 64))
     except FileNotFoundError:
         return []
 

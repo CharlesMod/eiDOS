@@ -23,7 +23,8 @@ from config import Config
 from atomicio import replace_with_retry
 
 # Files self-editing may NEVER touch (the safety machinery + lifecycle owner). Also enforced
-# at the self-edit propose/apply layer; duplicated here as the git-side backstop.
+# at the self-edit propose/apply layer; duplicated here as the git-side backstop. Matched by
+# BASENAME (Path.name), so "reward.py" fences nervous/reward.py.
 # The Pillars reward path is protected too: a creature whose XP/strength/levels originate in
 # these files must not hold a propose channel into its own reward function (wireheading-by-
 # proposal) — the operator gate exists, but the operator shouldn't need to spot it in a diff.
@@ -32,6 +33,11 @@ PROTECT_PATHS = frozenset({
     "config.py", "config.toml", ".gitignore", "llm.py", "skills.py", "dashboard.html",
     "bets.py", "learning_progress.py", "level_gates.py", "quests.py", "administrator.py",
     "engram.py", "expectations.py", "glue.py", "persona.py",
+    # reward.py = the dopaminergic reward function itself (the most direct wireheading vector);
+    # objectives/commission/missions SETTLE progress→XP/energy; prompts.py is the per-tick
+    # cognition/framing injected into every decode (a behavioral-hijack surface if self-edited —
+    # the sanctioned channel for standing directives is the operator-gated self_guide, not this).
+    "reward.py", "objectives.py", "commission.py", "missions.py", "prompts.py",
 })
 
 _TAG_PREFIX = "eidos-good-"

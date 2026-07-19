@@ -90,3 +90,29 @@ class TestNeverAScript:
             for word in self.FORBIDDEN:
                 assert not re.search(r"\b" + re.escape(word) + r"\b", src), \
                     f"{fname} references '{word}' — personality must stay pressure, never a script"
+
+
+class TestGenesReachBehaviorAsPressure:
+    """The v3 genes were computed + stored but read by NO consumer (a dead personality axis). They are
+    now wired at the drive construction sites as bounded PRESSURE: levity scales the curiosity
+    restless-arousal floor cap, press_scale the goal-tension floor cap. (affiliation/operator_pull has
+    no behavioral site yet — documented, not wired.)"""
+
+    def test_levity_and_press_scale_scale_the_drive_caps_within_clamps(self):
+        from nervous.curiosity import CuriosityDrive
+        from nervous.goaltension import GoalTensionDrive
+        # a bold, playful creature (positive boldness/playfulness latents) presses/explores harder
+        genes = G.express_genes({"boldness": 1.0, "playfulness": 1.0})
+        assert 0.6 <= genes["levity"] <= 1.6 and 0.7 <= genes["press_scale"] <= 1.4  # bounded
+        assert genes["levity"] > 1.0 and genes["press_scale"] > 1.0                  # and expressing
+        c = CuriosityDrive(restless_arousal_max=0.5 * genes["levity"])
+        t = GoalTensionDrive(tension_arousal_max=0.4 * genes["press_scale"])
+        assert c.restless_arousal_max > 0.5 and t.tension_arousal_max > 0.4          # bolder → higher
+
+    def test_absent_genome_is_neutral_pressure(self):
+        from nervous.curiosity import CuriosityDrive
+        from nervous.goaltension import GoalTensionDrive
+        genes = G.express_genes({})           # no latents → all genes 1.0 (fail-open)
+        c = CuriosityDrive(restless_arousal_max=0.5 * genes["levity"])
+        t = GoalTensionDrive(tension_arousal_max=0.4 * genes["press_scale"])
+        assert c.restless_arousal_max == 0.5 and t.tension_arousal_max == 0.4        # byte-identical

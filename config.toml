@@ -10,22 +10,22 @@ creature_shell = "wsl"
 creature_wsl_distro = "Ubuntu-24.04"
 
 [llm]
-# House nexus mind — Gemma-4-12B "house-ai" on gamingPC via llama.cpp (OpenAI-compatible).
-# Routed through the live-monitor tap (:8088 -> :8081) so Nexus's token stream + tok/s
-# appear on the :9100 dashboard. For a direct connection (no monitor), set url to :8081.
-url = "http://127.0.0.1:8088"
-model = "house-ai"
-# Alt (uncensored, LM Studio): url="http://127.0.0.1:1234" model="qwen3.5-4b-uncensored-hauhaucs-aggressive"
-temperature = 0.6
+# The mind — gemma-4-12b-it Q8_0, served RESIDENT by llama-swap at http://127.0.0.1:9292 (alias
+# "gemma-4-12b" in /etc/llama-swap/config.yaml) at 262144 ctx with full-precision f16 KV on the dual
+# P100 (~21G; iSWA keeps the global KV to 8 layers). OpenAI-compatible; model is swappable — point
+# [llm] at any OpenAI-compatible server (Ollama/LM Studio/llama.cpp) via config.local.toml or Settings.
+url = "http://127.0.0.1:9292"
+model = "gemma-4-12b"
+# Gemma 4 official NON-THINKING sampler (the llama-swap entry runs --reasoning-budget 0 to match).
+temperature = 1.0
 max_tokens = 4096
 request_timeout_s = 300
 top_p = 0.95
-top_k = 20
-min_p = 0.05              # floor out the tiny-probability byte-fallback tokens (the ¥¥¡ collapse) —
-                         # the long tail is exactly where the degeneration draws from
-presence_penalty = 0.5
-frequency_penalty = 0.4    # scales with token count → breaks degenerate repeat loops (the ¥¥¡ flood)
-repeat_penalty = 1.1       # llama.cpp n-gram repeat penalty (1.0 = off)
+top_k = 64
+min_p = 0.0
+presence_penalty = 0.0
+frequency_penalty = 0.0
+repeat_penalty = 1.0       # llama.cpp n-gram repeat penalty (1.0 = off)
 grammar_enabled = true     # GBNF-constrained tick output (form enforced at the sampler)
 
 [tick]
@@ -134,6 +134,10 @@ voice_port = 8098   # standalone voice service (phase 8.3): GLaDOS TTS + GPU spe
 # Empty = off (accident-safety mode; fine for a trusted LAN/Tailscale buddy). Set a value
 # to require ?token=... or an X-EiDOS-Token header on privileged actions.
 token = ""
+# Bind interface. Default 0.0.0.0 (all interfaces — reachable over LAN/Tailscale). Set to
+# "127.0.0.1" to restrict the dashboard (incl. the control plane) to localhost only. With an
+# empty token AND host=0.0.0.0 the dashboard prints a loud open-control-plane warning at boot.
+host = "0.0.0.0"
 
 [self_improvement]
 # Living self-guide (Dean-owned standing directives, injected every tick; eiDOS may PROPOSE).
@@ -165,7 +169,13 @@ dedup_threshold = 0.65
 recall_max_chars = 3000
 embedding_enabled = true
 embedding_cohost = true
-embedding_model_dir = "models/all-MiniLM-L6-v2"
+# Semantic recall routes to the RESIDENT GPU embedding server (nomic-embed-text-v1.5, 768-dim,
+# served by llama-embedding.service at :8082) — embed_texts POSTs there instead of falling back to
+# the in-process ONNX all-MiniLM (384-dim). Leave endpoint empty to use ONNX. (Model field is a
+# label; the server serves whatever model it loaded.)
+embedding_endpoint = "http://127.0.0.1:8082"
+embedding_model = "nomic-embed-text-v1.5"
+embedding_model_dir = "models/all-MiniLM-L6-v2"   # in-process ONNX fallback when the endpoint is down
 
 [delegate]
 # Hand long-horizon coding/investigation tasks to the pi coding agent (background job,

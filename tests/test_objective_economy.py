@@ -124,6 +124,38 @@ class TestExposureCappedDeath(_Base):
         src = inspect.getsource(objectives.record_tick)
         assert "commission" not in src and "quest" not in src and "metabolism" not in src
 
+    def test_impossible_goal_that_only_weak_progresses_still_dies(self):
+        # H1: WEAK progress (a cosmetic file) relieves frustration BY DESIGN, so a goal minting files
+        # forever would keep frustration near 0 and never trip the frustration-park gate — immortal.
+        # The strong-progress-stall clock must park it anyway and feed the exposure/death cascade.
+        objectives.add(self.cfg, "Map the Outside", "reach beyond the nest", priority=5, tick=1)
+        t, died = 2, None
+        for _ in range(3000):
+            g = objectives.record_tick(self.cfg, made_progress=True, tool_failed=False,
+                                       tick_number=t, progress_strong=False)   # WEAK progress EVERY tick
+            if g.get("died"):
+                died = g["died"]; break
+            t += objectives.THAW_COOLDOWN + 1 if objectives.get_active(self.cfg) is None else 1
+        assert died is not None, "an impossible weak-progress-only goal never died — immortal doom loop"
+        assert died["title"] == "Map the Outside"
+        assert self._find("Map the Outside")["state"] == "dead"
+
+    def test_exposure_spent_block_is_released_dead_at_the_thaw_choke_point(self):
+        # H2: the death gate used to live ONLY in the frustration-park branch, so the model could
+        # ping-pong a futile goal via its own objective_block tool (block → gate thaws → block …)
+        # forever without ever routing through that branch. Now every re-thaw passes the death check.
+        objectives.add(self.cfg, "Futile", "cannot be done", priority=5, tick=1)
+        objectives.block(self.cfg, "Futile", "stuck", "")
+        data = objectives._load(self.cfg)
+        objectives._by_id(data, self._find("Futile")["id"])["exposures"] = objectives.EXPOSURE_CAP
+        objectives._save(self.cfg, data)
+        # past the cooldown the gate would normally thaw it — but its budget is spent → release dead
+        g = objectives.record_tick(self.cfg, made_progress=False, tool_failed=False,
+                                   tick_number=100, progress_strong=False)
+        assert g.get("died") and g["died"]["title"] == "Futile"
+        assert self._find("Futile")["state"] == "dead"
+        assert objectives.get_active(self.cfg) is None
+
 
 class TestSharedSimilarity(unittest.TestCase):
     def test_jaccard_separates_elaboration_from_distinct_goal(self):

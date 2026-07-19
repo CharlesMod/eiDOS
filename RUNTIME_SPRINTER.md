@@ -6,6 +6,16 @@
 > OLD Windows host and is **wrong here**. This file is the source of truth for the live runtime.
 > **Authored:** 2026-07-03, from live inspection. Update it when the topology changes.
 
+> **⚠ CURRENT LIVE HOST (2026-07-18): `cmod-s`, NOT Sprinter.** The software was moved to a different
+> box. This one has **dual Tesla P100-PCIE-16GB (32 GB total)**, not the RTX 5080 described below.
+> The mind is **gemma-4-12b-it Q8_0**, served by **llama-swap @ `http://127.0.0.1:9292`** (config
+> `/etc/llama-swap/config.yaml`, launched with `-watch-config`; alias `gemma-4-12b`, **262144 ctx with
+> full-precision f16 KV**, ~21 G resident — iSWA keeps the global KV to 8 layers). The embedder is
+> **nomic-embed-text-v1.5 (768-dim) on GPU @ `:8082`** via **`llama-embedding.service`**. GGUF models
+> live in **`/home/cmod/models/`**. Vision is currently disabled (this llama.cpp build lacks gemma-4-12b's
+> `gemma4uv` CLIP projector). The Sprinter details below (RTX 5080, `:8080`, `/home/cmod/llm/…`,
+> `eidos-embed.service`) describe the EARLIER host — on cmod-s use the values in this callout.
+
 ## The machine
 - **Host:** Sprinter · **OS:** Pop!_OS 24.04 LTS · **GPU:** RTX 5080, 16 GB · **User:** `cmod`
 - **`sudo` is passwordless** for `cmod` — you *can* stop/start the system services yourself.

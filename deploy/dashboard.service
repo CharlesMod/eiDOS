@@ -1,6 +1,9 @@
 [Unit]
-Description=eiDOS dashboard (read-only status server)
-After=eidos.service
+Description=eiDOS dashboard + supervisor (spawns & watchdogs eidos as its child)
+# dashboard.py SPAWNS eidos as a child and watchdogs it — it is NOT a read-only viewer. So it must
+# NOT run alongside a standalone eidos.service (that would be two eidos on one workspace). This is
+# the canonical topology: enable dashboard.service ALONE. (Drop the After=eidos.service assumption.)
+Conflicts=eidos.service
 
 [Service]
 Type=simple

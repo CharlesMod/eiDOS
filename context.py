@@ -1071,6 +1071,32 @@ def _stable_head_blocks(config: Config, creature: bool) -> list:
     return head
 
 
+def _you_identity_sig(config: Config) -> tuple:
+    """The SEMANTIC inputs of the '## You' identity block — level, an age BUCKET, traits, life-stage,
+    hatched — the only things that block renders from persona.json/creature.json. Signed instead of the
+    raw files (which are rewritten EVERY tick: persona counters, creature polls), so the stable KV head
+    re-renders only on a level-up / metamorphosis / new trait / age-bucket crossing, not every tick.
+    MUST mirror _creature_identity_block's field reads."""
+    try:
+        import persona as _persona
+        p = _persona.load_persona(config.workspace)
+    except Exception:  # noqa: BLE001 - fail-open: an unreadable persona still signs stably (empty)
+        return ()
+    level = int(p.get("level", 1) or 1)
+    ticks = int(p.get("total_ticks", 0) or 0)
+    age_bucket = 0 if ticks < 30 else 1 if ticks < 300 else 2 if ticks < 3000 else 3
+    traits = tuple(t for t in (p.get("traits") or []) if t)
+    stage, hatched = None, False
+    try:
+        import json as _json
+        cj = _json.loads((config.workspace / "creature.json").read_text(encoding="utf-8"))
+        stage = cj.get("last_stage")
+        hatched = bool((cj.get("hatch") or {}).get("hatched", False))
+    except Exception:  # noqa: BLE001
+        pass
+    return (level, age_bucket, traits, stage, hatched)
+
+
 def _stable_head_signature(config: Config, creature: bool) -> str:
     """A cheap signature of every input the stable head renders from. Any change → re-render. An input
     we can't stat fails closed to (0, 0), and the TTL forces a periodic rebuild, so a missed input can't
@@ -1099,10 +1125,13 @@ def _stable_head_signature(config: Config, creature: bool) -> str:
     try:
         paths.append(config.state_dir / "learned_habits.json")
         paths.append(config.state_dir / "learned_lessons.json")
-        paths.append(config.workspace / "persona.json")
-        paths.append(config.workspace / "creature.json")
     except Exception:  # noqa: BLE001
         pass
+    # persona.json / creature.json are NOT stat'd here — they are rewritten every tick, which defeated
+    # the whole KV cache (re-prefill churn). The only head input from them is the '## You' block, and
+    # only in creature mode; sign on its SEMANTIC values so the head re-renders only when they change.
+    if creature:
+        parts.append(("you", _you_identity_sig(config)))
     if getattr(config, "pillars_commission_enabled", False):
         # The commission strip re-renders when the operator edits the brief or a task moves.
         try:
@@ -1377,7 +1406,10 @@ def _assemble_briefing(
     # Hard-enforce total context ceiling
     total_chars = _enforce_ceiling(config, messages, tick_number, n_situation=1)
 
-    est_tokens = estimate_tokens(str(total_chars), config.chars_per_token)
+    # total_chars is already the assembled character count — divide by chars_per_token directly.
+    # (The old estimate_tokens(str(total_chars), ...) measured the DIGIT-LENGTH of the count, e.g.
+    # "12000" -> 5 chars -> ~1 token, making this pressure telemetry meaningless.)
+    est_tokens = int(total_chars / max(1.0, float(config.chars_per_token)))
     logger.info("tick=%d ctx_chars=%d est_tokens=%d (conversation mode) messages=%d",
                 tick_number, total_chars, est_tokens, len(messages))
 

@@ -318,16 +318,20 @@ def read_applied_ok(config: Config):
 
 
 def autorollback(config: Config, prev_sha: str, pid: str = "") -> dict:
-    """Terminal: a self-edit failed its health probe. Revert the applied source to prev_sha
-    (single-file safe — restore_to skips PROTECT_PATHS) and mark the proposal rolled_back."""
-    res = git_safety.restore_to(config, prev_sha)
+    """Terminal: a self-edit failed its health probe. Revert ONLY the applied file to prev_sha —
+    the target is known from the proposal manifest, so we don't need the whole-tree restore_to,
+    which would also clobber any UNRELATED source change landed since prev_sha (the blast radius
+    the old 'single-file safe' comment wrongly claimed). Fall back to the full non-PROTECT restore
+    only when the target is unknown (no pid/manifest). Marks the proposal rolled_back."""
+    m = _load_manifest(config, pid) if pid else None
+    target = (m or {}).get("target")
+    res = (git_safety.restore_file_to(config, target, prev_sha) if target
+           else git_safety.restore_to(config, prev_sha))
     try:
-        if pid:
-            m = _load_manifest(config, pid)
-            if m:
-                m["status"] = "rolled_back"
-                m["rolled_back_ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                _save_manifest(config, m)
+        if m:
+            m["status"] = "rolled_back"
+            m["rolled_back_ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            _save_manifest(config, m)
     except Exception:  # noqa: BLE001
         pass
     clear_pending_apply(config)
