@@ -48,7 +48,7 @@ from persona import (
 )
 from rotation import rotate_if_needed, cleanup_old_archives, rotate_llm_log, rotate_metrics, rotate_thoughts, cleanup_old_snapshots
 from safety import check_ram, check_disk_space
-from telemetry import write_heartbeat, append_metrics, write_activity, get_cpu_pct
+from telemetry import write_heartbeat, append_metrics, write_activity, get_cpu_pct, record_goal_horizon
 from tools import execute_tool, refresh_jobs, collect_finished_jobs, reap_jobs, _BUILTIN_TOOL_NAMES
 
 logger = logging.getLogger("eidos")
@@ -1718,6 +1718,7 @@ def run_loop(config: Config, persona=None, wal=None):
     reasoning_exhaustions = wal.get("reasoning_exhaustions", 0)
     current_max_tokens = wal.get("current_max_tokens", 0) or config.llm_max_tokens
     recent_hashes: collections.deque = collections.deque(maxlen=config.loop_detect_window)
+    goal_horizon = 0   # SOTA#9 autonomy KPI: consecutive on-track acting ticks since the last derail
     last_tick_failed = False
     idle_since = None  # timestamp when goal went missing
     operator_paused = False
@@ -2886,6 +2887,25 @@ def run_loop(config: Config, persona=None, wal=None):
                     pass
         except Exception as _e:  # noqa: BLE001
             logger.warning("objective gate failed: %s", _e)
+
+        # --- Autonomy KPI (SOTA#9): the coherent-goal-pursuit HORIZON. Count consecutive on-track
+        #     acting ticks; when the creature DERAILS (a detected loop, a forced rotation/park, a gate
+        #     death, or a whole-backlog escalation) record the horizon that just ended and reset. The
+        #     distribution over these samples is the yardstick for "persists toward a goal without
+        #     derailing" — so any future anti-derailment change can actually be judged. ---
+        _derail = ("loop" if loop_detected else
+                   "goal_died" if _gate.get("died") else
+                   "forced_rotation" if _gate.get("rotated") else
+                   "parked" if _gate.get("parked") else
+                   "backlog_blocked" if _gate.get("escalate") else None)
+        if _derail:
+            try:
+                record_goal_horizon(config, goal_horizon, _derail, tick_number)
+            except Exception:  # noqa: BLE001 - a KPI write must never break the tick
+                pass
+            goal_horizon = 0
+        else:
+            goal_horizon += 1
 
         # --- Temperament (DMN): drift the slow personality setpoints from this tick. A forced park is
         #     an "override" of the model's choice to keep going (the strongest teacher); progress is

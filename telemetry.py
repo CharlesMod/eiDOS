@@ -78,6 +78,36 @@ def get_cpu_pct() -> float:
         return 0.0
 
 
+def record_goal_horizon(config: Config, horizon: int, cause: str, tick: int) -> None:
+    """SOTA#9 autonomy KPI — the coherent-goal-pursuit HORIZON: how many consecutive on-track acting
+    ticks the creature sustains before it DERAILS (a forced rotation/park/death, a whole-backlog
+    escalation, or a detected loop). This turns the pillar ("persist toward a goal without derailing")
+    into something MEASURABLE. Keeps a BOUNDED rolling summary in one overwritten file (mean/max/last +
+    the newest 50 samples + a per-cause tally) — no unbounded growth. Best-effort; never raises."""
+    try:
+        state = config.state_dir
+        state.mkdir(parents=True, exist_ok=True)
+        p = state / "goal_horizon_stats.json"
+        try:
+            s = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            s = {"samples": 0, "sum": 0, "max": 0, "recent": [], "by_cause": {}}
+        s["samples"] = int(s.get("samples", 0)) + 1
+        s["sum"] = int(s.get("sum", 0)) + int(horizon)
+        s["max"] = max(int(s.get("max", 0)), int(horizon))
+        s["mean"] = round(s["sum"] / max(1, s["samples"]), 2)
+        s["last"] = {"horizon": int(horizon), "cause": str(cause), "tick": int(tick)}
+        s["recent"] = (list(s.get("recent", []))[-49:] + [int(horizon)])
+        bc = dict(s.get("by_cause", {}))
+        bc[str(cause)] = int(bc.get(str(cause), 0)) + 1
+        s["by_cause"] = bc
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(s), encoding="utf-8")
+        replace_with_retry(str(tmp), str(p))
+    except OSError:
+        pass
+
+
 def write_activity(config: Config, state: str, *, detail: str = "",
                    partial: str = ""):
     """Write current activity state for dashboard live display.
