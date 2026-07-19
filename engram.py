@@ -625,11 +625,12 @@ class Consolidator:
         _commit_to_store(self.store, existing + [engram])
         return engram
 
-    def merge(self, keeper: Engram, incoming: Engram) -> Engram:
-        """Fold `incoming` into `keeper` (pattern separation kept them apart until they proved to be
-        the same memory). The survivor keeps the STRONGER strength/confidence (a corroborated memory
-        is at least as strong as either witness), unions their links, and sums their recall credit —
-        consolidation should reinforce, not dilute. Persists the merged long-term set."""
+    @staticmethod
+    def _fold(keeper: Engram, incoming: Engram) -> Engram:
+        """The IN-MEMORY merge policy (no persist): fold `incoming` into `keeper`. The survivor keeps
+        the STRONGER strength/confidence (a corroborated memory is at least as strong as either
+        witness), unions their links, and sums their recall credit — consolidation reinforces, never
+        dilutes. Shared by merge() (persist-after) and commit_many() (persist-once-at-end)."""
         keeper.validate()
         incoming.validate()
         keeper.strength = max(keeper.strength, incoming.strength)
@@ -648,12 +649,44 @@ class Consolidator:
         keeper.stats["credit_sum"] = float(keeper.stats.get("credit_sum", 0.0)) + float(incoming.stats.get("credit_sum", 0.0))
         keeper.stats["last_recalled_tick"] = max(int(keeper.stats.get("last_recalled_tick", 0)),
                                                  int(incoming.stats.get("last_recalled_tick", 0)))
+        return keeper
+
+    def merge(self, keeper: Engram, incoming: Engram) -> Engram:
+        """Fold `incoming` into `keeper` and persist the merged long-term set (single-engram path)."""
+        self._fold(keeper, incoming)
         current = self.store.load()
         merged = [keeper if e.id == keeper.id else e for e in current]
         if keeper.id not in {e.id for e in current}:
             merged.append(keeper)   # keeper wasn't yet in the store (committing two fresh near-dups)
         _commit_to_store(self.store, merged)
         return keeper
+
+    def commit_many(self, engrams: list[Engram]) -> int:
+        """Bulk-promote many engrams with ONE store load + ONE rewrite, instead of commit()'s
+        load+scan+rewrite PER engram (O(n) each → O(n²) over a batch like the boot importer, which
+        loops commit over every legacy record). Same pattern-separation policy — a near-restatement
+        merges into its keeper instead of duplicating — but the merge/append happen in memory and are
+        persisted once. The dedup scan is candidate-shortlisted by kind (only same-kind engrams can
+        merge). Returns the count of NEW engrams added (merges don't count)."""
+        if not engrams:
+            return 0
+        current = self.store.load()
+        by_kind: dict = {}
+        for e in current:
+            by_kind.setdefault(e.kind, []).append(e)
+        added = 0
+        for eg in engrams:
+            eg.validate()
+            keeper = next((e for e in by_kind.get(eg.kind, [])
+                           if _overlap(eg.body, e.body) >= self.merge_threshold), None)
+            if keeper is not None:
+                self._fold(keeper, eg)                    # in-memory merge; no persist yet
+            else:
+                current.append(eg)
+                by_kind.setdefault(eg.kind, []).append(eg)   # a later batch item can merge into it
+                added += 1
+        _commit_to_store(self.store, current)                # single rewrite for the whole batch
+        return added
 
     def update_strength(self, engram_id: str, new_strength: float, *,
                         recalled_tick: Optional[int] = None,

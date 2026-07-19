@@ -199,6 +199,26 @@ class TestSingleWriterConsolidator:
         con.commit(_engram(body="the router password rotates every friday morning"))
         assert len(LongTermStore(cfg)) == 2                   # pattern separation — not merged
 
+    def test_commit_many_matches_n_commits(self, tmp_path):
+        # The bulk path (used by the boot importer) must produce the SAME store as N single commits —
+        # identical pattern-separation dedup — but with ONE store rewrite instead of O(n) per record
+        # (the O(n^2)-at-import fix). Same records, two paths, identical survivors.
+        bodies = ["the water heater is in the garage",
+                  "the water heater is in the garage now",       # near-dup of #1 → merges
+                  "the router password rotates every friday",
+                  "the printer is an octoprint node"]
+        cfg_a = _cfg(tmp_path / "a")
+        con_a = Consolidator(cfg_a)
+        for b in bodies:
+            con_a.commit(_engram(body=b))
+        surv_a = sorted(e.body for e in LongTermStore(cfg_a).load())
+        cfg_b = _cfg(tmp_path / "b")
+        added = Consolidator(cfg_b).commit_many([_engram(body=b) for b in bodies])
+        surv_b = sorted(e.body for e in LongTermStore(cfg_b).load())
+        assert surv_a == surv_b                                # identical survivors + dedup
+        assert added == len(surv_b) == 3                       # 4 records, one near-dup merged
+        assert Consolidator(_cfg(tmp_path / "c")).commit_many([]) == 0   # empty batch is a no-op
+
 
 # =================================================================================================
 class TestStrengthUpdate:

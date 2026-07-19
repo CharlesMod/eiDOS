@@ -195,7 +195,7 @@ class MemoryManager:
         if not records:
             return 0
         seen = self._already_imported()
-        count = 0
+        egs = []
         for r in records:
             src_id = _episode_src_id(r)
             if ("episodes", src_id) in seen:
@@ -208,17 +208,16 @@ class MemoryManager:
                 _SRC_ID_KEY: src_id,
                 _SITUATION_KEY: str(r.get("key", "")),
             }
-            eg = Engram(
+            egs.append(Engram(
                 kind="episode",
                 body=body,
                 provenance="experienced",   # an episode is first-hand lived experience (§M-2)
                 encoded_at=EncodedAt(tick=int(r.get("tick", 0) or 0)),
                 stats=stats,
-            )
-            self.consolidator.commit(eg)
+            ))
             seen.add(("episodes", src_id))
-            count += 1
-        return count
+        self.consolidator.commit_many(egs)   # ONE load + ONE rewrite for the batch (not O(n) per record)
+        return len(egs)
 
     def import_knowledge(self) -> int:
         """`knowledge/` → `fact`/`procedure`/`error` engrams (category → kind). READ ONLY on the
@@ -236,7 +235,7 @@ class MemoryManager:
         if not index:
             return 0
         seen = self._already_imported()
-        count = 0
+        egs = []
         for item in index:
             entry_id = str(item.get("id", ""))
             if not entry_id or ("knowledge", entry_id) in seen:
@@ -246,17 +245,16 @@ class MemoryManager:
             body = _knowledge_body(self.config, knowledge, entry_id, item)
             if not body.strip():
                 continue
-            eg = Engram(
+            egs.append(Engram(
                 kind=kind,
                 body=body,
                 provenance="experienced",   # the creature learned/derived it first-hand (§M-2)
                 encoded_at=EncodedAt(tick=int(item.get("source_tick", 0) or 0)),
                 stats={_SRC_KEY: "knowledge", _SRC_ID_KEY: entry_id},
-            )
-            self.consolidator.commit(eg)
+            ))
             seen.add(("knowledge", entry_id))
-            count += 1
-        return count
+        self.consolidator.commit_many(egs)   # ONE load + ONE rewrite for the batch (not O(n) per record)
+        return len(egs)
 
     def import_nuggets(self) -> int:
         """`preserved_nuggets.toml` → engrams with provenance='inherited' and a strength FLOOR (a
@@ -273,7 +271,7 @@ class MemoryManager:
         if not nuggets:
             return 0
         seen = self._already_imported()
-        count = 0
+        egs = []
         for (category, _tags, content) in nuggets:
             content = (content or "").strip()
             if not content:
@@ -282,18 +280,17 @@ class MemoryManager:
             if ("nuggets", src_id) in seen:
                 continue
             kind = _CATEGORY_KIND.get(str(category), "fact")
-            eg = Engram(
+            egs.append(Engram(
                 kind=kind,
                 body=content,
                 provenance="inherited",             # a nugget IS the inherited letter (§M-2)
                 strength=INHERITED_STRENGTH_FLOOR,  # seeded above neutral so it is not forgotten early
                 encoded_at=EncodedAt(),
                 stats={_SRC_KEY: "nuggets", _SRC_ID_KEY: src_id},
-            )
-            self.consolidator.commit(eg)
+            ))
             seen.add(("nuggets", src_id))
-            count += 1
-        return count
+        self.consolidator.commit_many(egs)   # ONE load + ONE rewrite for the batch (not O(n) per record)
+        return len(egs)
 
     # ---------------------------------------------------------------------------------------------
     # Recall — the 4-layer cascade (exact → cross-objective → same-objective → semantic)
