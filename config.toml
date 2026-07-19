@@ -134,6 +134,10 @@ voice_port = 8098   # standalone voice service (phase 8.3): GLaDOS TTS + GPU spe
 # Empty = off (accident-safety mode; fine for a trusted LAN/Tailscale buddy). Set a value
 # to require ?token=... or an X-EiDOS-Token header on privileged actions.
 token = ""
+# Bind interface. Default 0.0.0.0 (all interfaces — reachable over LAN/Tailscale). Set to
+# "127.0.0.1" to restrict the dashboard (incl. the control plane) to localhost only. With an
+# empty token AND host=0.0.0.0 the dashboard prints a loud open-control-plane warning at boot.
+host = "0.0.0.0"
 
 [self_improvement]
 # Living self-guide (Dean-owned standing directives, injected every tick; eiDOS may PROPOSE).

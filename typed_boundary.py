@@ -133,6 +133,7 @@ class DashboardConfigSection(_StrictBoundaryModel):
     port: int | None = Field(default=None, ge=1, le=65535)
     voice_port: int | None = Field(default=None, ge=1, le=65535)
     token: str | None = None
+    host: str | None = None
 
 
 class PathsConfigSection(_StrictBoundaryModel):

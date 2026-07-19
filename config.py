@@ -281,6 +281,7 @@ class Config:
     self_edit_health_probe_s: int = 90         # post-restart health window before auto-rollback
     eidos_stuck_threshold_s: int = 600         # watchdog restarts eidos if alive but not ticking this long
     dashboard_token: str = ""                  # shared token gating state-changing POSTs ('' = off)
+    dashboard_host: str = "0.0.0.0"            # bind interface; set "127.0.0.1" to restrict to localhost
 
     # --- Delegate (hand long-horizon tasks to the pi coding agent as a background job) ---
     delegate_enabled: bool = False             # config.toml flips this on
@@ -661,6 +662,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.dashboard_port = dashboard.get("port", config.dashboard_port)
         config.voice_port = dashboard.get("voice_port", config.voice_port)
         config.dashboard_token = dashboard.get("token", config.dashboard_token)
+        config.dashboard_host = dashboard.get("host", config.dashboard_host)
 
         si = data.get("self_improvement", {})
         config.self_guide_enabled = si.get("self_guide_enabled", config.self_guide_enabled)

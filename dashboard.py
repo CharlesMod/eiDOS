@@ -2541,7 +2541,17 @@ def main():
         print(f"[dashboard] boot-respawn error: {_bre2}")
 
     handler = _make_handler(config)
-    server = ThreadingHTTPServer(("0.0.0.0", port), handler)
+    _host = (getattr(config, "dashboard_host", "0.0.0.0") or "0.0.0.0")
+    # Posture note (H5): the privileged control plane (kill-switch, git restore, self-edit apply,
+    # self-guide) is gated by _token_ok, but an EMPTY token means open — the intentional trusted-LAN/
+    # Tailscale accident-safety default (CLAUDE.md). If it's open AND bound to all interfaces, say so
+    # LOUDLY so the exposure is an informed choice: set [dashboard] token to require auth, or host to
+    # "127.0.0.1" to restrict to localhost.
+    if not getattr(config, "dashboard_token", "") and _host in ("0.0.0.0", "::"):
+        print(f"[dashboard] ⚠ OPEN CONTROL PLANE: no dashboard_token set and bound to {_host}:{port} — "
+              f"any host that can reach this port can stop/wipe/roll-back/hijack eiDOS. Set "
+              f"[dashboard] token (auth) or host=\"127.0.0.1\" (localhost only) to close it.")
+    server = ThreadingHTTPServer((_host, port), handler)
     server.daemon_threads = True
     global _HTTP_SERVER
     _HTTP_SERVER = server   # so a control action can gracefully stop the server to restart the service
