@@ -79,10 +79,10 @@ Judged against the pillar: **autonomy — persist toward a goal without derailin
 - [ ] **H5** dashboard control plane unauth on 0.0.0.0 → **OPERATOR DECISION** (lockout risk): default-deny+auto-token+`/api/control/*` gated `dashboard.py:2518` (HIGH)
 - [ ] creature bash firewall literal-regex ($HOME escapes) → resolve/expand before match, or OS-jail `tools.py:840` (MED — needs care)
 
-## Pillar 10 — Measurement & test integrity
-- [ ] **SOTA#9** METR-style coherent-goal-pursuit horizon KPI (the missing yardstick) (feature)
-- [ ] simdays non-determinism + boundary springs damper → seed fully / widen bound / SKIP until seam lands (`test_report` ~50% flaky on main) (MED test-quality)
-- [ ] `test_skills_killable` 1s timing watchdog → load-robust or generous bound (LOW test-quality)
+## Pillar 10 — Measurement & test integrity ✅
+- [x] **SOTA#9** coherent-goal-pursuit horizon KPI → `telemetry.record_goal_horizon` (bounded rolling summary; derail = loop/rotation/park/death/escalation) `eidos.py`/`telemetry.py` (feature)
+- [x] simdays non-determinism → seed a fixed germline from the sim seed (congenital baselines were os.urandom); `test_report` now 8/8 (was ~50%) `simdays.py` (MED)
+- [x] `test_skills_killable` 1s watchdog flake → generous 5s ceiling for the good-skill case `tests/test_skills_killable.py` (LOW)
 
 ---
 
