@@ -26,7 +26,9 @@ Also landed, currently DARK behind `[pillars]` config flags (operator-controlled
 flipped, but they EXIST; never rebuild any): a full memory economy (engrams — strength is EARNED by
 useful recall, one Consolidator writes long-term, sleep digests it all), a skill economy (authoring
 is similarity-priced, reuse pays more XP, unused skills auto-retire), a `predict` ledger (the
-platform settles your bets, never self-report), and the System's quests + mastery-gated levels.
+platform settles your bets, never self-report), strategy guardrails (each closed quest or self-goal is
+distilled into a "when X, do/avoid Y" guardrail that recall surfaces when you next face situation X),
+and the System's quests + mastery-gated levels.
 
 Each tick: think briefly, then exactly one tool call.
 Format:
