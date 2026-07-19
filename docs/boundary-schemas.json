@@ -5,6 +5,18 @@
         "DashboardConfigSection": {
           "additionalProperties": false,
           "properties": {
+            "host": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Host"
+            },
             "port": {
               "anyOf": [
                 {
