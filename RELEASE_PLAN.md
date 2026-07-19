@@ -41,17 +41,15 @@ Judged against the pillar: **autonomy — persist toward a goal without derailin
 - [~] **SOTA#6** incremental vector store (sqlite-vec) — **not needed given the bounded store** (npy sidecar already incremental, trivial at ≤5000×768). Deferred.
 - [~] **SOTA#14** retire dual bookkeeping — focused refactor, not a scaling blocker. Deferred.
 
-## Pillar 4 — Sensory wiring / afferent completeness
+## Pillar 4 — Sensory wiring / afferent completeness ✅
 - [x] felt body persists across idle ticks via the retained snapshot `nervous/afferent.py` (MED)
 - [x] real CPU% on Linux so interoception isn't blind to CPU strain `telemetry.py` (MED)
-- [ ] **H4** salience-gate ranked admission never reaches the core → route `drain_block` through `gate.admit` when enabled `nervous/salience.py:262` (HIGH)
-- [ ] modulation/metabolism reach the prompt as raw JSON, not qualia → project felt language `nervous/afferent.py:71` (LOW)
+- [x] **H4** salience-gate ranked admission → `AfferentContext.attach_gate` routes intake through `gate.admit` (flag-gated, own sub released, felt body preserved) `nervous/afferent.py`/`eidos.py` (HIGH)
+- [x] modulation → felt language ("mind feels vigilant"); metabolism hunger already folded into the interoceptive line `nervous/afferent.py` (LOW)
 
-## Pillar 5 — The efferent / agency half (dark)
-- [ ] efferent half never constructed (Effector/ReflexArc/Proprioceptor/ChangeDetector) → wire ChangeDetector+Effector or mark deferred in caps doc `nervous/__init__.py:15` (MED)
-- [ ] no exteroception wired → one real exteroceptor (file/device watch) behind a flag `nervous/exteroception.py` (MED)
-- [ ] change-detection / reflex consumers library-only → wire ChangeDetector on the afferent path `nervous/change.py` (LOW)
-- [ ] GpuArbiter constructed but never acquires → route leases or delete + document `eidos.py:1831` (MED)
+## Pillar 5 — The efferent / agency half ✅ (disposition made)
+- [x] **GpuArbiter** — documented as **monitor-only by design** on this single-model-residency host: the only real GPU contender is TTS, already event-driven-arbitrated by voice.py's speech-gate; routing the mind's decode through leases would add a round-trip for zero benefit and risk serializing the hot path. Leases land only under multi-model/escalated-perception (future-host manifest). `eidos.py:1829` (MED)
+- [~] efferent half (Effector/efference-copy/ReflexArc/Proprioceptor) + exteroception + change-detection → **EMBODIMENT-GATED DEFERRAL** (honest disposition, not force-wired). Reasons: (1) there is **no exteroceptive source** (camera/mic/device stream) and **no actuator** on this desktop host, so an Effector/reflex/exteroceptor would gate/drive nothing; (2) a ChangeDetector ("only what changed rises") on the interoceptive stream would actively **fight the felt-body continuity** just fixed (it would suppress the unchanged body the creature should always feel), and there is no exteroceptive stream for it to usefully gate. This half is the **box→bot roadmap step**: it lands *with* real senses + effectors, where novelty-gating and efference-copy are meaningful. Wiring it blind now would be net-negative, not a fix. `nervous/{change,efferent,exteroception}.py` (MED, deferred with reason)
 
 ## Pillar 6 — Reward & motivation integrity
 - [x] reward freebie (Pillar 1) + PROTECT_PATHS fences `reward.py` (done)

@@ -1826,8 +1826,15 @@ def run_loop(config: Config, persona=None, wal=None):
             import nervous
             nervous_bus = nervous.build_bus(config)
             afferent = nervous.AfferentContext.from_config(nervous_bus, config)
-            # P2: the GPU lease arbiter (mind / TTS / escalated perception). Available for the
-            # speech-gate migration + escalated perception (P6); inert until a claimant acquires.
+            # P2: the GPU lease arbiter (mind / TTS / escalated perception). DISPOSITION on this host:
+            # deliberately a MONITOR-only holder display, NOT wired into the mind's decode. The host
+            # keeps ONE model resident (llama-swap, ttl:0) and the ONLY real GPU contender is TTS,
+            # which is already arbitrated event-driven by voice.py's speech-gate (gpu_gate.py +
+            # /api/gpu/wait, ARCH#1). Routing the mind's blocking decode through acquire() here would
+            # add a lease round-trip for zero benefit (nothing else holds the GPU) and risk serializing
+            # the hot path. Leases become load-bearing only under MULTI-model residency or escalated
+            # foveal perception (P6) — a future-host manifest, not this one. Constructed so the
+            # behind-the-curtain monitor can show the holder; inert by design until such a claimant exists.
             nervous_gpu = nervous.GpuArbiter(bus=nervous_bus, log_path=str(config.nervous_gpu_leases_log_path))
             try:
                 # config threads the genome's ±10% wake_budget gene into adenosine (fail-open ×1.0).
