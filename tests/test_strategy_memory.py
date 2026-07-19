@@ -140,6 +140,62 @@ class TestStoreIntegration:
         assert len(strat) == 1, "a repeated guardrail should merge, not duplicate"
 
 
+# --- Pillars wiring: the close hook commits a guardrail (mock_mode → template, no live model) ------
+
+class TestPillarsWiring:
+    def _hub(self, tmp_path, **flags):
+        import eidos
+        cfg = _cfg(tmp_path)
+        cfg.pillars_memory_engram_enabled = True
+        cfg.pillars_memory_manager_enabled = True
+        cfg.pillars_strategy_memory_enabled = True
+        for k, v in flags.items():
+            setattr(cfg, k, v)
+        return eidos._Pillars(cfg), cfg
+
+    def test_distill_commits_a_strategy_engram(self, tmp_path):
+        hub, cfg = self._hub(tmp_path)
+        assert hub.manager is not None
+        assert hub._live_llm() is None                  # mock mode → template fallback, never a live call
+        hub._distill_strategy(_closure(success=False, outcome="released",
+                                       reason="6 tries, no progress"), tick=3)
+        strat = [e for e in LongTermStore(cfg).load() if e.kind == "strategy"]
+        assert len(strat) == 1
+        assert strat[0].stats.get("situation") == "obj7|scan the lan"
+        assert strat[0].stats.get("strategy") is True
+        assert strat[0].strength == strategy.STRATEGY_STRENGTH_LOSS   # a scar encodes strong
+
+    def test_noop_when_flag_off(self, tmp_path):
+        hub, cfg = self._hub(tmp_path, pillars_strategy_memory_enabled=False)
+        hub._distill_strategy(_closure(), tick=1)
+        assert not [e for e in LongTermStore(cfg).load() if e.kind == "strategy"]
+
+    def test_noop_when_manager_off(self, tmp_path):
+        import eidos
+        cfg = _cfg(tmp_path)
+        cfg.pillars_strategy_memory_enabled = True      # feature on, but the store is not
+        hub = eidos._Pillars(cfg)
+        assert hub.manager is None
+        hub._distill_strategy(_closure(), tick=1)        # must not raise, must not mint
+
+    def test_quest_close_hook_mints_a_guardrail(self, tmp_path):
+        hub, cfg = self._hub(tmp_path, pillars_quests_enabled=True)
+
+        class _Q:
+            directive = "Retest a scar: re-attempt a past failure"
+            id = "quest-42"
+            reward = {}
+            tier = 1
+        r = {"passed": False, "expired": True, "quest": _Q(),
+             "episode": {"key": "obj9|retest the scar", "tool": "quest",
+                         "success": False, "fail_kind": "stalled", "summary": "stalled out again"}}
+        hub._on_quest_closed(r, persona=None, tick=7)
+        strat = [e for e in LongTermStore(cfg).load() if e.kind == "strategy"]
+        assert len(strat) == 1, "a closed quest should mint exactly one guardrail"
+        assert "retest a scar" in strat[0].body.lower()          # trigger keywords carried for recall
+        assert strat[0].stats.get("situation") == "obj9|retest the scar"
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])

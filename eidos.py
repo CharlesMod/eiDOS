@@ -1306,6 +1306,27 @@ class _Pillars:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _distill_strategy(self, closure: dict, *, tick: int = 0) -> None:
+        """SOTA#3 strategy memory: distil a CLOSED quest/objective into a compact trigger→principle
+        GUARDRAIL engram, so the recall cascade surfaces it the next time the creature is in a
+        matching situation — each success becomes 'reuse this', each derailment becomes 'avoid this'.
+        Event-driven at close (ARCHITECTURE_PRINCIPLES #1). No-op unless the flag is on AND the memory
+        manager is live (a guardrail that can't be recalled isn't worth minting). Fail-open: a distiller
+        fault must never block close bookkeeping (I5). Reused by both the quest and objective close paths."""
+        if not getattr(self.config, "pillars_strategy_memory_enabled", False) or self.manager is None:
+            return
+        try:
+            import strategy as _strategy
+            body = _strategy.distill_strategy(closure, llm=self._live_llm())
+            if not body:
+                return
+            self.manager.encode("strategy", body, tick=tick, provenance="experienced",
+                                strength=_strategy.strength_for(closure),
+                                stats={"situation": str(closure.get("situation") or ""),
+                                       "strategy": True})
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pillars strategy distill failed: %s", e)
+
     def _on_quest_closed(self, r: dict, persona, *, tick: int = 0) -> None:
         """A quest closed (passed or expired): reset the digestion counter, write the settlement
         into the observation stream (the System pays ON-SCREEN — a lived turn, not bookkeeping),
@@ -1368,6 +1389,18 @@ class _Pillars:
                                        summary=str(ep.get("summary", "")), key=ep.get("key"))
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars quest episode record failed: %s", e)
+        # SOTA#3: distil this closed quest into a guardrail the recall cascade will surface next time
+        # (after the episode encode so the situation key is in hand). Own flag; fail-open inside.
+        if q is not None:
+            self._distill_strategy({
+                "title": str(getattr(q, "directive", "") or getattr(q, "id", "") or "a quest"),
+                "outcome": ("passed" if r.get("passed")
+                            else ("abandoned" if r.get("abandoned") else "expired")),
+                "reason": str((ep or {}).get("summary", "")),
+                "success": bool(r.get("passed")),
+                "situation": str((ep or {}).get("key") or ""),
+                "trajectory": str((ep or {}).get("summary", "")),
+            }, tick=tick)
         if self.news is not None and q is not None:
             try:
                 self.news.ingest(q, "quest")
