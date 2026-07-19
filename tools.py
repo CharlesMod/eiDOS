@@ -835,6 +835,10 @@ _FW_ABS_PATH = re.compile(r'(?:[A-Za-z]:[\\/]|\\\\)[^\s"\';|&)>]*')
 _FW_POSIX_ABS = re.compile(r"""(?:^|[\s"'(=,|&;:])(/[^\s"';|&)>]*)""")
 _FW_HOME = re.compile(r"""(?:^|[\s"'(=,|&;])~(?=/|\s|$)""")
 _FW_UP_TRAVERSAL = re.compile(r'(?<![.\w])\.\.(?![.\w])')
+# Env-var expansion to the OS home / a prior cwd is an escape hatch the literal path regexes above
+# can't see (they match `$HOME/…` as an ordinary relative token). The creature's burrow is
+# workspace/home, NOT the OS home, so ANY of these in creature mode reaches into the skeleton.
+_FW_ENV_ESCAPE = re.compile(r'\$\{?(?:HOME|OLDPWD|HOMEPATH|USERPROFILE|HOMEDRIVE)\b', re.IGNORECASE)
 
 
 def _creature_world_firewall(cmd: str, config: Config) -> Optional[str]:
@@ -856,6 +860,8 @@ def _creature_world_firewall(cmd: str, config: Config) -> Optional[str]:
         return ".."
     if _FW_HOME.search(cmd):
         return "~"
+    if _FW_ENV_ESCAPE.search(cmd):
+        return "$HOME"   # env-expansion to the OS home / prior cwd — outside the burrow (workspace/home)
     # Windows absolute paths (must resolve under the home root).
     for m in _FW_ABS_PATH.finditer(cmd):
         raw = m.group(0).rstrip("\\/.,;:)")
