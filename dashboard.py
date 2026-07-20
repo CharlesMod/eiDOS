@@ -641,6 +641,26 @@ def _bond_tier(score: float) -> int:
     return 0
 
 
+def _epoch_ts(value) -> float:
+    """Timestamp → epoch seconds, tolerating both stored forms.
+
+    selfedit.apply stamps applied_ts as ISO-8601 Z (human-readable manifest);
+    older code and tests use epoch floats. float() alone raised ValueError on
+    the ISO form, which the blanket except swallowed — so S5 bond credit never
+    fired for real applies. Returns 0.0 on anything unparseable.
+    """
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return calendar.timegm(time.strptime(str(value), "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return 0.0
+
+
 def _accrue_bond(config: Config, doc: dict) -> dict:
     """Monotonic ledger of shared work. Accrues from the poll-detectable signals
     (consume / listening minutes / self-edit-that-survived), each rarity-weighted
@@ -697,8 +717,9 @@ def _accrue_bond(config: Config, doc: dict) -> dict:
         before = len(seen)
         for m in selfedit.list_proposals(config, kind="self_edit"):
             mid = m.get("id")
+            applied_ts = _epoch_ts(m.get("applied_ts"))
             if (m.get("status") == "applied" and mid not in seen
-                    and m.get("applied_ts") and now - float(m["applied_ts"]) >= 1800):
+                    and applied_ts and now - applied_ts >= 1800):
                 credit("selfedits", 12)
                 counts["approvals"] += 1
                 seen.add(mid)
@@ -1173,6 +1194,13 @@ def _make_handler(config: Config):
                 self._respond(404, "text/plain", "not found")
 
         def do_POST(self):
+            # Drive-by CSRF fence first (zero-config): a cross-origin browser POST is
+            # refused outright — without this, any web page visited from a LAN browser
+            # could fire a no-cors POST at e.g. /api/control/reset (empty body defaults
+            # to a full rebirth wipe). Scripts/curl (no Origin header) are unaffected.
+            if not _origin_ok(self.headers):
+                self._respond(403, "application/json", '{"error":"cross-origin refused"}')
+                return
             # Uniform auth (phase 8.1): when a token is configured, EVERY state-changing POST
             # requires it — including /api/control/* (the kill-switch), /api/chat (the agent's
             # input channel), and /api/speech/* — which were previously ungated even with a
@@ -1435,6 +1463,25 @@ def _make_handler(config: Config):
 
 import threading as _threading
 _LIFECYCLE_LOCK = _threading.RLock()  # serialize privileged ops (checkpoint/restore/apply/restart)
+
+
+def _origin_ok(headers) -> bool:
+    """Drive-by CSRF fence for state-changing POSTs. A browser CROSS-origin POST always
+    carries an Origin header; when one is present it must match the Host we were addressed
+    as. Same-origin dashboard fetches match, curl/scripts (no Origin header) pass, and an
+    arbitrary web page open in a LAN browser firing a no-cors POST at /api/control/reset
+    is refused. 'null' Origin (sandboxed iframe, file://) is refused too."""
+    origin = (headers.get("Origin") or "").strip()
+    if not origin:
+        return True
+    if origin.lower() == "null":
+        return False
+    try:
+        from urllib.parse import urlparse
+        ohost = (urlparse(origin).netloc or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(ohost) and ohost == (headers.get("Host") or "").strip().lower()
 
 
 def _token_ok(headers, path, config) -> bool:
@@ -2022,6 +2069,16 @@ def _git_checkpoint_endpoint(config, label=""):
 def _git_restore_endpoint(config, tag=""):
     import git_safety
     with _LIFECYCLE_LOCK:
+        # Checkpoint BEFORE restoring: restore_to checks files out over the working
+        # tree, which would silently destroy any uncommitted operator edits. The
+        # pre-restore checkpoint makes the restore itself git-reversible.
+        # set_last_good=False — this tag captures the tree we're moving AWAY from;
+        # it must not become the next rollback floor.
+        try:
+            git_safety.make_checkpoint(config, f"pre-restore ({tag or 'last_good'})",
+                                       set_last_good=False)
+        except Exception:  # noqa: BLE001 — a failed checkpoint must not block recovery
+            logger.exception("pre-restore checkpoint failed; restoring anyway")
         res = git_safety.restore_to(config, tag)
         if res.get("ok"):
             pid = _restart_eidos_keep_armed(config, reason=f"git restore {res.get('tag','')}")
@@ -2318,6 +2375,16 @@ def _watchdog_loop(config):
                         lg = git_safety.read_last_good(config)
                         if lg:
                             with _LIFECYCLE_LOCK:
+                                # Checkpoint BEFORE checking last_good out over the tree:
+                                # an overnight crash loop must not destroy uncommitted
+                                # operator edits that happen to be sitting in the worktree.
+                                # set_last_good=False — this captures the CRASHING tree so
+                                # the rescue is reversible; it must not become the floor.
+                                try:
+                                    git_safety.make_checkpoint(config, "pre-auto-rollback",
+                                                               set_last_good=False)
+                                except Exception:  # noqa: BLE001 — never block recovery
+                                    _watchdog_event(config, "pre-rollback checkpoint failed")
                                 res = git_safety.restore_to(config, lg)
                             _watchdog_note(config,
                                 f"eiDOS crash-looped (5x/3min). Auto-restored last good checkpoint {lg} "
@@ -2364,8 +2431,15 @@ def _watchdog_loop(config):
             restarts.append(now)
             new_pid = _spawn_eidos(config)
             print(f"[watchdog] respawned eiDOS as pid {new_pid}")
-        except Exception:  # noqa: BLE001 — the watchdog must never die
-            pass
+        except Exception as e:  # noqa: BLE001 — the watchdog must never die
+            # ...but it must not fail INVISIBLY either: a persistent early exception
+            # would otherwise spin this loop hot with zero trace. Log + brief backoff.
+            logger.exception("watchdog loop error")
+            try:
+                _watchdog_event(config, f"watchdog loop error: {e}")
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(5)
 
 
 # --- GPU + LLM telemetry for the dashboard (nvidia-smi + metrics.jsonl tail) ---

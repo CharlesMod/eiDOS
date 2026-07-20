@@ -6,7 +6,37 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import dashboard
 from typed_boundary import DashboardPayloadError, validate_dashboard_post_payload
+
+
+class TestOriginFence(unittest.TestCase):
+    """_origin_ok: the drive-by CSRF fence on state-changing POSTs. A cross-origin browser
+    POST (any web page open on a LAN browser) must be refused; the dashboard's own
+    same-origin fetches and headerless scripts/curl must pass."""
+
+    def test_no_origin_header_passes(self):
+        self.assertTrue(dashboard._origin_ok({}))  # curl / scripts send no Origin
+
+    def test_same_origin_passes(self):
+        self.assertTrue(dashboard._origin_ok(
+            {"Origin": "http://sprinter:8099", "Host": "sprinter:8099"}))
+
+    def test_same_origin_case_insensitive(self):
+        self.assertTrue(dashboard._origin_ok(
+            {"Origin": "http://Sprinter:8099", "Host": "sprinter:8099"}))
+
+    def test_cross_origin_refused(self):
+        self.assertFalse(dashboard._origin_ok(
+            {"Origin": "http://evil.example", "Host": "sprinter:8099"}))
+
+    def test_null_origin_refused(self):
+        self.assertFalse(dashboard._origin_ok(
+            {"Origin": "null", "Host": "sprinter:8099"}))
+
+    def test_garbage_origin_refused(self):
+        self.assertFalse(dashboard._origin_ok(
+            {"Origin": "not a url", "Host": "sprinter:8099"}))
 
 
 class TestDashboardPostPayloads(unittest.TestCase):

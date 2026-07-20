@@ -933,6 +933,30 @@ body.wb-nocode #wb-code{display:none}
 </div>
 <div style="height:38px"></div>
 <script>
+// Dashboard auth token pass-through. When [dashboard] token is set in config, the server
+// 401s every POST without it — and this UI previously never SENT one, so enabling the
+// token bricked every button (the "placebo token" finding). Open the dashboard once as
+// http://host:8099/?token=YOURTOKEN and it persists in localStorage; every same-origin
+// fetch then carries the X-EiDOS-Token header. No token configured → no-op.
+(function(){
+  try{
+    const q=new URLSearchParams(location.search).get('token');
+    if(q) localStorage.setItem('eidos_token', q);
+    const tok=localStorage.getItem('eidos_token');
+    if(!tok) return;
+    const _fetch=window.fetch.bind(window);
+    window.fetch=function(url, opts){
+      opts=opts||{};
+      // Same-origin calls only: the voice/IDE services on other ports must not get a
+      // custom header (it would force a CORS preflight they don't answer).
+      const sameOrigin=(typeof url==='string') && !/^https?:\/\//i.test(url);
+      if(sameOrigin){
+        opts.headers=Object.assign({}, opts.headers, {'X-EiDOS-Token': tok});
+      }
+      return _fetch(url, opts);
+    };
+  }catch(e){/* auth pass-through must never break the dashboard */}
+})();
 async function nxCtl(action){
   document.getElementById('nx-msg').textContent=action+'…';
   try{const r=await fetch('/api/control/'+action,{method:'POST'});const d=await r.json();
