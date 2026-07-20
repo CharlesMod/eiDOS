@@ -154,6 +154,22 @@ class Adenosine:
     # leveled mid-process kept its old nap rhythm until the next respawn.
     CEILING_REFRESH_S = 60.0
 
+    # Persistence (sleep economics): adenosine used to live only in RAM, so every process restart
+    # reset level_hours to 0 — a 30 s crash-respawn "rested" the body exactly like a full night, and
+    # the sleep-gated growth loop (dream distillation, quest cadence, level-ups, all gated on N naps)
+    # starved (1 nap in 9 awake-hours observed live). We persist level_hours + a wall-clock stamp on
+    # every mutation and, on boot, credit REAL elapsed downtime as REST — so a genuine overnight gap
+    # rests the body and a crash-respawn does not. (A bugfix to the existing accumulator, not a new
+    # gated feature — it runs wherever the accumulator does, and fails open to the fresh 0.0.)
+    STATE_NAME = "adenosine.json"
+    # Declared knob: how much accumulated wake time (hours) one hour of DOWNTIME clears — the body's
+    # off-line resting rate. Sleep clears adenosine wholesale (clear()), so downtime — the creature
+    # genuinely off, not merely idle — should rest at least as fast as it accrued. At 2.5 a ~7 h
+    # ceiling fully clears in <3 h and a 10 h overnight gap rests the body completely (as a night's
+    # sleep would), while a 30 s crash-respawn clears 30/3600 × 2.5 ≈ 0.02 h of wake — a rounding
+    # error against an hours-scale ceiling, so a respawn does NOT meaningfully reset sleep pressure.
+    REST_HOURS_PER_DOWN_HOUR = 2.5
+
     def __init__(self, *, max_wake_hours: float = 18.0, config=None):
         # A zero/negative ceiling would mean "never allowed awake"; guard so pressure stays finite.
         ceiling = float(max_wake_hours) if max_wake_hours and max_wake_hours > 0 else 18.0
@@ -166,6 +182,64 @@ class Adenosine:
         # product ≤ the adult (scale 1.0) gene-scaled ceiling: adenosine stays sovereign.
         self.max_wake_hours = ceiling * _stage_scale(config) * _wake_budget_gene(config)
         self.level_hours = 0.0          # accumulated wake time since the last sleep, in hours
+        # Reload persisted pressure and credit any real downtime as rest. Fails open to the fresh
+        # 0.0 above — a missing/corrupt state file must never break construction.
+        self._reload()
+
+    # --- persistence (sleep economics: pressure survives restarts) --------------------------------
+    def _state_path(self):
+        """The state file, under config.state_dir (workspace/state/). None if there is no usable
+        config — callers then keep the pure in-memory behaviour (persistence simply off)."""
+        cfg = self._config
+        if cfg is None:
+            return None
+        try:
+            return cfg.state_dir / self.STATE_NAME
+        except Exception:  # noqa: BLE001 - a config without state_dir just means no persistence
+            return None
+
+    def _reload(self) -> None:
+        """Boot-time restore: read the persisted wake pressure, then credit REAL elapsed downtime
+        as rest. A short crash-respawn leaves pressure ~unchanged (the bug being fixed); a long
+        overnight gap rests the body as sleep would. Any failure → fresh default (level_hours=0).
+        Backward clock (saved_at in the future) → no rest, no crash: pressure is kept as saved."""
+        p = self._state_path()
+        if p is None:
+            return
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            level = float(data.get("level_hours", 0.0))
+            saved_at = float(data.get("saved_at", 0.0))
+        except FileNotFoundError:
+            return                                      # fresh creature / first boot — 0.0 stands
+        except Exception:  # noqa: BLE001 - corrupt/partial file: fail open to the fresh default
+            return
+        if not (level >= 0.0):                          # NaN / negative → distrust the file entirely
+            return
+        self.level_hours = level
+        # Credit downtime as rest. time.time() is wall-clock (survives the process); monotonic can't
+        # measure a gap ACROSS restarts. A negative gap (system clock moved backward) rests nothing.
+        down_s = time.time() - saved_at
+        if saved_at > 0.0 and down_s > 0.0:
+            rest = (down_s / 3600.0) * self.REST_HOURS_PER_DOWN_HOUR
+            self.level_hours = max(0.0, self.level_hours - rest)
+
+    def _persist(self) -> None:
+        """Write level_hours + a wall-clock stamp, atomically, best-effort. Called on every
+        mutation (per tick) — a tiny JSON write via the same temp+atomic-replace pattern the rest
+        of state_dir uses (quest_cadence.json). A persist failure must never break the tick."""
+        p = self._state_path()
+        if p is None:
+            return
+        try:
+            from atomicio import replace_with_retry
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"level_hours": float(self.level_hours),
+                                       "saved_at": time.time()}), encoding="utf-8")
+            replace_with_retry(tmp, p)
+        except Exception:  # noqa: BLE001 - persistence is best-effort; the tick outranks it
+            pass
 
     def _refresh_ceiling(self) -> None:
         """Re-derive the stage-scaled ceiling when the memo has aged out — a creature that
@@ -184,11 +258,13 @@ class Adenosine:
         d = float(dt_hours)
         if d > 0:
             self.level_hours += d
+            self._persist()     # per-tick wake accounting: pressure must survive a restart
         return self.level_hours
 
     def clear(self) -> None:
         """Sleep clears the accumulated metabolite — the creature wakes rested."""
         self.level_hours = 0.0
+        self._persist()         # persist the wake/sleep boundary so a restart doesn't un-rest us
 
     def pressure(self) -> float:
         """Sleep pressure as a fraction of the wake ceiling, clamped to [0, 1]. 1.0 = saturated."""
