@@ -91,11 +91,17 @@ def is_git_repo(config: Config) -> bool:
     return _run_git(config, "rev-parse", "--is-inside-work-tree").get("out") == "true"
 
 
-def make_checkpoint(config: Config, label: str = "") -> dict:
+def make_checkpoint(config: Config, label: str = "", *, set_last_good: bool = True) -> dict:
     """Commit the current SOURCE state (workspace/ excluded) and tag it as a good point.
 
-    Captures all tracked source so a later restore returns the tree to here. Returns
-    {ok, tag, sha, message}. Best-effort: an empty commit (nothing changed) still tags HEAD.
+    Captures all tracked source so a later restore returns the tree to here (files ADDED
+    since the tag survive a restore — restore_to never deletes). Returns {ok, tag, sha,
+    message}. Best-effort: an empty commit (nothing changed) still tags HEAD.
+
+    set_last_good=False tags WITHOUT moving the last_good rollback floor — for the
+    pre-restore rescue checkpoints, which capture a possibly-BAD tree purely so the
+    restore itself is reversible. Pointing last_good at that tree would make the next
+    crash-loop rollback restore the very code that was crashing.
     """
     if not getattr(config, "git_safety_enabled", True):
         return {"ok": False, "error": "git safety disabled"}
@@ -122,7 +128,8 @@ def make_checkpoint(config: Config, label: str = "") -> dict:
     t = _run_git(config, "tag", tag)
     if not t["ok"]:
         return {"ok": False, "error": f"tag failed: {t['err']}"}
-    _write_last_good(config, tag)
+    if set_last_good:
+        _write_last_good(config, tag)
     prune_checkpoints(config, keep=int(getattr(config, "git_checkpoint_keep", 30)))
     return {"ok": True, "tag": tag, "sha": current_sha(config), "message": msg}
 
