@@ -199,6 +199,23 @@ class TestSingleWriterConsolidator:
         con.commit(_engram(body="the router password rotates every friday morning"))
         assert len(LongTermStore(cfg)) == 2                   # pattern separation — not merged
 
+    def test_contained_short_body_is_not_swallowed(self, tmp_path):
+        # Subset-swallow regression: the overlap coefficient scores ANY token-subset 1.0, so a
+        # short distinct engram whose tokens all appear inside a longer one merged — and _fold's
+        # keeper-wins policy DISCARDED its body (silent information loss). The Jaccard scope
+        # guard must keep them separate.
+        cfg = _cfg(tmp_path)
+        con = Consolidator(cfg)
+        long = con.commit(_engram(
+            body="quest skill library governance board needs the water heater moved from the "
+                 "garage before the inspection deadline friday"))
+        short = con.commit(_engram(body="the water heater moved from the garage"))
+        store = LongTermStore(cfg)
+        assert len(store) == 2                                # NOT swallowed by the container
+        assert store.get(short.id) is not None                # the short body survived intact
+        assert store.get(short.id).body == "the water heater moved from the garage"
+        assert store.get(long.id) is not None
+
     def test_commit_many_matches_n_commits(self, tmp_path):
         # The bulk path (used by the boot importer) must produce the SAME store as N single commits —
         # identical pattern-separation dedup — but with ONE store rewrite instead of O(n) per record

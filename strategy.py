@@ -143,10 +143,11 @@ def _template(closure: dict) -> dict:
     capture something useful (mirrors SettlementLessonsJob's no-LLM distillation).
 
     The TITLE leads and the generic advice is kept SHORT on purpose: the store's Consolidator folds
-    same-kind engrams whose bodies overlap >= 0.85 (engram.py), so a long fixed principle string would
-    dominate the token set and make two GENUINELY-DISTINCT deaths collide into one (losing the second's
-    trigger + situation key on the fold). A lean, title-led body keeps distinct goals distinct while
-    still letting genuinely-similar goals merge — which is the correct behaviour."""
+    same-kind engrams whose bodies overlap >= 0.85 (engram.py; plus a Jaccard scope guard), so a
+    long fixed principle string would dominate the token set and make two GENUINELY-DISTINCT deaths
+    collide into one (losing the second's trigger + situation key on the fold). A lean, title-led
+    body keeps distinct goals distinct while still letting genuinely-similar goals merge — which is
+    the correct behaviour."""
     title = (closure.get("title") or "a goal").strip()
     reason = (closure.get("reason") or "").strip()
     outcome = (closure.get("outcome") or "closed").strip().lower()

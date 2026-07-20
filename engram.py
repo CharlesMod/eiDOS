@@ -62,6 +62,16 @@ LONGTERM_MERGE_THRESHOLD = 0.85  # declared: on commit, an incoming engram whose
                                 # stays distinct; near-restatements do not bloat the store). Set just
                                 # above knowledge.store_entry's 0.65 dedup floor because long-term is
                                 # the CONSOLIDATED tier — only a near-identical restatement merges.
+LONGTERM_MERGE_SCOPE_GUARD = 0.6  # declared: SECOND merge condition, token-Jaccard. The overlap
+                                # coefficient alone scores ANY token-subset 1.0, so a short new
+                                # engram contained in an older longer one merged and its body was
+                                # DISCARDED (_fold keeps the keeper's body) — silent information
+                                # loss, the same subset bias knowledge.text_overlap's docstring
+                                # warns about. Requiring Jaccard ≥ 0.6 blocks the merge when the
+                                # two bodies' scopes diverge (a body <~60% the size of its
+                                # container no longer counts as a restatement of it), while
+                                # equal-size pairs at the 0.85 overlap bar measure ~0.74 Jaccard
+                                # and merge exactly as before — existing calibration preserved.
 STRENGTH_DEFAULT = 0.5          # declared: a newly-encoded engram starts at neutral usefulness — it
                                 # has neither earned recall nor been shown useless; the bet ledger
                                 # (2.3) moves it from here.
@@ -258,15 +268,38 @@ class Engram:
             return False
 
 
+def _toks(s: str) -> set:
+    return {t for t in s.lower().split() if len(t) >= 3}
+
+
 def _overlap(a: str, b: str) -> float:
-    """Content-token overlap coefficient in [0, 1] — the same cheap, embedding-free similarity the
-    knowledge store uses for dedup (knowledge.most_similar). Consolidator merge policy keys on it so
-    a near-restatement of an existing long-term engram merges rather than bloating the store."""
-    ta = {t for t in a.lower().split() if len(t) >= 3}
-    tb = {t for t in b.lower().split() if len(t) >= 3}
+    """Content-token overlap COEFFICIENT in [0, 1] (|A∩B| / min) — containment-style similarity,
+    used only for RECALL ranking, where a short query fully inside a long body scoring high is the
+    desired behaviour. NOT the knowledge store's tokenizer (no stopword/punctuation handling) and
+    NOT the merge metric — subset bias makes it wrong for 'same memory?' (see _jaccard)."""
+    ta, tb = _toks(a), _toks(b)
     if not ta or not tb:
         return 0.0
     return len(ta & tb) / min(len(ta), len(tb))
+
+
+def _jaccard(a: str, b: str) -> float:
+    """Symmetric token Jaccard (|A∩B| / |A∪B|) — the Consolidator's merge SCOPE GUARD. Penalises
+    divergent scope, so a short engram contained in a longer distinct one no longer scores 1.0
+    and gets silently swallowed (its body discarded by _fold's keeper-wins policy)."""
+    ta, tb = _toks(a), _toks(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def _merges(a: str, b: str, threshold: float) -> bool:
+    """The merge decision: near-restatement (overlap ≥ threshold, the calibrated bar) AND
+    comparable scope (Jaccard ≥ SCOPE_GUARD, the subset-swallow fence). See the two knob
+    comments — the compound rule keeps the historical merge behaviour for same-size bodies
+    while refusing to fold a short distinct memory into a longer container."""
+    return (_overlap(a, b) >= threshold
+            and _jaccard(a, b) >= LONGTERM_MERGE_SCOPE_GUARD)
 
 
 # ============================================================================================
@@ -621,7 +654,7 @@ class Consolidator:
         engram.validate()
         existing = self.store.load()
         for e in existing:
-            if e.kind == engram.kind and _overlap(engram.body, e.body) >= self.merge_threshold:
+            if e.kind == engram.kind and _merges(engram.body, e.body, self.merge_threshold):
                 return self.merge(e, engram)
         _commit_to_store(self.store, existing + [engram])
         return engram
@@ -679,7 +712,7 @@ class Consolidator:
         for eg in engrams:
             eg.validate()
             keeper = next((e for e in by_kind.get(eg.kind, [])
-                           if _overlap(eg.body, e.body) >= self.merge_threshold), None)
+                           if _merges(eg.body, e.body, self.merge_threshold)), None)
             if keeper is not None:
                 self._fold(keeper, eg)                    # in-memory merge; no persist yet
             else:
