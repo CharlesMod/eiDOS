@@ -415,6 +415,20 @@ class Config:
     pillars_mastery_gates_enabled: bool = False        # 4.3 levels = glue-checked mastery evidence (trusted skills/calibration/reuse/sleep cycles), XP just the progress bar (level_gates.py)
     pillars_min_sleeps_per_level: int = 3              # declared: mandatory digestion between levels (spacing effect as a hard floor; early levels take days by design)
     pillars_portfolio_gates_enabled: bool = False      # 4.3b mastery PORTFOLIO: crossing = K fresh novelty-weighted adjudicated evidence items from >=M classes + floors; XP pays on adjudicated events only (mastery.py; requires mastery_gates_enabled)
+
+    # WISDOM_PLAN — lived experience as pre-done thinking. ALL flag-dark (WIS7); declared knobs per §W.
+    wisdom_reflexes_enabled: bool = False       # §1 crystallization ladder's reflex rung (reflexes.py)
+    wisdom_reflex_saves_tick: bool = False      # §1 a fired reflex SKIPS the LLM call (conservative soak: off = model still runs, reflex result in-stream)
+    wisdom_reflex_auto_arm: bool = False        # §1 arm proposals without the operator gate (earned later; default = propose/approve)
+    wisdom_reflex_promote_successes: int = 5    # §1 consecutive adjudicated same-situation successes before a reflex is PROPOSED
+    wisdom_reflex_max_armed: int = 12           # §1 bound on armed reflexes (WIS8)
+    wisdom_replay_enabled: bool = False         # §2 counterfactual replay during sleep (replay.py; WIS4: never executes)
+    wisdom_replay_batch: int = 4                # §2 replayed episodes per sleep (bounded LLM spend off the wake path)
+    wisdom_recall_enabled: bool = False         # §3 the decision-shaped "## Before you act" block (calling convention)
+    wisdom_recall_min_sim: float = 0.55         # §3 platform gate: best-match similarity floor below which wisdom stays silent (WIS5)
+    wisdom_block_max_chars: int = 700           # §3 block budget (700 @16k; raise to 1400 with the §0 32k flip)
+    wisdom_curation_enabled: bool = False       # §5 utility-grounded decay in the sleep engine's prune
+    wisdom_curation_grace_sleeps: int = 10      # §5 sleeps of empty/negative utility before accelerated decay
     pillars_administrator_enabled: bool = False        # 5.2 the System-LLM behind the voice: dossier → grammar-constrained quest/weakness proposals, event-driven check-ins (administrator.py)
     pillars_administrator_autonomy: str = "earned"     # 5.2 quest auto-issue: "earned" = the graduated ladder (≥80% approval over ≥5 decisions/tier); "full" = a STANDING operator grant — every valid, leak-free proposal auto-issues (revoke stays the ban-hammer; locked-tool leaks still pend)
     # Phase 6/7 — the capability extensions (NOT biomimetic): shadows & generals
@@ -844,6 +858,20 @@ def load_config(path: str = "config.toml") -> Config:
         # real bool; bool() is a defensive no-op that also tolerates a stray truthy/falsy value.
         world = data.get("world", {})
         config.world_enabled = bool(world.get("enabled", config.world_enabled))
+
+        wisdom = data.get("wisdom", {})
+        config.wisdom_reflexes_enabled = bool(wisdom.get("reflexes_enabled", config.wisdom_reflexes_enabled))
+        config.wisdom_reflex_saves_tick = bool(wisdom.get("reflex_saves_tick", config.wisdom_reflex_saves_tick))
+        config.wisdom_reflex_auto_arm = bool(wisdom.get("reflex_auto_arm", config.wisdom_reflex_auto_arm))
+        config.wisdom_reflex_promote_successes = int(wisdom.get("reflex_promote_successes", config.wisdom_reflex_promote_successes))
+        config.wisdom_reflex_max_armed = int(wisdom.get("reflex_max_armed", config.wisdom_reflex_max_armed))
+        config.wisdom_replay_enabled = bool(wisdom.get("replay_enabled", config.wisdom_replay_enabled))
+        config.wisdom_replay_batch = int(wisdom.get("replay_batch", config.wisdom_replay_batch))
+        config.wisdom_recall_enabled = bool(wisdom.get("recall_enabled", config.wisdom_recall_enabled))
+        config.wisdom_recall_min_sim = float(wisdom.get("recall_min_sim", config.wisdom_recall_min_sim))
+        config.wisdom_block_max_chars = int(wisdom.get("block_max_chars", config.wisdom_block_max_chars))
+        config.wisdom_curation_enabled = bool(wisdom.get("curation_enabled", config.wisdom_curation_enabled))
+        config.wisdom_curation_grace_sleeps = int(wisdom.get("curation_grace_sleeps", config.wisdom_curation_grace_sleeps))
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

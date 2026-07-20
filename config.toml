@@ -306,6 +306,22 @@ max_generals = 5                  # DERIVED (0.5 spike): empirical 8-slot ceilin
 # on the host, then flip to true. Off = byte-identical (no context block, no `go`, no writes).
 enabled = false
 
+[wisdom]
+# WISDOM_PLAN — lived experience as pre-done thinking. ALL flag-dark (WIS7): each stream lands
+# inert and flips independently after soak. Declared knobs; see WISDOM_PLAN.md §W for invariants.
+reflexes_enabled = false          # §1 the reflex rung: platform-executed trigger→action, no model call
+reflex_saves_tick = false         # §1 fired reflex SKIPS the LLM (leave false for the soak: model still runs)
+reflex_auto_arm = false           # §1 arm without the operator gate — earned later, never default
+reflex_promote_successes = 5      # §1 consecutive adjudicated successes before a reflex is proposed
+reflex_max_armed = 12             # §1 armed-reflex bound (WIS8)
+replay_enabled = false            # §2 counterfactual replay during sleep (never executes — WIS4)
+replay_batch = 4                  # §2 replayed episodes per sleep (bounded off-wake LLM spend)
+recall_enabled = false            # §3 the decision-shaped "## Before you act" block
+recall_min_sim = 0.55             # §3 similarity floor below which wisdom stays silent (WIS5)
+block_max_chars = 700             # §3 block budget (raise to 1400 with the 32k window flip, §0)
+curation_enabled = false          # §5 utility-grounded decay in the sleep prune
+curation_grace_sleeps = 10        # §5 grace before empty-utility memories decay faster
+
 [paths]
 # Relative paths anchor at the repo root (resolved in config.py), so this is portable across machines
 # and OSes. Use an absolute path or "~/..." only to put the mind's memory somewhere else.
