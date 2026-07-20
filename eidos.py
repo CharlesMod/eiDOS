@@ -1767,6 +1767,135 @@ class _Pillars:
             logger.warning("pillars administrator check-in failed: %s", e)
 
 
+def _reflex_stats(config, persona) -> dict:
+    """The typed stats dict a reflex GUARD is checked against (WIS1 — the SAME Criterion vocabulary
+    quest criteria use). A lean, self-contained build so the reflex path never depends on the
+    pillars hub existing: persona counters plus the same glue-settled facts _quest_stats reads
+    (skills manifest, quest passes, commission confirms). Fail-open per source — an absent stat is
+    zero, which no >=1 criterion can mistake for evidence."""
+    stats: dict = {"persona": dict(persona or {})}
+    try:
+        import skills as _skills
+        ents = (_skills._load_manifest(config).get("skills") or {}).values()
+        live = [e for e in ents if e.get("status") in _skills._LIVE_STATUSES]
+        stats["skills"] = {"live_count": len(live),
+                           "trusted_count": sum(1 for e in live if e.get("status") == "trusted")}
+    except Exception:  # noqa: BLE001
+        stats["skills"] = {"live_count": 0, "trusted_count": 0}
+    try:
+        import quests as _quests
+        stats["quests"] = {"passed": _quests.QuestStore(config).passed_count()}
+    except Exception:  # noqa: BLE001
+        stats["quests"] = {"passed": 0}
+    try:
+        from commission import Commission as _Commission
+        _tasks = _Commission(config).load()
+        stats["commission"] = {"confirmed_total": sum(1 for t in _tasks if t.state == "confirmed"),
+                               "open": sum(1 for t in _tasks if t.state == "open")}
+    except Exception:  # noqa: BLE001
+        stats["commission"] = {"confirmed_total": 0, "open": 0}
+    return stats
+
+
+def _maybe_fire_reflex(config, persona, tick_number: int) -> bool:
+    """The reflex execution hook (WISDOM_PLAN §1). Returns True IFF a reflex fired AND
+    wisdom_reflex_saves_tick is on (the caller then ends the tick — the LLM is skipped). Returns
+    False in every other case (flag off, no match, soak mode, or any error) — the normal tick then
+    runs. Fully inert unless wisdom_reflexes_enabled (WIS7); wrapped so a reflex fault NEVER breaks
+    the tick (I5)."""
+    if not getattr(config, "wisdom_reflexes_enabled", False):
+        return False
+    try:
+        import reflexes as _rfx
+        import episodes as _ep
+        situation = _ep.situation_key(config)
+        if not situation:
+            _rfx.record_tick_outcome(config, handled_by_reflex=False)
+            return False
+        stats = _reflex_stats(config, persona)
+        reflex = _rfx.match(config, situation, stats)
+        if reflex is None:
+            # No armed reflex answers this situation — the model handles the tick (not below-model).
+            _rfx.reset_consecutive(config)
+            _rfx.record_tick_outcome(config, handled_by_reflex=False)
+            return False
+
+        rid = reflex.get("id", "")
+        # Rabbit-hole bound (mirrors the loop detector's spirit): a reflex that has fired this many
+        # times in a row without the situation changing is disarmed — crystallized wisdom must not
+        # loop any more than the model may. reset_consecutive below zeroes every OTHER reflex, so
+        # this counter tracks an uninterrupted run of THIS reflex only.
+        loop_bound = int(getattr(config, "wisdom_reflex_loop_bound", 3) or 3)
+        if _rfx.consecutive_fires(config, rid) >= loop_bound:
+            _rfx.demote(config, rid, tick=tick_number, reason="loop_bound")
+            append_observation(config, {
+                "tick": tick_number, "tool": "reflex", "success": False, "fail_kind": "blocked",
+                "output": (f"[REFLEX] {rid} disarmed: fired {loop_bound}x in the same situation "
+                           f"without change (rabbit-hole bound) — situation unresolved, "
+                           f"handing back to the mind."),
+            })
+            _rfx.reset_consecutive(config)
+            _rfx.record_tick_outcome(config, handled_by_reflex=False)
+            return False
+
+        _rfx.reset_consecutive(config, except_id=rid)   # only THIS reflex's run may accumulate
+
+        action = reflex.get("action") or {}
+        tool = action.get("tool") or ""
+        args = action.get("args") or {}
+        expected_sig = str(action.get("sig") or tool)
+        from parser import ToolCall
+        result = execute_tool(ToolCall(tool=tool, args=args, raw=""), config)
+
+        # WIS2: record the AUTOMATED outcome to the SAME episodic ledger the model's ticks feed —
+        # but marked `automated: true`, and WITHOUT any economy feed. This branch simply does not
+        # call record_tick (XP/streaks), pillars.after_outcome (bets/mastery/learning/quests/tier/
+        # level), or the reward learner — they only run on the model's own tick path below. The
+        # episode's automated flag makes the promotion scanner EXCLUDE it, so a reflex can never
+        # count its own firings toward its own re-promotion.
+        summary = _ep.clean_fragment(result.output or "", _ep.SUMMARY_CHARS)
+        _rfx.record_automated_episode(config, tick=tick_number, situation_key=situation,
+                                      tool=tool, sig=expected_sig, fail_kind=result.fail_kind,
+                                      success=result.success, summary=summary)
+
+        _rfx.record_fire(config, rid, success=result.success, tick=tick_number)
+
+        # WIS3: render the firing AS a reflex — visible to creature and operator.
+        status = "handled" if result.success else "FAILED"
+        append_observation(config, {
+            "tick": tick_number, "tool": "reflex", "success": result.success,
+            "fail_kind": result.fail_kind,
+            "output": (f"[REFLEX] {status} `{situation}` via `{tool}` "
+                       f"(automated, no economy){'' if result.success else ' — demoting'}\n"
+                       f"{summary}"),
+        })
+
+        # WIS3: a reflex whose action FAILS adjudication demotes immediately — disarmed + scarred
+        # as an error engram. Crystallized wisdom that stops working stops firing.
+        if not result.success:
+            _rfx.demote(config, rid, tick=tick_number, reason=result.fail_kind or "failure")
+            try:
+                import knowledge as _kn
+                _kn.store_entry(config,
+                                content=(f"Reflex {rid} stopped working in situation '{situation}': "
+                                         f"`{tool}` failed ({result.fail_kind or 'failure'}). "
+                                         f"Disarmed; re-earns arming only after fresh successes."),
+                                tags=["reflex", "demoted"], category="errors",
+                                confidence="verified", source_tick=tick_number)
+            except Exception:  # noqa: BLE001 - the scar is best-effort; the demotion stands
+                pass
+
+        # This tick WAS handled below the model — count it toward the below-model fraction (§1).
+        _rfx.record_tick_outcome(config, handled_by_reflex=True)
+
+        # reflex_saves_tick decides whether the LLM is skipped. In soak mode (off) the reflex result
+        # is now in-stream and the normal tick proceeds (returns False → caller runs the model).
+        return bool(getattr(config, "wisdom_reflex_saves_tick", False))
+    except Exception as e:  # noqa: BLE001 - a reflex fault must never break the tick (I5)
+        logger.warning("reflex hook failed: %s", e)
+        return False
+
+
 def run_loop(config: Config, persona=None, wal=None):
     """Main tick loop with compaction."""
     global _shutdown_requested
@@ -2331,6 +2460,29 @@ def run_loop(config: Config, persona=None, wal=None):
         except Exception as e:  # noqa: BLE001
             logger.warning("async result delivery failed: %s", e)
 
+        # --- Reflex rung (WISDOM_PLAN §1): compile thinking BELOW the model. BEFORE context
+        #     assembly, match ARMED reflexes against the CURRENT typed situation; on a guard-true
+        #     match, execute the action through execute_tool (the one chokepoint), record the
+        #     outcome marked `"automated": true` (WIS2 — pays NO economy: no record_tick XP, no
+        #     pillars.after_outcome bets/mastery/learning, no reward learner — this branch simply
+        #     does not call them), render "[REFLEX]" into the stream (WIS3). When reflex_saves_tick
+        #     is on, the LLM call is skipped entirely this tick; else (the conservative soak) the
+        #     reflex result rides in-stream and the normal tick runs. Flag-dark: pillars-independent,
+        #     fully inert unless wisdom_reflexes_enabled (WIS7). ---
+        reflex_saved_tick = _maybe_fire_reflex(config, persona, tick_number)
+        if reflex_saved_tick:
+            # A reflex handled this tick and reflex_saves_tick is on — end the tick here, the same
+            # bounded tail the LLM-error early-continue uses (increment, WAL, interruptible sleep).
+            # No LLM ran, so no economy feed runs: WIS2 holds by construction.
+            tick_number += 1
+            ticks_since_compaction += 1
+            write_wal(config, tick_number, ticks_since_compaction,
+                      goal_start_time, consecutive_failures,
+                      reasoning_exhaustions, current_max_tokens,
+                      last_progress_tick)
+            _interruptible_sleep(config)
+            continue
+
         # --- Assemble context ---
         # `tension` is now the ACTIVE objective's frustration (the gate's per-objective counter),
         # falling back to the legacy global stall count if the backlog isn't available.
@@ -2890,6 +3042,30 @@ def run_loop(config: Config, persona=None, wal=None):
                                    summary=tick_summary, key=tick_situation or None)
             except Exception as _ee:  # noqa: BLE001 - episodic recording is best-effort
                 logger.warning("episode record failed: %s", _ee)
+
+        # --- Reflex promotion scan (WISDOM_PLAN §1): with this tick's episode now in the ledger,
+        #     scan for a (situation, action) run that has reached the promotion threshold and write
+        #     a PROPOSED reflex (armed only when wisdom_reflex_auto_arm). WIS1: the scanner reads the
+        #     adjudicated episodic ledger and EXCLUDES automated rows, so a reflex can't self-promote.
+        #     Flag-dark (WIS7): no-op unless wisdom_reflexes_enabled. ---
+        if getattr(config, "wisdom_reflexes_enabled", False):
+            try:
+                import reflexes as _rfx
+                promoted = _rfx.scan_promotions(
+                    config,
+                    promote_at=int(getattr(config, "wisdom_reflex_promote_successes", 5) or 5),
+                    auto_arm=bool(getattr(config, "wisdom_reflex_auto_arm", False)))
+                if promoted:
+                    _armed = getattr(config, "wisdom_reflex_auto_arm", False)
+                    append_observation(config, {
+                        "tick": tick_number, "tool": "reflex", "success": True,
+                        "output": (f"[REFLEX] {len(promoted)} reflex(es) "
+                                   f"{'armed' if _armed else 'proposed'} from a clean success "
+                                   f"streak: {', '.join(promoted[:4])}"
+                                   f"{'' if _armed else ' — awaiting operator arm'}"),
+                    })
+            except Exception as _re:  # noqa: BLE001 - promotion is best-effort; never break the tick
+                logger.warning("reflex promotion scan failed: %s", _re)
 
         # --- Action Gate: update the active objective's frustration from this tick's outcome (+ strain
         #     bump), and ROTATE focus deterministically if it has stalled/parked/finished. This is the
