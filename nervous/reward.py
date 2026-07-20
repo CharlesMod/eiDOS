@@ -40,6 +40,27 @@ W_VALENCE = 0.15     # mood valence (neuromod affect)
 W_STRAIN = 0.15      # frustration / rumination penalty
 STRAIN_NORM = 3.0    # strain bump that counts as "fully strained"
 
+# --- Habituation / novelty pressure (SOTA#1 direction: repetition must not pay full price forever) ---
+# The freebies above (riskless names, result-novelty) zero a WHOLE class of no-ops, but they do not
+# touch a genuine tool call whose success channel keeps paying full every time the SAME action-shape
+# hits the SAME target — `cat garden.txt` #500 booked the same +W_SUCCESS as #1, so rehearsal stayed
+# as rewarding as exploration. Habituation is the missing pressure: the success contribution of an
+# (action-signature, target) pair DECAYS toward a floor with each fresh repeat, and the count RECOVERS
+# toward zero over wall-clock time (dishabituation — a long-unseen action feels novel again). A brand-
+# new signature or target always pays full, so exploring new shapes/targets out-competes rehearsal by
+# construction — no line here names "explore" or checks for a "garden"; it is pure generic pressure.
+# All DECLARED knobs (PILLARS_PLAN §0.4), each with a one-line justification:
+HABIT_FLOOR = 0.30           # a saturated repeat still pays this FRACTION of W_SUCCESS (never 0 — the
+                             # action still works; we only strip the novelty premium, not the outcome)
+HABIT_DECAY_PER_REP = 0.55   # geometric factor per effective repeat: scale = floor + (1-floor)·d^reps.
+                             # 0.55 → ~2 reps to reach the half-way point, ~6 to approach the floor:
+                             # fast enough to break a tight loop, slow enough a couple retries pay well
+HABIT_RECOVERY_S = 1800.0    # wall-clock seconds to shed ONE repeat of accumulated habituation (30 min):
+                             # a target untouched for this long feels one step newer again (event-free,
+                             # computed lazily from elapsed time at next touch — no polling timer)
+HABIT_MAX_PAIRS = 4000       # bounded persisted state: evict the least-recent pairs past this (like the
+                             # value cache) so the file can't grow without limit over a long life
+
 # The success channel is a reward-PREDICTION-ERROR signal (Schultz/RPE, this module's own doctrine):
 # it should fire only when the outcome was genuinely IN DOUBT. A structurally-riskless action — one
 # whose success the tick hardcodes True because it has no failure mode (a bare thought, a chat reply)
@@ -81,6 +102,109 @@ def _action_tool(action) -> str:
     return m.group(0) if m else ""
 
 
+# A raw action label reaching this module carries the tool call VERBATIM — for a `write_file` that is
+# the whole content payload (`write_file {"content": "The Nursery: From Seed to Sprout...", ...}`). A
+# lesson distilled from that label would embed and then COACH that exact content string back into the
+# head ("write_file '<the fiction>' tends to go well — lean into it"), which is how the loop taught
+# itself its own self-referential fiction. The learning layer must generalize over ACTION SHAPE only:
+# the tool plus the SIGNATURE of its arguments (which keys, of which kind), never any content value.
+# So the value key, every distilled lesson/habit, and the habituation counter below all key on the
+# shape returned here — a small write_file may be a good habit; a specific STRING never is.
+def _summarize_json_arg(val) -> str:
+    """A CONTENT-FREE description of one argument value: its shape/kind, never its text. A string is
+    reported only by a coarse length bucket ('str:s|m|l'), a number as 'num', containers by size —
+    so `{"content": "The Nursery..."}` and `{"content": "grocery list"}` share a signature but no
+    payload ever leaks into it."""
+    if isinstance(val, bool):
+        return "bool"
+    if isinstance(val, (int, float)):
+        return "num"
+    if isinstance(val, str):
+        n = len(val)
+        bucket = "s" if n <= 24 else ("m" if n <= 200 else "l")
+        return f"str:{bucket}"
+    if isinstance(val, (list, tuple)):
+        return f"list[{len(val)}]"
+    if isinstance(val, dict):
+        return "obj{" + ",".join(sorted(str(k) for k in val)) + "}"
+    if val is None:
+        return "null"
+    return "val"
+
+
+def action_signature(action) -> str:
+    """Reduce an action label to its ACTION SHAPE — tool + argument signature — stripping every content
+    value. This is what the value cache keys on and what lessons/habits render, so learning generalizes
+    over *what kind of thing was done*, never over a specific content string.
+
+      write_file {"content":"The Nursery...","path":"garden.txt"} -> write_file(content=str:l,path=str:s)
+      note_append {"text":"the wall is my horizon"}               -> note_append(text=str:s)
+      bash: cat garden.txt                                        -> bash: cat garden.txt
+
+    For `bash`, the command text IS the shape (the verb `cat` and its already digit-collapsed operands,
+    via context._norm_cmd upstream) and carries no free-form authored payload, so it is kept as-is. For
+    a structured tool call, the trailing JSON object is replaced by its per-key kind signature. If the
+    args don't parse as JSON we fall back to just the tool name — never the raw (possibly content-
+    bearing) tail. Deterministic, pure, and safe on any input."""
+    s = str(action or "").strip()
+    if not s:
+        return ""
+    tool = _action_tool(s)
+    # bash: keep the command shape (already normalized upstream); it has no authored-content payload.
+    if tool == "bash":
+        return s
+    # Structured tool call: "tool {json}" (the eidos.py _act_readable form). Replace the object with a
+    # content-free key→kind signature. A terse-truncated tail may not parse — fall back to tool only.
+    brace = s.find("{")
+    if brace == -1:
+        return tool or s
+    head = s[:brace].strip() or tool
+    try:
+        args = json.loads(s[brace:])
+    except (ValueError, TypeError):
+        return head or tool
+    if not isinstance(args, dict):
+        return head or tool
+    if not args:
+        return f"{head}()"
+    parts = ",".join(f"{k}={_summarize_json_arg(args[k])}" for k in sorted(args))
+    return f"{head}({parts})"
+
+
+def action_target(action) -> str:
+    """A content-free TARGET handle for an action: the *thing acted on*, so habituation can tell
+    'this same shape against the SAME target again' (rehearsal) from 'this shape against a NEW target'
+    (exploration). For bash it is the normalized command tail (the operands); for a structured call it
+    is the value of the first path/target-like key REDUCED to its stem (never an authored content
+    string). Never carries a free-form content payload. Empty when there is no natural target."""
+    s = str(action or "").strip()
+    if not s:
+        return ""
+    tool = _action_tool(s)
+    if tool == "bash":
+        # the command minus its leading verb — the operands are the target ('cat garden.txt' -> 'garden.txt')
+        body = s.split(":", 1)[1].strip() if ":" in s else s
+        parts = body.split(None, 1)
+        return parts[1] if len(parts) > 1 else body
+    brace = s.find("{")
+    if brace == -1:
+        return ""
+    try:
+        args = json.loads(s[brace:])
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(args, dict):
+        return ""
+    # Prefer an explicit locator key; these NAME a target without being free-form authored content.
+    for k in ("path", "file", "filename", "name", "target", "skill", "url", "note", "key"):
+        if k in args and isinstance(args[k], (str, int, float)):
+            v = str(args[k]).strip()
+            if v:
+                # collapse volatile scalars so garden#.txt variants share a target, but keep the stem
+                return re.sub(r"\d+", "#", v)[:80]
+    return ""
+
+
 def normalize_result(text: str) -> str:
     """Collapse volatile scalars in a tool's output BEFORE it is hashed into a result-novelty
     signature, so an action whose only 'novelty' is a changing number reads as the SAME result and
@@ -104,8 +228,11 @@ def wellbeing(overall):
 class RewardLearner:
     def __init__(self, *, bus=None, neuromod=None, config=None, alpha=0.3, replay_alpha=0.15,
                  value_path=None, experience_path=None, lessons_path=None, habits_path=None,
-                 max_values=2000, max_experiences=600, save_every=10,
-                 lesson_min_count=3, lesson_min_abs=0.25, lessons_top=8):
+                 habituation_path=None, max_values=2000, max_experiences=600, save_every=10,
+                 lesson_min_count=3, lesson_min_abs=0.25, lessons_top=8,
+                 habituation_enabled=False, habit_floor=HABIT_FLOOR,
+                 habit_decay_per_rep=HABIT_DECAY_PER_REP, habit_recovery_s=HABIT_RECOVERY_S,
+                 habit_max_pairs=HABIT_MAX_PAIRS):
         self.bus = bus
         self.neuromod = neuromod
         self.alpha = float(alpha)
@@ -116,16 +243,30 @@ class RewardLearner:
         self.lesson_min_count = int(lesson_min_count)
         self.lesson_min_abs = float(lesson_min_abs)
         self.lessons_top = int(lessons_top)
+        # Habituation knobs — read off config when present (flag-dark like its reward-adjacent
+        # neighbours), else the module defaults / explicit kwargs (tests pass them directly).
+        if config is not None:
+            habituation_enabled = getattr(config, "nervous_habituation_enabled", habituation_enabled)
+            habit_floor = getattr(config, "nervous_habituation_floor", habit_floor)
+            habit_decay_per_rep = getattr(config, "nervous_habituation_decay_per_rep", habit_decay_per_rep)
+            habit_recovery_s = getattr(config, "nervous_habituation_recovery_s", habit_recovery_s)
+        self.habituation_enabled = bool(habituation_enabled)
+        self.habit_floor = max(0.0, min(1.0, float(habit_floor)))
+        self.habit_decay_per_rep = max(0.0, min(1.0, float(habit_decay_per_rep)))
+        self.habit_recovery_s = max(1.0, float(habit_recovery_s))
+        self.habit_max_pairs = int(habit_max_pairs)
         if config is not None:
             sd = config.state_dir
             value_path = value_path or str(sd / "learned_values.json")
             experience_path = experience_path or str(sd / "experience.jsonl")
             lessons_path = lessons_path or str(sd / "learned_lessons.json")
             habits_path = habits_path or str(sd / "learned_habits.json")
+            habituation_path = habituation_path or str(sd / "habituation.json")
         self.value_path = value_path
         self.experience_path = experience_path
         self.lessons_path = lessons_path
         self.habits_path = habits_path
+        self.habituation_path = habituation_path
 
         self._lock = threading.Lock()
         self.values = {}             # key -> {"v","n","situation","action","t"}
@@ -143,14 +284,25 @@ class RewardLearner:
         self._recent_results: list[str] = []
         self._recent_results_set: set[str] = set()
         self._max_recent_results = 300
+        # Habituation ledger (persisted): (signature\x00target) -> {"reps": float, "t": epoch_seconds}.
+        # `reps` is the time-decayed count of recent same-shape-same-target successes; it drives the
+        # success-channel attenuation and recovers toward 0 between touches. Bounded + fail-open.
+        self._habituation: dict = {}
+        self._habit_since_save = 0
         self._load()
 
     # ---- reward function -------------------------------------------------------------
     def reward_of(self, *, success, made_progress, felt_delta, valence, strain, intrinsic=0.0,
-                  can_fail=True):
+                  can_fail=True, success_scale=1.0):
         """The scalar reward in [-1, 1]. Pure + testable. `can_fail` gates the success channel: a
-        riskless action (can_fail=False) scores 0 on success — an outcome never in doubt is no signal."""
-        r = (W_SUCCESS if success else -W_SUCCESS) if can_fail else 0.0
+        riskless action (can_fail=False) scores 0 on success — an outcome never in doubt is no signal.
+        `success_scale` in [floor,1] attenuates only the SUCCESS reward (habituation: the Nth identical
+        success is worth less than the first) — it never touches the failure penalty, so a failure
+        always teaches fully; a repeated success just stops paying its full novelty premium."""
+        if can_fail:
+            r = (W_SUCCESS * max(0.0, min(1.0, float(success_scale))) if success else -W_SUCCESS)
+        else:
+            r = 0.0
         if made_progress:
             r += W_PROGRESS
         r += W_FELT * float(felt_delta)
@@ -175,6 +327,47 @@ class RewardLearner:
                 self._recent_results_set.discard(old)
         return seen
 
+    # ---- habituation / novelty pressure ----------------------------------------------
+    @staticmethod
+    def _habit_key(sig, target) -> str:
+        return f"{sig or ''}\x00{target or ''}"
+
+    def _decayed_reps(self, entry, now) -> float:
+        """The stored repeat count, recovered for the wall-clock time since it was last touched
+        (dishabituation): shed one rep per `habit_recovery_s` elapsed, floored at 0. Event-free —
+        the passage of time IS the recovery; we read it lazily instead of ticking a timer."""
+        reps = float(entry.get("reps", 0.0))
+        elapsed = max(0.0, float(now) - float(entry.get("t", now)))
+        return max(0.0, reps - elapsed / self.habit_recovery_s)
+
+    def _habituation_scale(self, sig, target, *, success, record=True):
+        """The success-channel multiplier in [floor, 1] for this (signature, target). A never-seen or
+        long-unseen pair returns ~1.0 (full novelty premium); each fresh REPEAT drives it geometrically
+        toward the floor. When `record` is True (the live path) the successful touch is counted and the
+        pair's timestamp advanced; a FAILURE never accrues habituation (only rewards habituate, so we
+        never dull a warning). Bounded, pure of any content."""
+        if not self.habituation_enabled:
+            return 1.0
+        key = self._habit_key(sig, target)
+        now = _now()
+        entry = self._habituation.get(key)
+        reps_now = self._decayed_reps(entry, now) if entry else 0.0
+        # scale is computed from the reps ALREADY accumulated (before this touch) so the first
+        # occurrence of a fresh pair always pays full.
+        scale = self.habit_floor + (1.0 - self.habit_floor) * (self.habit_decay_per_rep ** reps_now)
+        if record and success:
+            self._habituation[key] = {"reps": round(reps_now + 1.0, 4), "t": now}
+            self._evict_habituation_if_needed()
+        return max(self.habit_floor, min(1.0, scale))
+
+    def _evict_habituation_if_needed(self):
+        if len(self._habituation) <= self.habit_max_pairs:
+            return
+        # drop the least-recently-touched pairs (they are also the most recovered → least informative)
+        victims = sorted(self._habituation.items(), key=lambda kv: kv[1].get("t", 0))
+        for k, _ in victims[: len(self._habituation) - self.habit_max_pairs]:
+            self._habituation.pop(k, None)
+
     # ---- the learning step (one per acting tick) -------------------------------------
     def observe(self, *, situation="", action="", success=True, made_progress=False,
                 strain=0.0, intrinsic=0.0, tick=None, can_fail=True, result_sig=None):
@@ -189,6 +382,14 @@ class RewardLearner:
         valence = float(getattr(self.neuromod, "valence", 0.0) or 0.0)
         arousal = float(getattr(self.neuromod, "arousal", 0.3) or 0.3)
 
+        # The action reaches us as a content-bearing label; everything the LEARNER keeps must be the
+        # content-free ACTION SHAPE (tool + arg signature) so no content payload ever enters the value
+        # cache, a lesson, or a habit. `sig` keys the value cache (so write_file<fiction> and
+        # write_file<grocery list> collapse to one shape-level entry) and renders in lessons; `target`
+        # (also content-free) distinguishes same-shape-same-target rehearsal from same-shape-new-target
+        # exploration for the habituation pressure.
+        sig = action_signature(action)
+        target = action_target(action)
         _tool = _action_tool(action)
         could_fail = bool(can_fail) and (_tool not in CANT_FAIL_ACTIONS)
         # A successful inspection read is riskless — drop its free +W_SUCCESS — but a FAILED read still
@@ -205,10 +406,16 @@ class RewardLearner:
         stale = self._result_is_stale(situation, result_sig) if success else False
         if could_fail and stale:
             could_fail = False
+        # HABITUATION: attenuate the success channel by how rehearsed this (shape, target) is. The Nth
+        # identical success against the same target pays a shrinking fraction of the novelty premium; a
+        # new shape or new target pays full, so exploration out-competes rehearsal. A failure never
+        # habituates (record only on success). Applied under the lock so the count update is atomic.
+        with self._lock:
+            success_scale = self._habituation_scale(sig, target, success=success, record=could_fail)
         reward = self.reward_of(success=success, made_progress=made_progress,
                                 felt_delta=felt_delta, valence=valence, strain=strain,
-                                intrinsic=intrinsic, can_fail=could_fail)
-        key = self._key(situation, action, overall)
+                                intrinsic=intrinsic, can_fail=could_fail, success_scale=success_scale)
+        key = self._key(situation, sig, overall)
         with self._lock:
             entry = self.values.get(key)
             predicted = entry["v"] if entry else 0.0
@@ -216,10 +423,10 @@ class RewardLearner:
             v_new = predicted + self.alpha * rpe
             self.values[key] = {"v": round(v_new, 4), "n": (entry["n"] + 1 if entry else 1),
                                 "situation": self._situation_label(situation, overall),
-                                "action": action, "t": _now()}
+                                "action": sig, "t": _now()}
             tag = abs(rpe) * (0.5 + 0.5 * arousal)
             rec = {"tick": tick, "key": key, "situation": self._situation_label(situation, overall),
-                   "action": action, "reward": round(reward, 4), "predicted": round(predicted, 4),
+                   "action": sig, "reward": round(reward, 4), "predicted": round(predicted, 4),
                    "rpe": round(rpe, 4), "tag": round(tag, 4), "success": bool(success)}
             self._experiences.append(rec)
             if len(self._experiences) > self.max_experiences:
@@ -230,8 +437,13 @@ class RewardLearner:
             self._evict_if_needed()
             self._since_save += 1
             do_save = self._since_save >= self.save_every
+            self._habit_since_save += 1
+            do_save_habit = self.habituation_enabled and self._habit_since_save >= self.save_every
 
         self._append_experience(rec)
+        if do_save_habit:
+            self._save_habituation()
+            self._habit_since_save = 0
         if do_save:
             self._save_values()
             self._since_save = 0
@@ -264,6 +476,9 @@ class RewardLearner:
         self._save_values()
         self._save_lessons()
         self._save_habits()
+        if self.habituation_enabled:
+            self._save_habituation()
+            self._habit_since_save = 0
         return {"replayed": len(batch), "lessons": list(lessons), "habits": list(habits)}
 
     def _distill_lessons(self):
@@ -278,7 +493,10 @@ class RewardLearner:
         out = []
         for e in cand[:self.lessons_top]:
             sit = e.get("situation") or "in general"
-            act = e.get("action") or "that"
+            # Render the ACTION SHAPE only — re-run through action_signature so even a legacy value file
+            # (whose "action" still holds a raw content-bearing label) can never emit a content payload
+            # back into the coaching head. A lesson coaches "this KIND of action lands", never a string.
+            act = action_signature(e.get("action")) or "that"
             if e["v"] > 0:
                 out.append(f"When {sit}: \"{act}\" tends to go well (v={e['v']:+.2f}, n={e['n']}) — lean into it.")
             else:
@@ -298,7 +516,10 @@ class RewardLearner:
         out = []
         for e in cand[:int(k)]:
             sit = e.get("situation") or "in general"
-            out.append(f"When {sit}: you reliably \"{e.get('action') or 'do that'}\" (v={e['v']:+.2f}, n={e['n']}).")
+            # ACTION SHAPE only (see _distill_lessons) — a habit is "reach for this KIND of action",
+            # never "reach for this exact content string".
+            act = action_signature(e.get("action")) or "do that"
+            out.append(f"When {sit}: you reliably \"{act}\" (v={e['v']:+.2f}, n={e['n']}).")
         return out
 
     def lessons(self, situation=None, k=6):
@@ -350,6 +571,8 @@ class RewardLearner:
         with self._lock:
             return {"values": len(self.values), "experiences": len(self._experiences),
                     "lessons": list(self._lessons), "habits": list(self._habits),
+                    "habituation_pairs": len(self._habituation),
+                    "habituation_enabled": self.habituation_enabled,
                     "last": dict(self.last) if self.last else None}
 
     def _fire_dopamine(self, reward, rpe, predicted):
@@ -384,6 +607,13 @@ class RewardLearner:
                     self._habits = json.load(f) or []
             except Exception:  # noqa: BLE001
                 self._habits = []
+        if self.habituation_path and os.path.exists(self.habituation_path):
+            try:
+                with open(self.habituation_path, encoding="utf-8") as f:
+                    d = json.load(f)
+                self._habituation = d if isinstance(d, dict) else {}
+            except Exception:  # noqa: BLE001 - fail-open: a corrupt/missing ledger is an empty one
+                self._habituation = {}
 
     def _atomic_write(self, path, text):
         if not path:
@@ -417,6 +647,13 @@ class RewardLearner:
         with self._lock:
             data = json.dumps(self._habits, ensure_ascii=False)
         self._atomic_write(self.habits_path, data)
+
+    def _save_habituation(self):
+        if not self.habituation_path:
+            return
+        with self._lock:
+            data = json.dumps(self._habituation, ensure_ascii=False)
+        self._atomic_write(self.habituation_path, data)
 
     def _append_experience(self, rec):
         if not self.experience_path:

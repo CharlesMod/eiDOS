@@ -334,6 +334,13 @@ class Config:
     nervous_learning_sleep_interval_s: float = 10.0  # how often the sleep cycle checks whether to dream
     nervous_learning_sleep_arousal: float = 0.32     # consolidate (dream) when arousal is at/below this (calm)
     nervous_learning_consolidate_interval_s: float = 120.0  # but dream at most this often (throttle)
+    # Habituation / novelty pressure (SOTA#1 direction): the success reward of a REPEATED action-shape
+    # against the SAME target decays toward a floor and recovers over wall-clock time, so rehearsal
+    # stops paying full while exploring a new shape/target always does. Flag-dark like its neighbours.
+    nervous_habituation_enabled: bool = False        # OFF by default; the operator flips it on per host
+    nervous_habituation_floor: float = 0.30          # a saturated repeat still pays this fraction of W_SUCCESS
+    nervous_habituation_decay_per_rep: float = 0.55  # geometric attenuation factor per effective repeat
+    nervous_habituation_recovery_s: float = 1800.0   # wall-clock seconds to shed one repeat of habituation
     # Ventral Striatum: incompletion/regret pressure → a bounded arousal floor (initiative when idle —
     # an unfinished objective keeps the creature awake/acting instead of drowsing). Relieved by progress.
     nervous_goaltension_enabled: bool = True
@@ -754,6 +761,10 @@ def load_config(path: str = "config.toml") -> Config:
         config.nervous_learning_sleep_interval_s = float(nervous.get("learning_sleep_interval_s", config.nervous_learning_sleep_interval_s))
         config.nervous_learning_sleep_arousal = float(nervous.get("learning_sleep_arousal", config.nervous_learning_sleep_arousal))
         config.nervous_learning_consolidate_interval_s = float(nervous.get("learning_consolidate_interval_s", config.nervous_learning_consolidate_interval_s))
+        config.nervous_habituation_enabled = nervous.get("habituation_enabled", config.nervous_habituation_enabled)
+        config.nervous_habituation_floor = float(nervous.get("habituation_floor", config.nervous_habituation_floor))
+        config.nervous_habituation_decay_per_rep = float(nervous.get("habituation_decay_per_rep", config.nervous_habituation_decay_per_rep))
+        config.nervous_habituation_recovery_s = float(nervous.get("habituation_recovery_s", config.nervous_habituation_recovery_s))
         config.nervous_goaltension_enabled = nervous.get("goaltension_enabled", config.nervous_goaltension_enabled)
         config.nervous_temperament_enabled = nervous.get("temperament_enabled", config.nervous_temperament_enabled)
         config.nervous_metabolism_enabled = nervous.get("metabolism_enabled", config.nervous_metabolism_enabled)

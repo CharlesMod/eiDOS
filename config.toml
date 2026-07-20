@@ -223,6 +223,12 @@ heartbeat_interval_s = 0.5
 goaltension_enabled = true    # Ventral Striatum: unfinished objective → arousal floor (initiative when idle)
 temperament_enabled = true    # DMN: slow initiative/persistence/caution drift → gate threshold + goal-tension itch
 
+# Habituation / novelty pressure (SOTA#1 direction, reward.py): the success reward of a repeated
+# action-SHAPE against the same target decays toward a floor and recovers over wall-clock time, so
+# rehearsal stops paying full while exploring a new shape/target always does. Flag-dark; enable per
+# host once observed. (floor / decay_per_rep / recovery_s default in config.py — declared knobs.)
+habituation_enabled = false   # novelty pressure on the reward's success channel (see reward.py knobs)
+
 # Metabolism — food = literal battery power (2026-06-20 pivot). This node is a stationary,
 # solar-powered desktop → archetype "plant": recharges from environmental power (solar) only, never by
 # napping. ("animal" = a mobile bot that recharges by resting/docking.) The solar curve is the INTERIM
