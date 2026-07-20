@@ -113,6 +113,14 @@ def award_xp(persona: dict, amount: int, reason: str = "",
     return persona["level"]
 
 
+def _adjudicated_only(config) -> bool:
+    """4.3b (Charlie, 2026-07-20): under the portfolio gates, XP pays on ADJUDICATED EVENTS
+    only. The +1-per-successful-tool-call trickle bankrolled 3,247 XP of self-referential
+    fiction on the first live creature — the bar it watched filling measured volume, not
+    growth. Streaks/counters still advance (they're honest facts); only the XP goes dark."""
+    return bool(config is not None and getattr(config, "pillars_portfolio_gates_enabled", False))
+
+
 def record_tick(persona: dict, tool_name: Optional[str], success: bool, *, config=None) -> None:
     """Update persona stats after a tick."""
     persona["total_ticks"] = persona.get("total_ticks", 0) + 1
@@ -123,7 +131,8 @@ def record_tick(persona: dict, tool_name: Optional[str], success: bool, *, confi
         persona["tools_used"] = tools
 
         if success:
-            award_xp(persona, 1, config=config)
+            if not _adjudicated_only(config):
+                award_xp(persona, 1, config=config)
             persona["current_streak"] = persona.get("current_streak", 0) + 1
             if persona["current_streak"] > persona.get("longest_streak", 0):
                 persona["longest_streak"] = persona["current_streak"]
@@ -132,21 +141,41 @@ def record_tick(persona: dict, tool_name: Optional[str], success: bool, *, confi
 
 
 def record_error_recovery(persona: dict, *, config=None) -> None:
-    """Call when a failed tick is followed by a successful one."""
+    """Call when a failed tick is followed by a successful one. Under the portfolio it is one
+    of the six evidence classes (mastery pays its declared XP; the per-class score cap stops
+    fail-on-purpose farming); legacy pays the flat bonus."""
     persona["total_errors_recovered"] = persona.get("total_errors_recovered", 0) + 1
+    if _adjudicated_only(config):
+        try:
+            import mastery
+            mastery.record_evidence(config, persona, "error_recovery",
+                                    f"recovery-{persona['total_errors_recovered']}")
+        except Exception:  # noqa: BLE001 - the counter is the load-bearing fact
+            pass
+        return
     award_xp(persona, 5, config=config)
 
 
 def record_compaction(persona: dict, *, config=None) -> None:
     """Call after a successful compaction."""
     persona["total_compactions"] = persona.get("total_compactions", 0) + 1
-    award_xp(persona, 2, config=config)
+    if not _adjudicated_only(config):
+        award_xp(persona, 2, config=config)   # maintenance is volume, not mastery (4.3b)
 
 
 def record_goal_complete(persona: dict, summary: str, *, config=None) -> None:
-    """Call when goal_complete tool succeeds."""
+    """Call when goal_complete tool succeeds. Under the portfolio, a finished self-chosen
+    objective is evidence (mastery pays its declared XP); legacy pays the flat +100."""
     persona["goals_completed"] = persona.get("goals_completed", 0) + 1
     persona["last_goal_summary"] = summary
+    if _adjudicated_only(config):
+        try:
+            import mastery
+            mastery.record_evidence(config, persona, "objective_completed",
+                                    f"goal-{persona['goals_completed']}", title=summary or "")
+        except Exception:  # noqa: BLE001
+            pass
+        return
     award_xp(persona, 100, config=config)
 
 

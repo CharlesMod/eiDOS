@@ -189,10 +189,23 @@ def _quest_line_closed(config) -> bool:
 
 # --- The gate ------------------------------------------------------------------------------------
 
+def _portfolio_mode(config) -> bool:
+    """4.3b: the mastery-portfolio gate replaces the all-AND evidence wall (Charlie, 2026-07-20).
+    Rides ON TOP of the mastery flag — portfolio without gates would mean no gate at all."""
+    return _enabled(config) and bool(getattr(config, "pillars_portfolio_gates_enabled", False))
+
+
 def can_level(persona: dict, config) -> tuple[bool, dict]:
     """Glue-adjudicated level-up check. Returns (ok, evidence_report) — the report carries every
     check's value and verdict so the dashboard (and the Administrator's dossier) can show WHY,
-    not just whether. All checks must pass; XP is necessary but never sufficient."""
+    not just whether.
+
+    Two modes:
+      - PORTFOLIO (4.3b, flag): hard floors (sleeps, no suspensions) + a fresh mastery portfolio
+        (K novelty-weighted adjudicated evidence items from >= M classes — mastery.py). Breadth
+        with slack: no single broken subsystem can jail growth the way the genesis-03 deadlock
+        jailed the all-AND wall.
+      - LEGACY wall: all-AND checks; XP necessary but never sufficient."""
     if not _enabled(config):
         return False, {"enabled": False}
 
@@ -201,6 +214,19 @@ def can_level(persona: dict, config) -> tuple[bool, dict]:
     nxt = cur + 1
     tier = tier_of_level(nxt)
     checks: dict[str, dict] = {}
+
+    if _portfolio_mode(config):
+        import mastery
+        need_sleeps = int(getattr(config, "pillars_min_sleeps_per_level", 3))
+        checks["sleep_cycles"] = {"value": state.sleeps_since_level, "need": need_sleeps,
+                                  "ok": state.sleeps_since_level >= need_sleeps}
+        checks["no_suspensions"] = {"suspended": sorted(state.suspended.keys()),
+                                    "ok": not state.suspended}
+        pf = mastery.portfolio_report(config, nxt)
+        checks["portfolio"] = {**pf}
+        ok = all(c["ok"] for c in checks.values())
+        return ok, {"enabled": True, "mode": "portfolio", "level": cur, "next": nxt,
+                    "tier": tier, "ok": ok, "checks": checks}
 
     xp = int(persona.get("xp", 0))
     checks["xp_floor"] = {"value": xp, "need": xp_for_level(nxt), "ok": xp >= xp_for_level(nxt)}
@@ -229,8 +255,8 @@ def can_level(persona: dict, config) -> tuple[bool, dict]:
                                 "ok": not state.suspended}
 
     ok = all(c["ok"] for c in checks.values())
-    return ok, {"enabled": True, "level": cur, "next": nxt, "tier": tier, "ok": ok,
-                "checks": checks}
+    return ok, {"enabled": True, "mode": "wall", "level": cur, "next": nxt, "tier": tier,
+                "ok": ok, "checks": checks}
 
 
 def render_standing(persona: dict, config) -> str:
@@ -255,6 +281,17 @@ def render_standing(persona: dict, config) -> str:
                 f"clear the remedial quest to restore it")
     if ok:
         return f"LV.{lv} · XP {xp} · all gates open — advancement imminent"
+    if report.get("mode") == "portfolio":
+        # Full proprioception (ARCH #4): values AND needs, so the wall itself is learnable —
+        # the creature sees exactly what evidence moves it and how far it is.
+        checks = report.get("checks") or {}
+        pf = checks.get("portfolio", {})
+        sl = checks.get("sleep_cycles", {})
+        return (f"LV.{lv} · XP {xp} · portfolio {pf.get('score', 0)}/{pf.get('score_need', '?')} "
+                f"across {pf.get('classes', 0)}/{pf.get('classes_need', '?')} evidence classes · "
+                f"sleeps {sl.get('value', 0)}/{sl.get('need', '?')} — fresh adjudicated work "
+                f"(skill→trusted, quest, objective, commission, held-up prediction, recovery) "
+                f"is what counts")
     unmet = [name for name, c in (report.get("checks") or {}).items() if not c.get("ok")]
     return f"LV.{lv} · XP {xp} · gates unmet: {', '.join(unmet) if unmet else '—'}"
 
@@ -271,6 +308,14 @@ def apply_level_up(persona: dict, config) -> dict:
     state = GateState(config)
     state.sleeps_since_level = 0
     state.save()
+    if _portfolio_mode(config):
+        # Fresh-per-level: crossing SPENDS the evidence (archived, bounded). The next level
+        # starts an empty portfolio — one burst can never carry two levels.
+        try:
+            import mastery
+            report["portfolio_spent"] = mastery.spend(config, int(persona["level"]))
+        except Exception:  # noqa: BLE001 - the level-up stands; the books catch up next cross
+            logger.warning("portfolio spend failed at level-up", exc_info=True)
     return report
 
 

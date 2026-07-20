@@ -414,6 +414,7 @@ class Config:
     pillars_news_max_items: int = 20                   # declared: bound on queued news items (expiry + eviction past this; no unbounded growth)
     pillars_mastery_gates_enabled: bool = False        # 4.3 levels = glue-checked mastery evidence (trusted skills/calibration/reuse/sleep cycles), XP just the progress bar (level_gates.py)
     pillars_min_sleeps_per_level: int = 3              # declared: mandatory digestion between levels (spacing effect as a hard floor; early levels take days by design)
+    pillars_portfolio_gates_enabled: bool = False      # 4.3b mastery PORTFOLIO: crossing = K fresh novelty-weighted adjudicated evidence items from >=M classes + floors; XP pays on adjudicated events only (mastery.py; requires mastery_gates_enabled)
     pillars_administrator_enabled: bool = False        # 5.2 the System-LLM behind the voice: dossier → grammar-constrained quest/weakness proposals, event-driven check-ins (administrator.py)
     pillars_administrator_autonomy: str = "earned"     # 5.2 quest auto-issue: "earned" = the graduated ladder (≥80% approval over ≥5 decisions/tier); "full" = a STANDING operator grant — every valid, leak-free proposal auto-issues (revoke stays the ban-hammer; locked-tool leaks still pend)
     # Phase 6/7 — the capability extensions (NOT biomimetic): shadows & generals
@@ -813,6 +814,7 @@ def load_config(path: str = "config.toml") -> Config:
         config.pillars_news_max_items = int(pillars.get("news_max_items", config.pillars_news_max_items))
         config.pillars_mastery_gates_enabled = pillars.get("mastery_gates_enabled", config.pillars_mastery_gates_enabled)
         config.pillars_min_sleeps_per_level = int(pillars.get("min_sleeps_per_level", config.pillars_min_sleeps_per_level))
+        config.pillars_portfolio_gates_enabled = pillars.get("portfolio_gates_enabled", config.pillars_portfolio_gates_enabled)
         config.pillars_administrator_enabled = pillars.get("administrator_enabled", config.pillars_administrator_enabled)
         _adm_auto = str(pillars.get("administrator_autonomy", config.pillars_administrator_autonomy)).strip().lower()
         config.pillars_administrator_autonomy = _adm_auto if _adm_auto in ("earned", "full") else "earned"

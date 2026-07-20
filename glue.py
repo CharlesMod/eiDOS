@@ -287,6 +287,22 @@ def settle_predictions(config, *, event_text: str = "", tick: int = 0,
                                made_progress=bool(c.outcome), intrinsic=intrinsic, tick=tick)
         except Exception:  # noqa: BLE001 - the closure stands even if a hook hiccups
             pass
+        # 4.3b: a bet the world proved RIGHT is mastery evidence — but only a real one:
+        # confidence in the declared band and closed at its DEADLINE (claim/event closures can
+        # settle the instant they're placed — the self-fulfilling 'my own file exists' farm).
+        # Novelty scoring on the TARGET collapses repeated same-shape bets to dup weight.
+        # Load-award-save persona (skills.py's seam precedent); best-effort, flag-gated inside.
+        try:
+            import mastery
+            if bool(c.outcome) and mastery.prediction_counts(c.prediction.confidence, c.reason):
+                import persona as _persona_mod
+                p = _persona_mod.load_persona(config.workspace)
+                if mastery.record_evidence(config, p, "prediction_settled",
+                                           c.prediction.id or f"pred-{tick}-{c.prediction.target[:40]}",
+                                           title=c.prediction.target, tick=tick):
+                    _persona_mod.save_persona(config.workspace, p)
+        except Exception:  # noqa: BLE001 - evidence is best-effort; the closure stands
+            pass
     return closures
 
 

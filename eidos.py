@@ -1246,6 +1246,15 @@ class _Pillars:
                                    f"quest_reward:{quest.id}")
         except Exception as e:  # noqa: BLE001
             logger.warning("pillars quest reward failed: %s", e)
+        finally:
+            # 4.3b: the PASSED quest itself is mastery evidence, whatever its reward kind
+            # (class pays 0 XP — the legs above are the payout). Flag-gated inside.
+            try:
+                import mastery
+                mastery.record_evidence(self.config, self._persona, "quest_passed", quest.id,
+                                        title=getattr(quest, "directive", "") or quest.id)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _cadence_path(self):
         return self.config.state_dir / "quest_cadence.json"
@@ -1293,6 +1302,16 @@ class _Pillars:
                 _persona.save_persona(self.config.workspace, persona)
             except Exception as e:  # noqa: BLE001
                 logger.warning("commission XP award failed: %s", e)
+        if s.outcome == "confirmed":
+            # 4.3b: an operator-CONFIRMED commission task is mastery evidence (class pays 0 XP —
+            # the settlement above is the payout). Flag-gated inside; best-effort.
+            try:
+                import mastery
+                mastery.record_evidence(self.config, persona, "commission_confirmed",
+                                        f"commission-{t.id}",
+                                        title=getattr(t, "title", "") or f"task {t.id}", tick=tick)
+            except Exception:  # noqa: BLE001
+                pass
         if s.feed > 0 and self.metabolism is not None:
             try:
                 self.metabolism.feed(float(s.feed))

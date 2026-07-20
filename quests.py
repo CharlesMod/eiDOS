@@ -396,6 +396,14 @@ def default_reward_sink(config, quest: "Quest", persona: Optional[dict] = None) 
             persona_mod.award_xp(persona, amount, reason=f"quest:{quest.id}", config=config)
         except Exception:  # noqa: BLE001 - reward payout is best-effort, never brick the loop
             pass
+    # 4.3b: a PASSED quest is mastery evidence (class pays 0 XP — the reward legs above are the
+    # payout; the portfolio records the adjudicated fact). Best-effort, flag-gated inside.
+    try:
+        import mastery
+        mastery.record_evidence(config, persona, "quest_passed", quest.id,
+                                title=quest.directive or quest.id)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ============================================================================================

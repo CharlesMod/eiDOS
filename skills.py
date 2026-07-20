@@ -717,8 +717,12 @@ def _charge_energy(config: Config, cost: float) -> None:
 
 def _award_persona_xp(config: Config, amount: int, reason: str) -> None:
     """Award XP through persona.award_xp, persisted to workspace/persona.json (load → award → save).
-    Best-effort — XP is an incentive signal, never load-bearing for the skill mechanics themselves."""
-    if amount <= 0:
+    Best-effort — XP is an incentive signal, never load-bearing for the skill mechanics themselves.
+
+    4.3b: under the portfolio gates, per-use create/reuse XP is volume and goes dark — the
+    skill economy's XP moment becomes the TRUSTED transition (recorded as portfolio evidence
+    in record_result). The reward-side habituation keeps pricing reuse; XP stops double-paying."""
+    if amount <= 0 or getattr(config, "pillars_portfolio_gates_enabled", False):
         return
     try:
         import persona
@@ -951,6 +955,17 @@ def _record_invocation(config: Config, name: str, ok: bool,
         elif status == "active" and inv >= _TRUST_MIN_USES and (suc / inv) >= _TRUST_MIN_RATE:
             ent["status"] = "trusted"
             logger.info("skill '%s' promoted to trusted (%d/%d on v%s)", name, suc, inv, ver)
+            # 4.3b: a skill CARRIED TO TRUSTED through real use is mastery evidence — the skill
+            # economy's adjudicated moment (novelty-weighted in the portfolio, so five near-
+            # identical listers don't stack). Best-effort; the promotion stands regardless.
+            try:
+                import mastery
+                import persona as _persona_mod
+                p = _persona_mod.load_persona(config.workspace)
+                if mastery.record_evidence(config, p, "skill_trusted", name, title=name):
+                    _persona_mod.save_persona(config.workspace, p)
+            except Exception:  # noqa: BLE001
+                pass
         elif status == "trusted" and inv >= _TRUST_MIN_USES and (suc / inv) < _DEMOTE_RATE:
             ent["status"] = "active"
             logger.info("skill '%s' demoted from trusted (%d/%d on v%s)", name, suc, inv, ver)

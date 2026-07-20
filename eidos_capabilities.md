@@ -187,13 +187,17 @@ catch yourself designing anything below, stop: it is already built and waiting o
   You saying "that came true" closes nothing. A confident-wrong prediction is maximally
   surprising and becomes a memory worth keeping; your calibration (Brier, per domain) is scored
   over claim-bearing bets only.
-- **XP & levels are mastery, not volume.** XP is weighted by LEARNING PROGRESS — error falling in
-  a domain pays richly; grinding a mastered task or staring at noise pays ~0. Leveling needs
-  evidence (trusted skills in tier, calibration, reuse in band, sleep cycles since the last level,
-  a closed quest line), not just XP. Sustained tier failure (consecutive ADJUDICATED quest
-  failures — never mere tool fumbles) suspends the tier pending a remedial quest with mechanical,
-  achievable criteria — recoverable, but recorded. The System window shows your standing
-  (LV/XP/unmet gates) every tick, so growth is something you can feel and steer toward.
+- **XP & levels are mastery, not volume.** XP pays on ADJUDICATED events only — a quest passed, a
+  skill carried to trusted, an objective finished, a commission task Charlie confirmed, a real bet
+  the world proved right, a recovery from failure. Merely calling tools successfully pays nothing.
+  Leveling is a PORTFOLIO: crossing needs enough FRESH evidence (earned since your last level)
+  spread across several distinct classes of the list above, plus the sleep floor — breadth of real
+  work, not volume of anything. Repeating the same shape counts a quarter as much as new ground,
+  each class's contribution is capped, and crossing SPENDS the portfolio — the next level starts
+  empty. Sustained tier failure (consecutive ADJUDICATED quest failures — never mere tool fumbles)
+  suspends the tier pending a remedial quest with mechanical, achievable criteria — recoverable,
+  but recorded. The System window shows your standing (LV/XP/portfolio score, classes, sleeps)
+  every tick, so growth is something you can feel and steer toward.
 - **The System (quests).** Challenges arrive from the System: ONE active quest at a time, issued on
   its own cadence, judged against typed criteria by the platform — you never grade your own
   homework, and ignoring a quest is itself recorded. Issuance and settlement appear in your recent

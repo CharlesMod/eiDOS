@@ -86,6 +86,21 @@ Judged against the pillar: **autonomy — persist toward a goal without derailin
 - [x] simdays non-determinism → seed a fixed germline from the sim seed (congenital baselines were os.urandom); `test_report` now 8/8 (was ~50%) `simdays.py` (MED)
 - [x] `test_skills_killable` 1s watchdog flake → generous 5s ceiling for the good-skill case `tests/test_skills_killable.py` (LOW)
 
+## Pillar 11 — Leveling 2.0: the mastery portfolio (2026-07-20) ✅ BUILT, flag-dark
+- [x] **4.3b** portfolio gates replace the all-AND wall: crossing = hard floors (sleeps, no
+  suspensions) + K fresh novelty-weighted adjudicated evidence items from ≥M distinct classes
+  (skill→trusted / quest passed / objective done / commission confirmed / deadline-held prediction /
+  error recovery). Fresh-per-level (crossing SPENDS the portfolio), per-class score cap, Jaccard
+  novelty weighting. `mastery.py` + `level_gates.py` (feature)
+- [x] **4.3b** adjudicated-only XP: the +1-per-successful-tool-call trickle (3,247 XP of fiction on
+  the first creature) goes dark under the flag; XP pays at evidence-record time, no double-pay for
+  events carrying their own reward `persona.py`/`skills.py`/`quests.py`/`glue.py`/`eidos.py` (feature)
+- [x] **4.3b** reachability invariant: every level's requirement provably satisfiable with what the
+  unlock ladder grants (the genesis-03 deadlock class, unrepresentable — enforced in CI)
+  `tests/test_mastery_portfolio.py` (MED)
+- Flag: `[pillars] portfolio_gates_enabled` (default false; requires mastery_gates_enabled). Flip is
+  the operator's call after soak.
+
 ---
 
 ### Legend / decisions deferred to operator (implemented with a safe default, flagged in-commit)

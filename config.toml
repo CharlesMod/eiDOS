@@ -285,6 +285,9 @@ news_enabled = true               # 4.4 news queue: deferred communication, pres
 news_max_items = 20               # 4.4 bound on queued news (eviction/expiry past this)
 mastery_gates_enabled = true      # 4.3 levels = glue-checked mastery evidence; XP is just the progress bar
 min_sleeps_per_level = 3          # 4.3 mandatory digestion between levels (spacing effect as a hard floor)
+portfolio_gates_enabled = false   # 4.3b mastery PORTFOLIO (flag-dark: soak, then flip): crossing = K fresh
+                                  # novelty-weighted adjudicated evidence items from >=M classes + the floors;
+                                  # XP pays on adjudicated events only (the per-tool-call trickle goes dark)
 administrator_enabled = true      # 5.2 the System-LLM: dossier → grammar-constrained proposals, event-driven check-ins
 administrator_autonomy = "full"   # 5.2 STANDING operator grant (Charlie, 2026-07-05): valid, leak-free quests auto-issue —
                                   # the vocabulary/grammar/leak rails make bad quests unrepresentable, so approval added only
