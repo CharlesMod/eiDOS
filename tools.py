@@ -208,6 +208,32 @@ class GoArgs(_ToolArgs):
         return _trimmed_nonempty(value, "place")
 
 
+class RemindArgs(_ToolArgs):
+    """The `remind` primitive (OPERATOR_DIRECTIVES §"The `remind` primitive"): schedule a note to
+    surface later — a persistent, restart-surviving timer a `bg_run "sleep"` can't be. Exactly one
+    of `in` (a relative duration like "10m"/"1h30m") or `at` (a clock time "22:15" or an ISO
+    timestamp) sets WHEN; `note` is what to remember. The grammar governs FORM (one of in/at, a
+    note); reminders.parse_when adjudicates the actual time."""
+    note: str = Field(validation_alias=AliasChoices("note", "text", "message"))
+    in_: Optional[str] = Field(default=None, validation_alias=AliasChoices("in", "in_", "after"))
+    at: Optional[str] = Field(default=None, validation_alias=AliasChoices("at", "when", "time"))
+
+    @field_validator("note")
+    @classmethod
+    def _note_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "note")
+
+    @model_validator(mode="after")
+    def _one_of_in_at(self) -> "RemindArgs":
+        has_in = bool(self.in_ and self.in_.strip())
+        has_at = bool(self.at and self.at.strip())
+        if not (has_in or has_at):
+            raise ValueError("provide one of 'in' (e.g. \"10m\") or 'at' (e.g. \"22:15\")")
+        if has_in and has_at:
+            raise ValueError("provide only ONE of 'in' or 'at', not both")
+        return self
+
+
 class RecallArgs(_ToolArgs):
     query: str
 
@@ -2823,6 +2849,79 @@ def tool_go(args: dict, config: Config) -> ToolResult:
                       fail_kind="blocked")
 
 
+def tool_remind(args: dict, config: Config) -> ToolResult:
+    """Set a REMINDER — a note that surfaces to you later, surviving restarts (a `bg_run "sleep"`
+    dies when eidos restarts; a reminder does not). `remind {"in": "10m", "note": "check the
+    backup"}` or `remind {"at": "22:15", "note": "sleep cycle"}`. WHEN is one of `in` (a duration:
+    "90s"/"10m"/"2h"/"1h30m") or `at` (a clock time "22:15" or an ISO timestamp). Honest results
+    (ARCH #4): a real schedule names WHEN it will fire; a bad time or a full store is a typed
+    success=False, never a silent drop. (OPERATOR_DIRECTIVES §"The `remind` primitive".)"""
+    if not getattr(config, "reminders_enabled", False):
+        # DARK: unreachable in practice (unregistered when the flag is off) — the belt-and-suspenders
+        # guard so a direct dispatch can't schedule while the organ is dark.
+        return ToolResult(output="Reminders are not enabled.", full_output_path=None,
+                          success=False, duration_s=0, fail_kind="blocked")
+    import reminders
+    when_in = (args.get("in") or args.get("in_") or "").strip()
+    when_at = (args.get("at") or "").strip()
+    note = (args.get("note") or "").strip()
+    if not note:
+        return ToolResult(output="Error: provide a 'note' — what to remember.",
+                          full_output_path=None, success=False, duration_s=0, fail_kind="args")
+    if bool(when_in) == bool(when_at):
+        # Neither or both — the grammar model already forbids this, but a direct dispatch might not.
+        return ToolResult(output="Error: provide exactly one of 'in' (e.g. \"10m\") or 'at' "
+                                 "(e.g. \"22:15\").", full_output_path=None, success=False,
+                          duration_s=0, fail_kind="args")
+    spec = when_in or when_at
+    fire_ts = reminders.parse_when(spec)
+    if fire_ts is None:
+        return ToolResult(
+            output=(f"Error: couldn't read \"{spec}\" as a time. Use a duration like \"10m\" / "
+                    f"\"1h30m\" / \"90s\" in 'in', or a clock time \"22:15\" / an ISO timestamp "
+                    f"in 'at'."),
+            full_output_path=None, success=False, duration_s=0, fail_kind="args")
+    try:
+        rem = reminders.set_reminder(config, note, fire_ts=fire_ts, origin="creature")
+    except reminders.ReminderError as e:
+        return ToolResult(output=f"Reminder refused: {e}", full_output_path=None,
+                          success=False, duration_s=0, fail_kind=e.kind)
+    when = max(0, int(rem["fire_ts"] - time.time()))
+    return ToolResult(
+        output=(f"Reminder set: \"{rem['note']}\" — fires in ~{when}s "
+                f"(id {rem['id']}). It survives restarts."),
+        full_output_path=None, success=True, duration_s=0)
+
+
+def render_pending(config: Config, *, max_items: int = 3) -> str:
+    """A short "⏳ pending reminders: …" line for a future context surface — bounded to max_items,
+    soonest-first, each as "note (in ~Ns)". Returns '' when reminders are off, none are pending, or
+    anything goes wrong (proprioception is best-effort; the tick must never care). The loop wiring
+    places this; here we only provide it."""
+    if not getattr(config, "reminders_enabled", False):
+        return ""
+    try:
+        import reminders
+        items = reminders.pending(config)
+    except Exception:  # noqa: BLE001 - best-effort surface; never crash the caller
+        return ""
+    if not items:
+        return ""
+    now = time.time()
+    shown = items[:max(1, int(max_items))]
+    parts = []
+    for it in shown:
+        try:
+            when = max(0, int(float(it.get("fire_ts", now)) - now))
+        except (TypeError, ValueError):
+            when = 0
+        note = str(it.get("note", "")).strip()
+        parts.append(f"{note} (in ~{when}s)")
+    more = len(items) - len(shown)
+    tail = f" (+{more} more)" if more > 0 else ""
+    return "⏳ pending reminders: " + "; ".join(parts) + tail
+
+
 TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "bash": tool_bash,
     "write_file": tool_write_file,
@@ -2922,6 +3021,20 @@ def register_world_tool(config: Config) -> bool:
     return "go" in TOOLS
 
 
+def register_reminders_tool(config: Config) -> bool:
+    """The `remind` primitive (OPERATOR_DIRECTIVES, DARK by default): register the grammar-constrained
+    `remind` tool ONLY when `reminders_enabled` is on. Idempotent; mirrors register_world_tool — with
+    the flag off `remind` is absent from TOOLS, so it never enters the tick grammar and the organ
+    stays fully dark (no reminders file is written; the store is only touched by set/due). The loop
+    wiring calls this once config is loaded. Returns True if `remind` is present after the call."""
+    if getattr(config, "reminders_enabled", False):
+        TOOLS.setdefault("remind", tool_remind)
+        _TOOL_ARG_MODELS.setdefault("remind", RemindArgs)
+    else:
+        TOOLS.pop("remind", None)
+    return "remind" in TOOLS
+
+
 # Built-in tool names, snapshotted at import time — BEFORE any self-authored skill is hot-loaded into
 # TOOLS (skills.py adds them at runtime via TOOLS[name] = runner). Anything dispatched whose name is
 # NOT in this set is therefore a skill, and gets the wall-clock watchdog below.
@@ -2932,7 +3045,7 @@ _BUILTIN_TOOL_NAMES = frozenset(TOOLS)
 # `predict` registers via register_predict_tool (4.1) and belongs to the foresight unit; the
 # commission verbs register via register_commission_tools and belong to the commission unit.
 _FLAG_REGISTERED_BUILTINS = frozenset({"predict", "commission_add", "commission_done",
-                                       "weigh_options", "go"})
+                                       "weigh_options", "go", "remind"})
 _EVER_BUILTIN_NAMES = _BUILTIN_TOOL_NAMES | _FLAG_REGISTERED_BUILTINS
 
 # Registry aliases: alias name -> the canonical tool it rides on. An alias exists exactly when its
