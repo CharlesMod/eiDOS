@@ -81,6 +81,13 @@ journalctl -u eidos-dashboard.service -n 100 --no-pager
 scripts/fresh_slate.sh
 ```
 
+## Dashboard read panels (operator-facing)
+- **Growth panel** (`GET :8099/api/growth`, built by `growth.build_growth`): the read-only D1–D10
+  dream-test scoreboard (PILLARS_PLAN §10) + KPI trends + raw vitals, aggregated from existing
+  workspace/state stores. Every metric carries `{value, status(measured|unmeasured|human-judged),
+  basis}` and is fail-open — it never fakes a number and never crashes on a missing store. The
+  creature can't see this panel (operator-only); it replaces the by-hand functional-review tally.
+
 ## The pi coding agent (the delegate / workshop limb)
 - **Installed 2026-07-10:** `/usr/bin/pi` (`@earendil-works/pi-coding-agent`, npm -g, Node 22 from
   NodeSource). The delegate spawns it detached; result returns tagged `[↩ delegate N]`.

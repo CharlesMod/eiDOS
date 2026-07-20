@@ -118,6 +118,24 @@ body::after {
 @keyframes chip-pulse { 50% { opacity: 0.5; } }
 #quest-line { margin: 2px 0 5px; font-size: 10px; color: #8fb8e8; word-break: break-word; line-height: 1.5; }
 #quest-line:empty, #ladder-strip:empty { display: none; }
+
+/* Growth panel: D1–D10 scoreboard + vitals */
+.growth-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.growth-table th { text-align: left; color: #5f7a5f; font-weight: normal; font-size: 9px;
+    letter-spacing: 0.5px; padding: 3px 6px; border-bottom: 1px solid #16301a; }
+.growth-table td { padding: 3px 6px; border-bottom: 1px solid #0f1f0f; vertical-align: top; }
+.growth-table td.g-d { color: #7CFC9B; white-space: nowrap; }
+.growth-table td.g-name { color: #9ab89a; }
+.growth-table td.g-val { color: #6ea8fe; font-family: monospace; word-break: break-word; }
+.growth-chip { display: inline-block; font-size: 9px; padding: 1px 6px; border-radius: 3px;
+    border: 1px solid #16301a; letter-spacing: 0.4px; white-space: nowrap; }
+.growth-chip.measured { color: #7CFC9B; border-color: #2a6a2a; background: #0c180c; }
+.growth-chip.unmeasured { color: #8a8a8a; border-color: #333; background: #0d0d0d; }
+.growth-chip.human-judged { color: #ffb347; border-color: #7a5a1a; background: #170f04; }
+.growth-vitals { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.growth-vitals .gv { font-size: 10px; color: #9ab89a; border: 1px solid #16301a;
+    border-radius: 3px; padding: 2px 7px; background: #0a0f0a; }
+.growth-vitals .gv b { color: #6ea8fe; font-family: monospace; }
 .quest-tag {
     color: #6ea8fe; border: 1px solid #27437a; border-radius: 3px;
     padding: 0 4px; font-size: 9px; margin-right: 3px; white-space: nowrap;
@@ -1296,6 +1314,13 @@ function toggleVoice(){
         <div class="dream-list" id="dream-list"></div>
     </div>
 
+    <!-- Growth: the D1–D10 dream-test scoreboard + vitals (full width) -->
+    <div class="panel" style="grid-column: 1 / -1;">
+        <div class="panel-title">Growth — dream-tests D1–D10 <span id="growth-status" style="float:right;font-size:10px;color:#555;"></span></div>
+        <div id="growth-table"></div>
+        <div id="growth-vitals" class="growth-vitals"></div>
+    </div>
+
     <!-- Operator Chat: full width -->
     <div class="panel" style="grid-column: 1 / -1;">
         <div class="panel-title">Operator Chat
@@ -1843,6 +1868,78 @@ async function loadDreams() {
             renderDreams(data.dreams || []);
         }
     } catch(e) {}
+}
+
+// --- Growth panel: D1–D10 dream-test scoreboard + vitals ---
+function growthFmtVal(v) {
+    // Render a metric's value compactly: scalars inline, dicts as key=val pairs.
+    if (v === null || v === undefined) return '<span style="color:#555;">--</span>';
+    if (typeof v !== 'object') return escapeHtml(String(v));
+    var parts = [];
+    for (var k in v) {
+        if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
+        if (k === 'note') continue; // shown as a muted trailer
+        var val = v[k];
+        if (val !== null && typeof val === 'object') val = JSON.stringify(val);
+        parts.push(escapeHtml(k) + '=' + escapeHtml(String(val)));
+    }
+    var html = parts.join(' &middot; ');
+    if (v.note) html += ' <span style="color:#5f7a5f;">(' + escapeHtml(String(v.note)) + ')</span>';
+    return html;
+}
+function renderGrowth(data) {
+    var rows = (data && data.d_tests) || [];
+    var thead = '<tr><th>#</th><th>Dream-test</th><th>Value</th><th>Status</th></tr>';
+    var body = rows.map(function(r) {
+        var st = r.status || 'unmeasured';
+        return '<tr>' +
+            '<td class="g-d">' + escapeHtml(r.d || '') + '</td>' +
+            '<td class="g-name">' + escapeHtml(r.name || '') + '</td>' +
+            '<td class="g-val">' + growthFmtVal(r.value) + '</td>' +
+            '<td><span class="growth-chip ' + escapeHtml(st) + '">' + escapeHtml(st) + '</span></td>' +
+            '</tr>';
+    }).join('');
+    var tbl = document.getElementById('growth-table');
+    if (tbl) tbl.innerHTML = '<table class="growth-table">' + thead + body + '</table>';
+
+    // Vitals row: the raw numbers the review needed by hand.
+    var vit = (data && data.vitals) || {};
+    var order = ['level','stage','total_ticks','sleeps_total','goals_completed',
+                 'objectives','self_edit_proposals','strategy_engrams'];
+    var chips = [];
+    order.forEach(function(k) {
+        var m = vit[k];
+        if (!m) return;
+        var val = m.value;
+        if (val !== null && typeof val === 'object') {
+            if (k === 'objectives') val = 'open ' + (val.open||0) + ' / done ' + (val.done||0) + ' / dead ' + (val.dead||0);
+            else val = JSON.stringify(val);
+        }
+        if (val === null || val === undefined) val = '--';
+        chips.push('<span class="gv">' + escapeHtml(k.replace(/_/g,' ')) + ' <b>' + escapeHtml(String(val)) + '</b></span>');
+    });
+    // Goal-horizon KPI trailer.
+    var gh = data && data.kpis && data.kpis.goal_horizon;
+    if (gh && gh.value) {
+        chips.push('<span class="gv">goal-horizon <b>mean ' + escapeHtml(String(gh.value.mean)) +
+                   ' / max ' + escapeHtml(String(gh.value.max)) + '</b></span>');
+    }
+    var vitEl = document.getElementById('growth-vitals');
+    if (vitEl) vitEl.innerHTML = chips.join('');
+}
+async function loadGrowth() {
+    var st = document.getElementById('growth-status');
+    try {
+        let resp = await fetch('/api/growth');
+        if (resp.ok) {
+            let data = await resp.json();
+            renderGrowth(data);
+            if (st) {
+                var meas = (data.d_tests || []).filter(function(r){return r.status==='measured';}).length;
+                st.textContent = meas + '/10 measured';
+            }
+        }
+    } catch(e) { if (st) st.textContent = 'unavailable'; }
 }
 
 function renderDreams(dreams) {
@@ -2415,6 +2512,9 @@ async function doRestore(tag) {
     loadGitLog();
 }
 setInterval(loadGitLog, 15000); loadGitLog();
+
+// --- Growth panel (slow-moving; poll every 15s) ---
+setInterval(loadGrowth, 15000); loadGrowth();
 
 // --- Self-edit proposals (eiDOS proposes source changes; you approve) ---
 var _seBtn = 'border-radius:4px;padding:2px 9px;cursor:pointer;font-size:10px;margin-right:5px;';

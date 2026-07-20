@@ -40,6 +40,7 @@ import os
 import creature_gen
 import glue
 from atomicio import replace_with_retry
+from growth import build_growth
 
 
 def _read_json(path: Path) -> dict:
@@ -1140,6 +1141,11 @@ def _make_handler(config: Config):
 
             elif self.path == "/api/nervous":
                 self._respond(200, "application/json", json.dumps(build_nervous(config)))
+
+            elif self.path == "/api/growth":
+                # The Growth Panel: D1–D10 dream-test scoreboard + KPI trends + raw vitals,
+                # aggregated read-only from existing stores (growth.build_growth is fail-open).
+                self._respond(200, "application/json", json.dumps(build_growth(config)))
 
             elif self.path.startswith("/api/why"):
                 # Causal ledger (Pillars 0.3): the pressure field that produced a given tick —
