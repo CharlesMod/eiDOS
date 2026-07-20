@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Download and set up the all-MiniLM-L6-v2 ONNX model for eiDOS embedding.
+"""Download the all-MiniLM-L6-v2 ONNX model — the eiDOS embedding FALLBACK tier.
+
+WHICH EMBEDDER IS THIS? eiDOS's recall degrades HTTP → ONNX → mock → BM25. This script sets up the
+in-process ONNX tier (all-MiniLM-L6-v2, 384-dim). The PRIMARY tier on a GPU host is the
+nomic-embed-text-v1.5 GGUF served by llama-server at :8082 (`[knowledge] embedding_endpoint`) —
+fetch THAT with `python3 download_model.py embed` (it also pulls the mind). Use this script only
+for a CPU-only / no-llama-server box, or as the safety net beneath the HTTP embedder.
 
 Usage:
     python3 setup_embedding.py [--model-dir models/all-MiniLM-L6-v2]

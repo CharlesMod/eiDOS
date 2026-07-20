@@ -8,17 +8,22 @@
 # — bring your own OpenAI-compatible server (Ollama / LM Studio / llama.cpp) and set it in Settings ⚙.
 #
 # Flags:
-#   --with-embeddings   also install onnxruntime + fetch the embedding model (semantic memory)
+#   --with-model        download the house-mind GGUF + primary embedder (~12.8 GB) for self-hosting
+#                       on a GPU box (gemma-4-12b-it Q8_0 + nomic-embed, via download_model.py)
+#   --with-embeddings   install onnxruntime + fetch the ONNX FALLBACK embedder (CPU/no-GPU semantic memory)
+#   --models-dir DIR    where --with-model writes (default: ./models); point llama.cpp -m here
 #   --llm-url URL       pre-seed the LLM endpoint    (e.g. http://127.0.0.1:11434/v1)
 #   --model NAME        pre-seed the model name
 #   --no-launch         set up only; don't start the dashboard
 set -euo pipefail
 cd "$(dirname "$0")"
 
-WITH_EMBED=0; LAUNCH=1; LLM_URL=""; MODEL=""
+WITH_EMBED=0; WITH_MODEL=0; MODELS_DIR="models"; LAUNCH=1; LLM_URL=""; MODEL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --with-embeddings) WITH_EMBED=1 ;;
+    --with-model) WITH_MODEL=1 ;;
+    --models-dir) MODELS_DIR="${2:-models}"; shift ;;
     --no-launch) LAUNCH=0 ;;
     --llm-url) LLM_URL="${2:-}"; shift ;;
     --model) MODEL="${2:-}"; shift ;;
@@ -64,9 +69,14 @@ echo "→ installing dependencies"
 "$VPY" -m pip install --quiet --upgrade pip
 "$VPY" -m pip install --quiet -r requirements.txt
 if [ "$WITH_EMBED" = "1" ]; then
-  echo "→ installing embedding deps + model"
+  echo "→ installing embedding deps + ONNX fallback model"
   "$VPY" -m pip install --quiet onnxruntime tokenizers
   "$VPY" setup_embedding.py || echo "  (embedding model fetch failed — semantic memory stays off)"
+fi
+if [ "$WITH_MODEL" = "1" ]; then
+  echo "→ downloading the house-mind + primary embedder into $MODELS_DIR (resumable; ~12.8 GB)"
+  "$VPY" download_model.py all --models-dir "$MODELS_DIR" \
+    || echo "  (model download failed — rerun 'python3 download_model.py all' to resume from the .part)"
 fi
 
 # --- machine-local config overlay (safe defaults; never overwrites an existing one) ---
