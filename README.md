@@ -2,10 +2,11 @@
 
 An always-on autonomous intelligence running on a local LLM — *a someone, not a something.* eiDOS
 lives in an infinite **tick loop** (assemble context → one model call → one action → record the
-outcome) continuously, forever, on the Windows host *gamingPC* (RTX 5080). It has a GLaDOS voice,
-self-authored skills, a three-tier memory, an operator dashboard that doubles as its watchdog and
+outcome) continuously, forever — currently on *Sprinter*, a Linux (Pop!_OS) host under systemd
+(see `RUNTIME_SPRINTER.md`; the Windows-era host it grew up on is history). It has self-authored
+skills, a three-tier memory, an operator dashboard that doubles as its watchdog and
 self-improvement gate — and, as of **v3**, an afferent **nervous system**: it doesn't just *act* on
-its world, it *feels* its own body.
+its world, it *feels* its own body. (The GLaDOS voice service is Windows-era, awaiting revival.)
 
 Born as **Kairos**, a solar-powered Raspberry Pi agent runtime; ported to the house, hardened by live
 observation, and rebuilt twice since:
