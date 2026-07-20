@@ -125,13 +125,19 @@ def ensure_seeded(config, tick_number: int = 0) -> None:
     _save(config, data)
 
 
-def _new(title: str, why: str, priority: int, tick: int, oid: Optional[str] = None) -> dict:
+def _new(title: str, why: str, priority: int, tick: int, oid: Optional[str] = None,
+         origin: str = "self") -> dict:
     return {
         "id": oid or _slug(title),
         "title": title.strip(),
         "why": (why or "").strip(),
         "state": "active",
         "priority": int(priority),
+        # origin: "self" (the creature chose it) | "operator" (Charlie asked — via the System's
+        # directive path). An operator objective PREEMPTS focus, sorts first, and is exempt from the
+        # frustration-park AND exposure-death gates: it is Charlie's word, so only completion or a
+        # reported block closes it, never the auto-let-go machinery (OPERATOR_DIRECTIVES OD1/OD3).
+        "origin": origin,
         "frustration": 0,
         "ticks_since_progress": 0,
         "attempts": 0,
@@ -166,6 +172,8 @@ def _dead_if_exposure_spent(o: dict) -> Optional[dict]:
     through, so a futile goal can't dodge the death gate by ping-ponging through the model's own
     objective_block tool (which re-blocks without ever routing through the frustration-park branch
     where the death check used to live exclusively). Returns the died-event dict, or None to thaw."""
+    if o.get("origin") == "operator":
+        return None   # Charlie's word never auto-dies — only completion or his call closes it (OD3)
     if int(o.get("exposures", 0)) >= EXPOSURE_CAP:
         o["state"] = "dead"
         o["blocked_reason"] = (f"released: {o.get('exposures')} tested retrials without real "
@@ -285,6 +293,37 @@ def add(config, title: str, why: str, priority: int = 5, tick: int = 0) -> dict:
     return o
 
 
+def add_operator_directive(config, title: str, why: str, *, priority: int = 9,
+                           tick: int = 0, source_key: str = "") -> dict:
+    """Charlie asked for something (via the System's directive path) — adopt it as the creature's
+    PRIORITY focus (OPERATOR_DIRECTIVES). Unlike `add`, this: (a) is origin="operator" (exempt from
+    park/death, sorts first), (b) PREEMPTS — becomes active_id even if another objective is active,
+    and (c) bypasses the hatchling stage carrying-cap (Charlie's word overrides pedagogy). Idempotent:
+    a re-emitted directive (same title, still live) is re-raised to active, not duplicated."""
+    data = _load(config)
+    live = [x for x in data["objectives"] if x.get("state") in ("active", "blocked")]
+    for x in live:
+        if x["title"].lower() == title.strip().lower():
+            x["origin"] = "operator"
+            x["state"] = "active"
+            x["blocked_reason"] = None
+            x["priority"] = max(int(x.get("priority", 5)), int(priority))
+            if source_key:
+                x["source_key"] = source_key
+            x["last_active_tick"] = tick
+            data["active_id"] = x["id"]          # re-raised directive preempts
+            _save(config, data)
+            return x
+    o = _new(title, why, priority, tick, origin="operator")
+    o["id"] = _unique_id(data, o["id"])
+    if source_key:
+        o["source_key"] = source_key
+    data["objectives"].append(o)
+    data["active_id"] = o["id"]                  # PREEMPT current focus
+    _save(config, data)
+    return o
+
+
 def consolidate(config, tick: int = 0) -> dict:
     """Nap-time goal tidying — the goal-backlog analog of memory consolidation (sleep merges and
     prunes engrams; it should merge and prune goals too). Two similarity-driven passes, no
@@ -400,8 +439,10 @@ def _pick_next(data: dict, exclude_id: str) -> Optional[dict]:
     """Highest-value WORKABLE objective to rotate into."""
     cands = [o for o in data["objectives"] if o["state"] == "active" and o["id"] != exclude_id]
     if cands:
-        # priority desc, then least-frustrated, then least-recently-active (round-robin fairness)
-        cands.sort(key=lambda o: (-o["priority"], o["frustration"], o["last_active_tick"]))
+        # operator directives first (Charlie's word outranks self-chosen work), then priority desc,
+        # then least-frustrated, then least-recently-active (round-robin fairness).
+        cands.sort(key=lambda o: (0 if o.get("origin") == "operator" else 1,
+                                  -o["priority"], o["frustration"], o["last_active_tick"]))
         return cands[0]
     return None
 
@@ -520,7 +561,12 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
     escalate = False
     died = None
     strong_stall = tick_number - int(active.get("last_strong_progress_tick", tick_number))
-    if active["frustration"] >= park_at or strong_stall >= STRONG_STALL_PARK_TICKS:
+    # Operator directives never auto-park or auto-die (OD3): frustration/stall are still tracked
+    # (so the creature can FEEL the difficulty and may objective_block it with a reason — a report,
+    # not a silent drop), but the gate leaves an operator objective in focus. Only objective_done or
+    # an explicit block closes it.
+    _op = active.get("origin") == "operator"
+    if not _op and (active["frustration"] >= park_at or strong_stall >= STRONG_STALL_PARK_TICKS):
         active.pop("_thawed_from_block", None)   # re-parking without progress confirms the belief
         if int(active.get("exposures", 0)) >= EXPOSURE_CAP:
             # RELEASE: tested EXPOSURE_CAP times, never any strong progress → futile. Dead is terminal

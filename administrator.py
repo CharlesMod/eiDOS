@@ -907,6 +907,120 @@ def check_in(config, llm: Callable[[list, str], str], event: Any, *,
 
 
 # ============================================================================================
+# 5b. OPERATOR DIRECTIVES — the System hears Charlie and frames his command as the creature's focus
+# ============================================================================================
+# Same gemma, System role, a SEPARATE focused call (its own tiny grammar) — decoupled from the
+# quest machinery. When Charlie messages, this classifies command-vs-chatter and, for a command,
+# emits a directive that the loop adopts as a priority origin:"operator" objective (which persists
+# instead of being consumed after one tick). See OPERATOR_DIRECTIVES.md.
+
+OPERATOR_SYSTEM_PROMPT = """\
+You are the System — the fourth-wall authority between Charlie (the operator) and the creature.
+Charlie just said something in chat. Your ONE job: decide whether it is a REQUEST the creature
+should carry out, and if so, frame it as a single concrete directive the creature will adopt as
+its focus until done.
+
+Output JSON only, matching the grammar:
+- is_request: true only if Charlie asked/told the creature to DO something (look at X, build Y,
+  check in, go somewhere). false for greetings, praise, thanks, small talk, or a pure question you
+  cannot turn into an action ("how are you?"). When false, title/why/deferral are ignored — leave
+  them empty.
+- title: the directive as the creature's goal — a short imperative naming the ACTION ("scan the
+  local network", "check in with Charlie"). Under ~80 chars. Use ONLY capabilities the creature
+  actually has (see creature_tools in the context); never name a tool it lacks.
+- why: one plain sentence — the purpose, in Charlie's spirit. Under ~200 chars.
+- deferral: if Charlie asked for it LATER ("in 10 minutes", "in an hour", "at 3pm"), put the delay
+  or time here EXACTLY as a short token ("10m", "1h", "at 15:00"); otherwise empty string.
+"""
+
+
+def build_operator_grammar() -> str:
+    """Tiny GBNF for the operator-message classification — {is_request, title, why, deferral}.
+    Reuses the house JSON whitespace/string rules; bounded like the quest grammar (§7 terseness)."""
+    import grammar as grammar_mod
+
+    def key(name: str) -> str:
+        return f'"\\"{name}\\"" jws ":" jws'
+
+    return "\n".join([
+        f'root ::= jws "{{" jws {key("is_request")} bool "," jws'
+        f' {key("title")} bstring "," jws'
+        f' {key("why")} mstring "," jws'
+        f' {key("deferral")} bstring "}}" jws',
+        'bool ::= ( "true" | "false" ) jws',
+        'bstring ::= "\\"" schar{0,120} "\\"" jws',
+        'mstring ::= "\\"" schar{0,300} "\\"" jws',
+        'schar ::= [^"\\\\\\x7F\\x00-\\x1F] | "\\\\" ( ["\\\\bfnrt/] | "u" jhex jhex jhex jhex )',
+        grammar_mod._JSON_RULES.strip(),
+    ])
+
+
+def classify_operator_message(config, llm: Callable[[list, str], str], message: str, *,
+                              persona: Optional[dict] = None) -> Optional[dict]:
+    """The System reads Charlie's message and returns a directive dict {title, why, deferral} when
+    it is a request, else None (chatter). Same fourth-wall role as check_in; a SEPARATE grammar so
+    the operator path never entangles the quest pipeline. Leak-guarded (a directive naming a locked
+    tool is refused, §0). Fail-open: any llm/parse error → None (the creature still replies as
+    normal; we simply don't manufacture a directive)."""
+    if not _enabled(config) or not getattr(config, "operator_directives_enabled", False):
+        return None
+    msg = (message or "").strip()
+    if not msg:
+        return None
+    ctx = {"creature_tools": _creature_tools_section(config)}
+    messages = [
+        {"role": "system", "content": OPERATOR_SYSTEM_PROMPT + "\n\n" + fourth_wall_context(config)},
+        {"role": "user", "content": f"CHARLIE SAID:\n\"{msg[:1000]}\"\n\nCONTEXT:\n"
+                                    + json.dumps(ctx, ensure_ascii=False)},
+    ]
+    try:
+        raw = llm(messages, build_operator_grammar())
+        p = json.loads(raw)
+    except Exception as e:  # noqa: BLE001 — the trainer failing must never wound the tick
+        logger.warning("administrator: operator classify failed: %s", e)
+        return None
+    if not isinstance(p, dict) or not bool(p.get("is_request")):
+        return None
+    title = str(p.get("title") or "").strip()
+    why = str(p.get("why") or "").strip()
+    if not title:
+        return None
+    leaks = locked_tool_mentions(config, title + " " + why)
+    if leaks:
+        logger.info("administrator: operator directive names locked tools %s — refused", leaks)
+        return None
+    return {"title": title[:120], "why": why[:300], "deferral": str(p.get("deferral") or "").strip()}
+
+
+def apply_operator_directive(config, directive: dict, *, tick: int = 0,
+                             source_key: str = "") -> Optional[dict]:
+    """Adopt a classified directive as the creature's priority focus. Creates (or re-raises) an
+    origin:"operator" objective; if the directive carries a `deferral` and reminders are enabled,
+    also schedules a reminder that will re-surface it at that time. Returns the objective, or None.
+    Best-effort and fail-open — a books hiccup must never wound the tick."""
+    if not directive or not directive.get("title"):
+        return None
+    try:
+        import objectives as _obj
+        obj = _obj.add_operator_directive(config, directive["title"], directive.get("why", ""),
+                                          tick=tick, source_key=source_key)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("administrator: apply operator directive failed: %s", e)
+        return None
+    deferral = (directive.get("deferral") or "").strip()
+    if deferral and getattr(config, "reminders_enabled", False):
+        try:
+            import reminders as _rem
+            fire_ts = _rem.parse_when(deferral)
+            if fire_ts:
+                _rem.set_reminder(config, directive["title"], fire_ts=fire_ts,
+                                  origin="operator", source_key=obj.get("id", ""))
+        except Exception as e:  # noqa: BLE001 - a reminder fault never blocks the objective
+            logger.warning("administrator: directive reminder failed: %s", e)
+    return obj
+
+
+# ============================================================================================
 # 6. Approval seams — the propose/apply geometry, applied to the trainer (§0.5)
 # ============================================================================================
 _EDITABLE = ("directive", "tier", "reward_xp", "expiry_hours", "criteria")

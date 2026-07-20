@@ -437,6 +437,26 @@ def validate_observations(config: Config) -> int:
         return 1
 
 
+def peek_interventions(config: Config) -> list[dict]:
+    """Read pending intervention content WITHOUT consuming (no rename) — the operator-directive
+    pass needs the message text before context assembly consumes it for the reply banner. Returns
+    [{"filename", "content"}]; a later read_interventions still fires the one-tick reply path."""
+    interventions_dir = config.interventions_dir
+    if not interventions_dir.exists():
+        return []
+    out = []
+    for path in sorted(interventions_dir.iterdir()):
+        if path.suffix == ".done" or path.name.startswith("."):
+            continue
+        try:
+            content = path.read_text().strip()
+            if content:
+                out.append({"filename": path.name, "content": content})
+        except OSError:
+            continue
+    return out
+
+
 def read_interventions(config: Config) -> list[dict]:
     """Read pending intervention files from interventions/ dir.
 

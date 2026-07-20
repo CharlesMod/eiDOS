@@ -1766,6 +1766,38 @@ class _Pillars:
         except Exception as e:  # noqa: BLE001
             logger.warning("pillars administrator check-in failed: %s", e)
 
+    def _operator_directive(self, persona, tick_number: int) -> None:
+        """OPERATOR_DIRECTIVES: when Charlie has a message pending THIS tick, the System (same gemma,
+        System role) classifies it and — if it's a request — adopts it as a priority origin:"operator"
+        objective BEFORE context assembly, so the creature both replies promptly AND sees the new
+        focus this same tick (instead of the message being consumed after one reply and forgotten).
+        Peeks non-consumingly; the normal reply-banner path still fires. Fail-open."""
+        if not getattr(self.config, "operator_directives_enabled", False):
+            return
+        if not getattr(self.config, "pillars_administrator_enabled", False):
+            return
+        try:
+            from memory import peek_interventions
+            pending = peek_interventions(self.config)
+            if not pending:
+                return
+            llm = self._live_llm()
+            if llm is None:
+                return
+            import administrator as _adm
+            for iv in pending:
+                msg = (iv.get("content") or "").strip()
+                if not msg:
+                    continue
+                directive = _adm.classify_operator_message(self.config, llm, msg, persona=persona)
+                if directive:
+                    obj = _adm.apply_operator_directive(self.config, directive,
+                                                        tick=tick_number, source_key=iv.get("filename", ""))
+                    if obj:
+                        logger.info("operator directive adopted as focus: %s", obj.get("title"))
+        except Exception as e:  # noqa: BLE001 - the trainer failing never wounds the tick
+            logger.warning("operator directive pass failed: %s", e)
+
 
 def _reflex_stats(config, persona) -> dict:
     """The typed stats dict a reflex GUARD is checked against (WIS1 — the SAME Criterion vocabulary
@@ -2504,6 +2536,12 @@ def run_loop(config: Config, persona=None, wal=None):
         # Pillars 5.5 (dark): pre-deliberation wiring — adenosine accounting (2.4), relevance_set
         # publication + gate intake (1.3), and the manager's recall (2.2, which context.py swaps in
         # for the legacy cascade ONLY when its flag is on). All no-ops with flags off (pillars=None).
+        # OPERATOR_DIRECTIVES: before building context, let the System turn a pending Charlie
+        # message into a priority focus, so this tick's context already carries it as the active
+        # objective (and the creature still replies via the normal boss-waiting path). No-op unless
+        # operator_directives_enabled + a message is pending.
+        self._operator_directive(persona, tick_number)
+
         pillars_recall_block = ""
         if pillars is not None:
             try:
