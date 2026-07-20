@@ -160,3 +160,14 @@ Fallback if headroom is thin on a busier desktop: `-c 24576`. Config backup: `co
    you're in here: the committed `config.toml` `[llm]` block (:9292 / dual P100 / 262k ctx) is a
    **cmod-s fossil** — the local overlay (:8080, `gemma4-12b`) is what serves on Sprinter; and
    the "~6.5 GB gemma" figure above predates the Q8_0 model (12.7 GB). Trust `nvidia-smi`.
+
+## Scheduled jobs (systemd timers on this box)
+- **`eidos-wisdom-curve.timer`** → `eidos-wisdom-curve.service` → `scripts/run_wisdom_curve.sh`
+  (one-shot, `OnCalendar=2026-07-27 03:00`, Persistent). Fires ~1 week after the 2026-07-20 wisdom
+  activation to capture the first wise-vs-naive experience-curve datapoint. The wrapper PAUSES the
+  creature (the 3-arm curve needs the GPU to itself; the 27b arm evicts gemma), runs
+  `wisdom_curve.py --run`, then restores it (start+resume). Results → `state/wisdom_curve.jsonl` +
+  `workspace/wisdom_curve_*.log`. Inspect: `systemctl list-timers eidos-wisdom-curve.timer`.
+  Retime: edit `/etc/systemd/system/eidos-wisdom-curve.timer` + `daemon-reload`. Cancel:
+  `sudo systemctl disable --now eidos-wisdom-curve.timer`. Run now by hand:
+  `bash scripts/run_wisdom_curve.sh`.
