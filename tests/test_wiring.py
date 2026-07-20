@@ -424,12 +424,19 @@ def test_quest_expiry_settles_on_screen_nothing_paid(tmp_path):
     cfg = _mk_config(tmp_path, pillars_quests_enabled=True)
     hub = eidos._Pillars(cfg)
     import quests
+    # Issue while the deadline is still ahead — a dead OFFER is swept at issue_next now (never
+    # promoted; see quests.sweep_offered) — then move the ACTIVE quest's deadline into the past:
+    # the lived scenario is an issued quest whose clock runs out.
     hub.quests.propose(quests.Quest(
         id="wq-exp", directive="Unreachable.",
         success_criteria=quests.Criterion(path="persona.xp", op=">=", value=10**9),
         reward={"kind": quests.REWARD_XP, "amount": 9},
-        expiry_ts=time.time() - 1))
+        expiry_ts=time.time() + 3600))
     hub._issue_next({"level": 1, "xp": 0}, tick=2)
+    active = hub.quests.store.active()
+    assert active is not None
+    active.expiry_ts = time.time() - 1                    # the deadline passes, unmet
+    hub.quests._persist(active)
     persona = {"level": 1, "xp": 0}
     _drive_tick(hub, cfg, tick=3, persona=persona)        # past expiry, unmet → glue expires it
     settles = [o for o in _system_window_obs(cfg) if "EXPIRED" in o.get("output", "")]
