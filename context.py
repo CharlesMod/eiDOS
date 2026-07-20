@@ -1331,14 +1331,36 @@ def _assemble_briefing(
     # from the full `skills_brief` alphabet up in the stable head. This is the ECONOMIC nudge toward
     # reuse (make the fitting tool visible where the choice happens), not a prompt plea. Flag-off →
     # this block is never built and behaviour is unchanged.
+    # The affordance list is computed once here: it feeds BOTH the "tools at hand" block AND — when
+    # the §3 calling convention is on — THE OFFER item of the wisdom block (reused, never re-ranked).
+    _affordances: list = []
     if getattr(config, "pillars_skill_affordances_enabled", False):
         try:
             from skills import skill_affordances, render_affordances
-            _aff = render_affordances(skill_affordances(config, _current_focus(config)))
+            _affordances = skill_affordances(config, _current_focus(config))
+            _aff = render_affordances(_affordances)
             if _aff:
                 situation.append(_aff)
         except Exception:  # noqa: BLE001
-            pass
+            _affordances = []
+
+    # WISDOM_PLAN §3 (dark behind `wisdom_recall_enabled`): the decision-shaped `## Before you act`
+    # block — THE CASE / THE GUARDRAIL / THE OFFER — rendered from the SAME 4-layer cascade the prose
+    # recall rides, similarity-gated by the platform (WIS5). It is per-tick decision support, so it
+    # sits in the VOLATILE tail right at the decision point. It REPLACES, not adds (until §0's 32k
+    # flip): whatever chars it spends are SHAVED off the prose recall for this tick, so total recall
+    # spend is unchanged. Flag off (default) → '' → the shave never runs and assembly is byte-identical.
+    _wisdom_block = ""
+    if (getattr(config, "wisdom_recall_enabled", False)
+            and getattr(config, "pillars_memory_manager_enabled", False)):
+        try:
+            from memory_manager import MemoryManager
+            import episodes as _ep
+            _sit = _ep.situation_key(config)
+            _wisdom_block, _ = MemoryManager(config).wisdom_block(
+                _current_focus(config), situation=_sit or None, affordances=_affordances)
+        except Exception:  # noqa: BLE001 - wisdom is additive; never break the build
+            _wisdom_block = ""
 
     # Episodic recall (phase 7b, BIBLE §2.4): state-triggered — if the agent has been in THIS
     # situation before, surface the actions that FAILED (don't repeat) and any that WORKED (reuse).
@@ -1350,8 +1372,18 @@ def _assemble_briefing(
     try:
         import episodes
         if getattr(config, "pillars_memory_manager_enabled", False):
-            if pillars_recall_block:
-                situation.append(pillars_recall_block)
+            # §3 shave: the wisdom block spends from the SAME budget as the prose recall (replaces,
+            # not adds). Trim the prose recall by the block's actual size so the tick's total recall
+            # spend is unchanged; then append the (shaved) prose and the block. Flag off → no block →
+            # `_recall_prose = pillars_recall_block` verbatim (byte-identical).
+            _recall_prose = pillars_recall_block
+            if _wisdom_block and _recall_prose:
+                _keep = max(0, len(_recall_prose) - len(_wisdom_block))
+                _recall_prose = _recall_prose[:_keep].rstrip() if _keep else ""
+            if _recall_prose:
+                situation.append(_recall_prose)
+            if _wisdom_block:
+                situation.append(_wisdom_block)
         else:
             _recall = episodes.render_recall(episodes.recall(config))
             if _recall:

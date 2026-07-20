@@ -64,6 +64,28 @@ ENCODE_AROUSAL_GAIN = 0.3           # declared: arousal-modulated encoding (§M-
 ENCODE_AROUSAL_NEUTRAL = 0.5        # declared: the arousal level that births at exactly the neutral
                                     # STRENGTH_DEFAULT — the midpoint of the [0,1] arousal channel.
 
+# --- §3 the wisdom calling convention (WISDOM_PLAN §3) --------------------------------------------
+# The decision block is retrieval-AS-ANSWER: at most three items — THE CASE, THE GUARDRAIL, THE OFFER
+# — rendered decision-shaped near the decision point, and closed with a FIXED frame. The frame is
+# verbatim from §3 (WIS5): precedents are the creature's OWN, not orders, and transfer must be
+# verified, never assumed — a wrong case confidently injected is worse than nothing.
+WISDOM_HEADER = "## Before you act"
+WISDOM_FRAME = ("These are YOUR precedents, not orders — verify they transfer before leaning on "
+                "them.")
+WISDOM_BLOCK_MAX_CHARS = 700        # declared: fallback block budget when config carries none (§3:
+                                    # 700 @16k, 1400 @32k — read from config so §0's flip scales it;
+                                    # this constant is only the getattr default, never the live knob).
+WISDOM_RECALL_MIN_SIM = 0.55        # declared: fallback similarity floor when config carries none —
+                                    # the platform gate (WIS5). Below it wisdom stays silent.
+# Provenance → the one-word source mark every wisdom item carries (§M-2 source monitoring): the
+# creature must know whether a precedent is first-hand, hearsay, an inherited letter, or a dream.
+_PROVENANCE_MARK = {
+    "experienced": "experienced",
+    "told": "told",
+    "inherited": "inherited",
+    "dreamed": "dreamed",
+}
+
 # Legacy knowledge category -> engram kind (§2 schema). `reflections` has no engram kind of its own;
 # a reflection is a consolidated declarative belief, so it lands as a `fact`.
 _CATEGORY_KIND = {
@@ -295,35 +317,15 @@ class MemoryManager:
     # ---------------------------------------------------------------------------------------------
     # Recall — the 4-layer cascade (exact → cross-objective → same-objective → semantic)
     # ---------------------------------------------------------------------------------------------
-    def recall(self, query: str, *, situation: Optional[str] = None,
-               budget_chars: int = RECALL_DEFAULT_BUDGET_CHARS,
-               explore_ratio: Optional[float] = None) -> list[Engram]:
-        """Return the engrams that should shape the current decision, ranked by relevance×strength
-        and fit to a char budget, with one exploration slot reserved.
+    def _relevance_map(self, query: str, situation: Optional[str],
+                       entries: list[Engram]) -> dict[str, float]:
+        """The 4-layer cascade relevance in [0,1] per candidate id — the ONE truth both `recall`
+        (prose set) and `recall_scored`/`wisdom_block` (§3 calling convention) rank on, so the
+        decision block can never disagree with the prose recall about how well a memory matches.
 
-        The 4-layer cascade (ported from episodes.recall's match order):
-          1. EXACT           — engrams whose situation key == the current situation.
-          2. CROSS-OBJECTIVE — same normalized STEP under any objective (objective ids churn; the
-                               step is the stable part of a situation).
-          3. SAME-OBJECTIVE  — same objective id (any step under the goal I'm pursuing).
-          4. SEMANTIC        — vector/overlap resemblance from the long-term store (pattern
-                               completion): a partial cue pulls up the whole.
-        The cascade is ADDITIVE and de-duplicated: each layer contributes candidates the earlier
-        layers missed, so a strong semantic match is not thrown away just because an exact match also
-        exists. Candidates are then ranked by `relevance × strength` (§M-1: earned usefulness is half
-        the ranking key), one EXPLORATION slot is reserved (§6, anti-Matthew), and the set is fit to
-        `budget_chars`.
-        """
-        query = (query or "").strip()
-        entries = self.store.load()
-        if not entries:
-            return []
-
-        # --- layer relevances --------------------------------------------------------------------
-        # Each candidate gets a relevance in [0,1]. The situation layers give categorical relevance
-        # (exact > cross-objective > same-objective); the semantic layer gives graded token overlap.
-        # We keep the MAX relevance a candidate earns across layers, so an engram that is both an
-        # exact match and a strong semantic match ranks on its best evidence.
+        Each candidate keeps the MAX relevance across the layers: exact situation (1.0) >
+        cross-objective step (0.85) > same-objective (0.7) > semantic token-overlap (≤0.6) and the
+        store's vector recall (0.55). The situation layers always outrank a bare resemblance."""
         obj = _obj_of(situation or "")
         step = _step_of(situation or "")
         relevance: dict[str, float] = {}
@@ -353,23 +355,47 @@ class MemoryManager:
         if query:
             for e in self.store.recall(query, top_k=SEMANTIC_TOP_K):
                 _bump(e.id, 0.55)
+        return relevance
 
+    def _score(self, e: Engram, relevance: dict[str, float]) -> float:
+        """rank key = relevance × strength (§M-1), tilted toward the present when the recency flag
+        is on: the factor is floored (engram.RECENCY_FLOOR) so age re-orders near-ties, never buries
+        an earned memory — forgetting stays decay+prune's job."""
+        s = relevance[e.id] * float(e.strength)
+        if bool(getattr(self.config, "pillars_recall_recency_enabled", False)):
+            s *= engram.recency_factor(e.created)
+        return s
+
+    def recall(self, query: str, *, situation: Optional[str] = None,
+               budget_chars: int = RECALL_DEFAULT_BUDGET_CHARS,
+               explore_ratio: Optional[float] = None) -> list[Engram]:
+        """Return the engrams that should shape the current decision, ranked by relevance×strength
+        and fit to a char budget, with one exploration slot reserved.
+
+        The 4-layer cascade (ported from episodes.recall's match order):
+          1. EXACT           — engrams whose situation key == the current situation.
+          2. CROSS-OBJECTIVE — same normalized STEP under any objective (objective ids churn; the
+                               step is the stable part of a situation).
+          3. SAME-OBJECTIVE  — same objective id (any step under the goal I'm pursuing).
+          4. SEMANTIC        — vector/overlap resemblance from the long-term store (pattern
+                               completion): a partial cue pulls up the whole.
+        The cascade is ADDITIVE and de-duplicated: each layer contributes candidates the earlier
+        layers missed, so a strong semantic match is not thrown away just because an exact match also
+        exists. Candidates are then ranked by `relevance × strength` (§M-1: earned usefulness is half
+        the ranking key), one EXPLORATION slot is reserved (§6, anti-Matthew), and the set is fit to
+        `budget_chars`.
+        """
+        query = (query or "").strip()
+        entries = self.store.load()
+        if not entries:
+            return []
+
+        relevance = self._relevance_map(query, situation, entries)
         candidates = [e for e in entries if e.id in relevance]
         if not candidates:
             return []
 
-        # --- rank by relevance × strength (§M-1), tilted toward the present when the recency
-        # flag is on: the factor is floored (engram.RECENCY_FLOOR) so age re-orders near-ties,
-        # never buries an earned memory — forgetting stays decay+prune's job. -----------------------
-        recency_on = bool(getattr(self.config, "pillars_recall_recency_enabled", False))
-
-        def _score(e: Engram) -> float:
-            s = relevance[e.id] * float(e.strength)
-            if recency_on:
-                s *= engram.recency_factor(e.created)
-            return s
-
-        ranked = sorted(candidates, key=_score, reverse=True)
+        ranked = sorted(candidates, key=lambda e: self._score(e, relevance), reverse=True)
 
         # --- budget first, then the exploration slot INSIDE the budget (§6, anti-Matthew) ----------
         # The slot used to be spliced into the candidate list before budgeting, which parked it at
@@ -378,7 +404,24 @@ class MemoryManager:
         # from day 2). The seat must be reserved within what the budget actually returns.
         ratio = self.effective_explore_ratio() if explore_ratio is None else explore_ratio
         fitted = _fit_to_budget(ranked, budget_chars)
-        return self._reserve_exploration_slot(ranked, fitted, budget_chars, ratio)
+        out = self._reserve_exploration_slot(ranked, fitted, budget_chars, ratio)
+
+        # §3 SETTLEMENT PLUMBING (WISDOM_PLAN §3): the `## Before you act` block IS recall — its
+        # case/guardrail items must ride the SAME recall-bet machinery the prose set rides (eidos.py's
+        # _Pillars.recall_block wagers on exactly `manager.recall(...)`'s output via `self.injected`).
+        # So when the calling-convention flag is on, we GUARANTEE the wisdom-selected engrams are in
+        # the returned set even if the char budget would have cut them — a bet the creature was shown
+        # but never registered is a hole §2/§5 can't settle. Flag off → this is a no-op (byte-
+        # identical). The scored candidates are already computed above; reuse the same relevance.
+        if bool(getattr(self.config, "wisdom_recall_enabled", False)):
+            scored = [(e, relevance[e.id]) for e in ranked]
+            wis, _sims = self._wisdom_select(scored)
+            have = {e.id for e in out}
+            for e in wis:
+                if e.id not in have:
+                    out.append(e)
+                    have.add(e.id)
+        return out
 
     def effective_explore_ratio(self) -> float:
         """The recall exploration ratio actually used: config.pillars_recall_explore_ratio × the
@@ -431,6 +474,203 @@ class MemoryManager:
             if used + len(sample.body) > budget_chars:
                 return kept  # a budget too small for even (1 exploit + sample): exploit wins the seat
         return kept + [sample]
+
+    # ---------------------------------------------------------------------------------------------
+    # §3 The wisdom calling convention — retrieval as answer, not reading material
+    # ---------------------------------------------------------------------------------------------
+    def recall_scored(self, query: str, *, situation: Optional[str] = None
+                      ) -> list[tuple[Engram, float]]:
+        """The cascade candidates paired with their similarity (the §3 gate reads it), ranked exactly
+        as `recall` ranks — SAME `_relevance_map` + `_score`, so the decision block and the prose
+        recall never disagree about a match. Returns `(engram, similarity)` descending; similarity is
+        the raw cascade relevance in [0,1] (the gate compares it to `wisdom_recall_min_sim`, WIS5).
+        The store's own recall is consulted just as in `recall`, so a bare vector hit still scores.
+        Empty when the store is empty or nothing matches (graceful absence)."""
+        query = (query or "").strip()
+        entries = self.store.load()
+        if not entries:
+            return []
+        relevance = self._relevance_map(query, situation, entries)
+        candidates = [e for e in entries if e.id in relevance]
+        if not candidates:
+            return []
+        ranked = sorted(candidates, key=lambda e: self._score(e, relevance), reverse=True)
+        return [(e, relevance[e.id]) for e in ranked]
+
+    def wisdom_block(self, query: str, *, situation: Optional[str] = None,
+                     affordances: Optional[list[dict]] = None) -> tuple[str, list[Engram]]:
+        """Render the §3 `## Before you act` decision block and return `(text, injected)` — `injected`
+        is the engram items the block actually surfaced, so the caller registers them on the SAME
+        recall-bet machinery the prose recall rides (the block IS recall — §2/§5 want its settlement).
+
+        At most three items, each provenance-marked, each drawn from the ranked cascade:
+          (a) THE CASE     — the single best situation-matched EPISODE with a verified (successful)
+                             outcome, rendered action-first: "Here before (sim 0.83): `X` → worked …".
+          (b) THE GUARDRAIL — the matched `strategy` engram as a one-line imperative, VERBATIM.
+          (c) THE OFFER    — the top skill affordance as a one-line invocation offer (reuses the
+                             caller's ranking — never re-ranked here).
+        Closed with the fixed verify-transfer frame (WIS5). Empty sections are omitted; the whole
+        block is absent (text='', injected=[]) when nothing qualifies.
+
+        Platform-gated (WIS5, WIS7):
+          - `wisdom_recall_enabled` off → ('' , []) unconditionally (flag-dark, byte-identical).
+          - renders ONLY when the best-match similarity ≥ `wisdom_recall_min_sim`.
+          - hard char cap at `wisdom_block_max_chars` (never exceeded; the frame is kept, items are
+            dropped tail-first to fit).
+        Never raises — a memory fault must never break the tick (fail to '' , [])."""
+        if not bool(getattr(self.config, "wisdom_recall_enabled", False)):
+            return "", []                                   # WIS7: flag-dark, byte-identical
+        try:
+            return self._wisdom_block(query, situation, affordances)
+        except Exception as e:  # noqa: BLE001 - wisdom is additive; never break the tick (WIS8 fail-open)
+            import logging
+            logging.getLogger("eidos.memory").warning("wisdom_block failed: %s", e)
+            return "", []
+
+    def _wisdom_select(self, scored: list[tuple[Engram, float]]
+                       ) -> tuple[list[Engram], dict[str, float]]:
+        """Pick the engram items the §3 block would surface — THE CASE (best floor-clearing episode
+        with a verified outcome) then THE GUARDRAIL (best floor-clearing `strategy`) — and their
+        sims. ONE truth shared by `_wisdom_block` (render) and `recall` (bet coverage), so the block
+        can never surface an engram the ledger didn't see, nor vice-versa. Returns (engrams, sims by
+        id). Below-floor candidates are excluded (WIS5 gate). The affordance OFFER is not an engram,
+        so it is chosen by `_wisdom_block` alone."""
+        min_sim = float(getattr(self.config, "wisdom_recall_min_sim", WISDOM_RECALL_MIN_SIM))
+        if not scored or scored[0][1] < min_sim:
+            return [], {}     # gate: the BEST match must clear the floor, else silence
+        eligible = [(e, sim) for (e, sim) in scored if sim >= min_sim]
+        picked: list[Engram] = []
+        sims: dict[str, float] = {}
+        case = next((e for (e, _s) in eligible
+                     if e.kind == "episode" and _verified_success(e)), None)
+        if case is not None:
+            picked.append(case)
+            sims[case.id] = next(s for (e, s) in eligible if e.id == case.id)
+        guard = next((e for (e, _s) in eligible if e.kind == "strategy"), None)
+        if guard is not None:
+            picked.append(guard)
+            sims[guard.id] = next(s for (e, s) in eligible if e.id == guard.id)
+        return picked, sims
+
+    def _wisdom_block(self, query: str, situation: Optional[str],
+                      affordances: Optional[list[dict]]) -> tuple[str, list[Engram]]:
+        scored = self.recall_scored(query, situation=situation)
+        picked, sims = self._wisdom_select(scored)   # WIS5 gate lives inside _wisdom_select
+
+        injected: list[Engram] = []
+        items: list[str] = []   # rendered lines, in fixed order: case, guardrail, offer
+        for e in picked:
+            if e.kind == "episode":                                  # (a) THE CASE
+                items.append(_render_case(e, sims[e.id]))
+            elif e.kind == "strategy":                               # (b) THE GUARDRAIL
+                items.append(_render_guardrail(e))
+            injected.append(e)
+
+        # (c) THE OFFER — the top skill affordance, one-line invocation offer. The affordance ranking
+        # is the caller's (skills.skill_affordances); we consume its head, never re-rank it. An
+        # affordance is a skill offer, not an engram — nothing to bet on it, so it never joins injected.
+        if affordances:
+            offer = _render_offer(affordances[0])
+            if offer:
+                items.append(offer)
+
+        if not items:
+            return "", []   # gate cleared but no case/guardrail/offer took shape → graceful absence
+
+        max_chars = int(getattr(self.config, "wisdom_block_max_chars", WISDOM_BLOCK_MAX_CHARS))
+        return _fit_wisdom_block(items, injected, max_chars)
+
+
+# =================================================================================================
+# §3 wisdom-block render helpers (module-level; the block FORMAT is the manager's to own)
+# =================================================================================================
+def _prov(e: Engram) -> str:
+    """The one-word provenance mark for a wisdom item (§M-2 source monitoring)."""
+    return _PROVENANCE_MARK.get(str(getattr(e, "provenance", "") or ""), "experienced")
+
+
+def _verified_success(e: Engram) -> bool:
+    """A case is only offered on a VERIFIED outcome. The importer renders an episode body as
+    '… `tool` succeeded.' on a win and '… failed …' otherwise, and may stamp an explicit
+    stats['outcome']/stats['verified']. Treat an explicit success stat as authoritative; else read
+    the rendered body. A failure episode is never THE CASE (that is a scar for the guardrail path,
+    not a 'do this' precedent)."""
+    st = e.stats or {}
+    if "verified" in st:
+        return bool(st.get("verified"))
+    outcome = str(st.get("outcome", "") or "").lower()
+    if outcome:
+        return "succeed" in outcome or outcome in ("worked", "success", "ok")
+    body = (e.body or "").lower()
+    if "succeeded" in body or "→ worked" in body or "worked" in body:
+        return True
+    return False
+
+
+def _render_case(e: Engram, sim: float) -> str:
+    """Action-first case line: 'Here before (sim 0.83): ran `X` → worked[, fixed in N ticks]. [prov]'.
+    Reuses whatever the episode body already carries; a `fix_ticks` stat, when present, adds the
+    '(fixed in N ticks)' clause the plan calls for."""
+    body = (e.body or "").strip()
+    tail = ""
+    ft = (e.stats or {}).get("fix_ticks")
+    try:
+        if ft is not None and int(ft) > 0:
+            tail = f" (fixed in {int(ft)} tick{'s' if int(ft) != 1 else ''})"
+    except (TypeError, ValueError):
+        tail = ""
+    return f"- THE CASE — Here before (sim {sim:.2f}): {body}{tail} [{_prov(e)}]"
+
+
+def _render_guardrail(e: Engram) -> str:
+    """The matched strategy engram as a one-line imperative, VERBATIM — the guardrail body is already
+    a distilled trigger→principle (strategy.py); we do not paraphrase it, only mark its provenance."""
+    body = " ".join((e.body or "").split()).strip()   # collapse whitespace to keep it one line
+    return f"- THE GUARDRAIL — {body} [{_prov(e)}]"
+
+
+def _render_offer(aff: dict) -> str:
+    """The top affordance as a one-line invocation offer. `aff` is a skill_affordances dict
+    ({name, ...}); we offer its call, never re-rank."""
+    name = str((aff or {}).get("name", "") or "").strip()
+    if not name:
+        return ""
+    return f"- THE OFFER — the skill `{name}` fits this; call <{name}>…</{name}> before authoring anew."
+
+
+def _fit_wisdom_block(items: list[str], injected: list[Engram], max_chars: int
+                      ) -> tuple[str, list[Engram]]:
+    """Assemble header + items + frame under a HARD char cap (WIS5 budget: `wisdom_block_max_chars`,
+    NEVER exceeded). The header and frame are non-negotiable; items are dropped TAIL-FIRST (offer,
+    then guardrail, then case) until the whole block fits. `injected` is trimmed in lockstep so a
+    dropped engram is NOT registered as a bet (the ledger must see exactly what the creature was
+    shown). If even header + frame + the single most-relevant item still overflows, the block is
+    OMITTED (return '' , []) — a HARD cap, unlike the prose recall's soft over-budget-single rule:
+    WIS5's doctrine is that an oversized/uncertain injection is worse than nothing, and silence keeps
+    the byte budget honest for the §3 shave."""
+    kept_items = list(items)
+    while kept_items:
+        block = _assemble_wisdom(kept_items)
+        if max_chars is None or max_chars <= 0 or len(block) <= max_chars:
+            # trim injected to only the engram items still present (offer carries no engram, so the
+            # engram items are a prefix of kept_items in the same order they were appended).
+            kept_injected = injected[:_engram_count(kept_items, len(injected))]
+            return block, kept_injected
+        kept_items.pop()   # drop the tail item and retry under the hard cap
+    return "", []          # even one item overflows the cap → silence (WIS5: worse than nothing)
+
+
+def _engram_count(kept_items: list[str], n_injected: int) -> int:
+    """How many of the surviving items are engram-backed (THE CASE / THE GUARDRAIL, which were
+    appended before THE OFFER). The offer line starts '- THE OFFER'; every earlier surviving item is
+    engram-backed, so the count is min(non-offer survivors, n_injected)."""
+    non_offer = sum(1 for it in kept_items if not it.startswith("- THE OFFER"))
+    return min(non_offer, n_injected)
+
+
+def _assemble_wisdom(items: list[str]) -> str:
+    """Header → items → the fixed verify-transfer frame (WIS5)."""
+    return "\n".join([WISDOM_HEADER, *items, WISDOM_FRAME])
 
 
 # =================================================================================================
