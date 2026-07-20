@@ -1235,20 +1235,23 @@ def tool_bg_run(args: dict, config: Config) -> ToolResult:
                 **popen_kwargs,
             )
 
-        # Register in jobs ledger
-        jobs = _read_jobs(config)
-        jobs.append({
-            "name": name,
-            "pid": proc.pid,
-            "cmd": cmd,
-            "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "started_ts": time.time(),
-            "status": "running",
-            "kind": "manual",
-            "output_path": str(out_path),
-            "notified": False,
-        })
-        _write_jobs(config, jobs)
+        # Register in jobs ledger — read-modify-write under ONE lock (same invariant
+        # as tool_bash's async path): a _job_waiter completing a prior job must not
+        # slip a status flip between our read and our write.
+        with _jobs_lock:
+            jobs = _read_jobs(config)
+            jobs.append({
+                "name": name,
+                "pid": proc.pid,
+                "cmd": cmd,
+                "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "started_ts": time.time(),
+                "status": "running",
+                "kind": "manual",
+                "output_path": str(out_path),
+                "notified": False,
+            })
+            _write_jobs(config, jobs)
 
         return ToolResult(
             output=f"Started background job '{name}' (PID {proc.pid}), output: {out_path}",
@@ -1267,21 +1270,24 @@ def tool_bg_check(args: dict, config: Config) -> ToolResult:
         return parsed
     name = parsed.name
 
-    jobs = _read_jobs(config)
-    job = None
-    for j in jobs:
-        if j["name"] == name:
-            job = j
-            break
+    # Lookup + liveness flip under ONE lock: a _job_waiter finishing this job
+    # concurrently must not have its completion overwritten by our stale read.
+    with _jobs_lock:
+        jobs = _read_jobs(config)
+        job = None
+        for j in jobs:
+            if j["name"] == name:
+                job = j
+                break
 
-    if not job:
-        return ToolResult(output=f"No job named '{name}' found", full_output_path=None, success=False, duration_s=0)
+        if not job:
+            return ToolResult(output=f"No job named '{name}' found", full_output_path=None, success=False, duration_s=0)
 
-    # Check if still running (cross-platform)
-    pid = job.get("pid", 0)
-    if job["status"] == "running" and not _pid_alive(pid):
-        job["status"] = "completed"
-        _write_jobs(config, jobs)
+        # Check if still running (cross-platform)
+        pid = job.get("pid", 0)
+        if job["status"] == "running" and not _pid_alive(pid):
+            job["status"] = "completed"
+            _write_jobs(config, jobs)
 
     # Read tail of output (and cap output file if oversized)
     output_path = job.get("output_path", "")
