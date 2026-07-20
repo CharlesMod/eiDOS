@@ -777,6 +777,16 @@ class _Pillars:
             except Exception as e:  # noqa: BLE001
                 logger.warning("pillars predict tool registration failed: %s", e)
 
+        # WORLD_PLAN §5 (W1) — the `go` movement tool joins the registry (register_world_tool is
+        # itself flag-gated on `world_enabled`). Flag off (default) → absent from TOOLS, never in
+        # the grammar; the world stays fully dark (W7). Exception-guarded like every flag organ.
+        if getattr(c, "world_enabled", False):
+            try:
+                from tools import register_world_tool
+                register_world_tool(c)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("world go tool registration failed: %s", e)
+
         # The Commission (COMMISSION_PLAN.md) — the standing-order organ: verbs join the registry
         # (register_commission_tools is itself flag-gated) and the engine settles verdicts/claims
         # at the after_outcome beat.
