@@ -276,11 +276,13 @@ class TestExpiry(unittest.TestCase):
         self.cfg = _cfg(tempfile.mkdtemp())
 
     def test_expiry_via_check(self):
+        # Issue while the deadline is still ahead (a dead offer is swept, never issued — see
+        # test_progression_deadlock), then adjudicate at a `now` past it: active-quest expiry.
         sysm = System(self.cfg)
-        past = time.time() - 10
-        sysm.propose(_level_quest("q1", level=9, expiry_ts=past))
+        expiry = time.time() + 60
+        sysm.propose(_level_quest("q1", level=9, expiry_ts=expiry))
         q = sysm.issue_next(sleeps_since_close=1, condition="STABLE")
-        r = sysm.check(q, {"persona": {"level": 1}})  # unmet + past expiry
+        r = sysm.check(q, {"persona": {"level": 1}}, now=expiry + 10)  # unmet + past expiry
         self.assertTrue(r["expired"])
         self.assertEqual(r["quest"].state, EXPIRED)
         ep = r["episode"]
@@ -294,10 +296,10 @@ class TestExpiry(unittest.TestCase):
     def test_expire_if_due_records_ignore(self):
         # Ignoring a quest (never checked, lapses at the sleep boundary) is itself recorded.
         sysm = System(self.cfg)
-        past = time.time() - 1
-        sysm.propose(_level_quest("q1", level=9, expiry_ts=past))
+        expiry = time.time() + 60
+        sysm.propose(_level_quest("q1", level=9, expiry_ts=expiry))
         sysm.issue_next(sleeps_since_close=1, condition="STABLE")
-        ep = sysm.expire_if_due()
+        ep = sysm.expire_if_due(now=expiry + 10)
         self.assertIsNotNone(ep)
         self.assertEqual(ep["fail_kind"], "quest_expired")
         self.assertIsNone(sysm.store.active())
@@ -306,10 +308,10 @@ class TestExpiry(unittest.TestCase):
         # A quest that is complete at the deadline pays out rather than expiring.
         paid = []
         sysm = System(self.cfg, reward_sink=lambda cfg, q: paid.append(q.id))
-        past = time.time() - 1
-        sysm.propose(_level_quest("q1", level=2, expiry_ts=past))
+        expiry = time.time() + 60
+        sysm.propose(_level_quest("q1", level=2, expiry_ts=expiry))
         sysm.issue_next(sleeps_since_close=1, condition="STABLE")
-        ep = sysm.expire_if_due({"persona": {"level": 5}})
+        ep = sysm.expire_if_due({"persona": {"level": 5}}, now=expiry + 10)
         self.assertIsNone(ep)          # passed, not expired
         self.assertEqual(paid, ["q1"])
         self.assertEqual(sysm.store.active(), None)

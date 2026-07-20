@@ -72,7 +72,10 @@ Standing design preferences. #1 (Charlie): **event-driven over polled — call-r
 or interrupt, never delay-based.** Prefer an interrupt/`notify`, else a bounded blocking acquire
 (server-side event wait), and only poll-with-sleep when there is genuinely no signal to subscribe
 to. No `sleep(N)`-and-hope, no fixed cooldown timers as a stand-in for "is it done yet". Delays are
-guesses; events are ground truth.
+guesses; events are ground truth. #4 (Charlie): **the system never lies to the creature** — a tool
+result says what actually happened; gates/caps/no-ops are visible typed failures carrying the real
+rule, never a success-wrapped nothing (a success-lie in `objective_add` once no-op'd 59 straight
+commitments and deadlocked the whole progression).
 
 ## Async tool model
 eiDOS's `bash` is **async by default**: it dispatches and the result returns later tagged `[↩ job N]`;

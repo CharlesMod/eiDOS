@@ -47,3 +47,23 @@ wait or a fixed `sleep` is not.
 
 ## 3. eiDOS proposes, the operator-controlled dashboard applies
 Accident-safety, not adversary-proofing. Git-reversible. See `SELF_IMPROVEMENT_PLAN.md`.
+
+## 4. The system never lies to the creature. (Charlie, 2026-07)
+Every tool result must reflect what actually happened. `success=True` means the action **took
+effect in the world**; a gate, cap, refusal, or no-op is a visible **failure** (`success=False`
+with a typed `fail_kind` and the real rule in the output) — never a soothing message wrapped
+around nothing. The creature must be able to see errors and movement in everything it runs:
+what changed, what was refused and why, what is locked and what would unlock it.
+
+**Why:** the creature's world-model is built ONLY from these results. A well-meant lie poisons
+learning at the root — the live creature "succeeded" at `objective_add` 59 straight times while
+the platform silently wrote nothing, believed itself a creature with projects, and the whole
+progression deadlocked on a counter that could never move. Reward, episodic memory, learned
+lessons, and calibration all settle on tool outcomes; one dishonest path corrupts every system
+downstream of it. This is the inward-facing half of truth-rendering (the V3 "its face never
+lies" invariant): the face shown to the OPERATOR must match the felt state, and the world shown
+to the CREATURE must match what the platform actually did.
+
+**The test:** for any tool path, ask "did the thing the output claims actually happen?" If the
+answer needs a caveat, the result is a lie — type it as the failure it is. Refusals should name
+the constraint (stage cap, lock, safety pattern) so the wall itself is learnable.

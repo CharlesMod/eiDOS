@@ -2387,21 +2387,41 @@ def _obj_tick(config: Config) -> int:
         return 0
 
 
+# How many undertakings a creature can hold open (active/blocked) at once, by life stage.
+# A young mind learns commitment by carrying ONE thing to completion; breadth is earned.
+# Stages absent from the map (adult, guardian) are uncapped. Declared here, enforced at the
+# tool boundary where the refusal can be rendered honestly.
+_STAGE_OBJECTIVE_CAP = {"egg": 1, "hatchling": 1, "juvenile": 3}
+
+
 def tool_objective_add(args: dict, config: Config) -> ToolResult:
     """Add a new open commitment to your backlog. Each objective MUST carry its 'why' (the purpose it
     serves) so you never lose the bigger picture while working the mechanics."""
     import objectives
-    # A hatchling is too young to carry a project — its job is to orient and play, not to commit to and
-    # grind an undertaking (that pressure would also keep it awake past its first sleep). Reframe to
-    # play as a gentle SUCCESS (not a failure that pumps frustration). Undertakings arrive at juvenile.
+    # Stage-scaled CARRYING CAPACITY, not a closed door. The genesis ladder grants the resolve
+    # tools at genesis-03's issuance and its criterion is goals_completed >= 1 — the design
+    # expects a hatchling to choose ONE small undertaking and finish it. The old blanket refusal
+    # here returned success=True while writing NOTHING: a lie that silently no-op'd 59 straight
+    # commitments on the live creature and hard-deadlocked the whole progression (goals_completed
+    # could never move → genesis-03 never closed → quest_line_closed blocked level 2 → juvenile
+    # never arrived). Doctrine (ARCHITECTURE_PRINCIPLES #4): the system never lies — a refusal is
+    # a visible FAILURE carrying the real rule, so the creature can see the wall and reason about
+    # it instead of believing 59 phantom successes.
     if getattr(config, "pillars_tool_unlocks_enabled", False):
         import creature_gen
-        if creature_gen.current_stage(config) in ("egg", "hatchling"):
-            return ToolResult(
-                output=("You're still too new for projects — no need to set yourself tasks yet. Just "
-                        "poke around and see what's here; noticing and playing is the whole of it right "
-                        "now. Bigger undertakings are something you grow into."),
-                full_output_path=None, success=True, duration_s=0)
+        stage = creature_gen.current_stage(config)
+        cap = _STAGE_OBJECTIVE_CAP.get(stage)
+        if cap is not None:
+            live = [x for x in objectives.list_objectives(config)
+                    if x.get("state") in ("active", "blocked")]
+            if len(live) >= cap:
+                held = "; ".join(f"'{x['title']}'" for x in live[:3])
+                return ToolResult(
+                    output=(f"Refused: at your stage you can carry {cap} undertaking(s) at a "
+                            f"time, and you already hold {held}. Finish it (objective_done) or "
+                            f"set it down (objective_block) before committing to another — "
+                            f"one thing, seen through, is how you grow."),
+                    full_output_path=None, success=False, duration_s=0, fail_kind="blocked")
     title = (args.get("title") or args.get("objective") or "").strip()
     why = (args.get("why") or args.get("because") or args.get("purpose") or "").strip()
     if not title:

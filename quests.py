@@ -425,6 +425,27 @@ class System:
         self.store.save(quests)
         return quest
 
+    def sweep_offered(self, *, now: Optional[float] = None) -> list["Quest"]:
+        """Expire QUEUED (offered) quests whose deadline passed without ever being issued.
+
+        check()/expire_if_due() only watch the ACTIVE quest; offered rows had no sweeper, so a
+        dead offer sat in the queue forever — and could be promoted long after its deadline
+        (observed live: three auto-issued quests stuck 'offered' days past expiry_ts). Runs at
+        the queue's natural service point (issue_next) — event-driven, no timer. Returns the
+        swept quests so the caller can surface them."""
+        now = time.time() if now is None else now
+        swept: list[Quest] = []
+        quests = self.store.load()
+        for q in quests:
+            if q.state == OFFERED and q.is_expired(now):
+                q.state = EXPIRED
+                q.closed_ts = _now()
+                q.outcome = "expired while offered (never engaged)"
+                swept.append(q)
+        if swept:
+            self.store.save(quests)
+        return swept
+
     # --- cadence: issue the next quest (the not-coddled state gate, §7) ----------------------
     def issue_next(self, *, sleeps_since_close: int, condition: str) -> Optional["Quest"]:
         """Promote one queued quest to ACTIVE — but ONLY when the not-coddled cadence permits:
@@ -436,6 +457,7 @@ class System:
 
         The caller feeds `sleeps_since_close` (a counter it advances on each sleep boundary) and
         `condition` (glue.compute_condition). Event-driven, not scheduled (ARCH #1)."""
+        self.sweep_offered()                  # a dead offer must never be promoted
         if self.store.active() is not None:
             return None                       # one active quest at a time — silence
         if condition in _HEALTHY_BLOCK:
