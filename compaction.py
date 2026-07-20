@@ -333,6 +333,74 @@ def compact_briefing(config: Config, persona: dict = None) -> None:
     except Exception as exc:  # noqa: BLE001 - pruning must never disturb the dream
         logger.warning("snapshot prune failed: %s", exc)
 
+    # WISDOM_PLAN §2 + §5 (dark by their own flags): the sleep window's deliberate-practice job.
+    # Replay runs K bounded counterfactual LLM calls (never executing anything, WIS4) and settles the
+    # learned/unlearned verdict onto the recalled memories; curation extends the SHY decay with the
+    # utility signal replay + the bet ledger produce. Both are guarded (a wisdom fault never wounds
+    # the dream) and byte-identical no-ops with their flags off.
+    try:
+        run_wisdom_sleep(config)
+    except Exception as exc:  # noqa: BLE001 - wisdom replay/curation must never disturb the dream
+        logger.warning("wisdom replay/curation failed: %s", exc)
+
+
+
+def run_wisdom_sleep(config: Config, *, tick: int = 0) -> dict:
+    """The sleep window's WISDOM_PLAN job (§2 replay + §5 curation), each behind its own flag. Runs
+    at the dream/consolidation beat (compaction's job list). Returns {"replay": ..., "curation": ...}
+    reports for the caller/log; each half is a typed {"skipped": reason} no-op when its flag is off,
+    so with both flags dark this is byte-identical to not calling it.
+
+    Replay gets a live-LLM adapter around llm.complete matching replay.run_replay's
+    `(messages, *, grammar=None) -> str` contract, so a dream can practice on the real mind — but
+    replay itself skips gracefully (typed reason) when the mind is unreachable, so the dream never
+    hangs. A one-line curation report is written into the dream log (the dream journal)."""
+    out = {"replay": {"skipped": "flag off"}, "curation": {"skipped": "flag off"}}
+    # --- §2 replay (dark by wisdom_replay_enabled) -----------------------------------------------
+    if getattr(config, "wisdom_replay_enabled", False):
+        try:
+            import replay as _replay
+
+            def _llm(messages, *, grammar=None):
+                # The one grammar-constrained action call replay needs. Never executes anything.
+                return complete(messages, config, temperature=0.3,
+                                max_tokens=config.compaction_max_tokens, grammar=grammar)
+
+            out["replay"] = _replay.run_replay(config, llm=_llm, tick=tick)
+        except Exception as exc:  # noqa: BLE001 - replay is best-effort at the sleep window
+            logger.warning("wisdom replay failed: %s", exc)
+            out["replay"] = {"skipped": f"error: {exc}"}
+    # --- §5 curation (dark by wisdom_curation_enabled) -------------------------------------------
+    if getattr(config, "wisdom_curation_enabled", False):
+        try:
+            import replay as _replay
+            rep = _replay.curate(config)
+            out["curation"] = rep
+            line = rep.get("report")
+            if line:
+                _append_dream_log(config, line)   # one-line curation report into the dream journal
+        except Exception as exc:  # noqa: BLE001 - curation is best-effort at the sleep window
+            logger.warning("wisdom curation failed: %s", exc)
+            out["curation"] = {"skipped": f"error: {exc}"}
+    return out
+
+
+def _append_dream_log(config: Config, line: str) -> None:
+    """Append a one-line note to the most recent dream record (the dream journal the dashboard shows),
+    or a fresh stub if none exists this cycle. Best-effort — a journaling fault never wounds the dream."""
+    try:
+        config.snapshots_dir.mkdir(parents=True, exist_ok=True)
+        records = sorted(config.snapshots_dir.glob("dream_*.md"))
+        if records:
+            path = records[-1]
+            prev = path.read_text(encoding="utf-8")
+            path.write_text(prev.rstrip() + f"\n\n{line}\n", encoding="utf-8")
+        else:
+            ts = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+            (config.snapshots_dir / f"dream_{ts}.md").write_text(
+                f"# Dream @ {ts}\n\n{line}\n", encoding="utf-8")
+    except OSError as exc:
+        logger.warning("dream log append failed: %s", exc)
 
 
 def _dream_combined(config, goal, plan, obs_text, persona):

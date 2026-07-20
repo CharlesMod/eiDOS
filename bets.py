@@ -114,6 +114,14 @@ CLIQUE_SHRINK = 0.25        # declared: the freeloader's shared credit multiplie
                             # breaks a freeloader's compounding (pitfall #6's damper).
 CLIQUE_STATE_MAX = 512      # declared: bound on per-engram ledger bookkeeping entries (§M-3);
                             # least-recently-settled evicted first.
+REPLAY_CREDIT = 0.10        # declared: the wisdom-§2 counterfactual-replay coin. Between the shared
+                            # (0.02) and strong (0.15) coins: a dreamed replay that the memory
+                            # PROVABLY taught (the model reproduced the verified fix) is causal
+                            # evidence — stronger than mere co-presence — but it happened in a dream,
+                            # not in live execution (WIS4), so it earns LESS than a proven live follow.
+                            # Applied ± symmetrically: a memory that taught the ORIGINAL FAILURE
+                            # (the guardrail that should have fired but didn't) takes the same-sized
+                            # loss (§5's "recalled-into-failure" is the noise the curator prunes).
 
 
 def _clamp01(x: float) -> float:
@@ -431,3 +439,49 @@ class BetLedger:
         self.consolidator.update_strength(eid, target, recalled_tick=tick,
                                           credit_delta=new_sum - old_sum)
         return {"strength": target}
+
+    # --- settle (the wisdom-§2 REPLAY channel — a new mechanical settlement kind) -----------------
+    def settle_replay(self, *, tick: int, engram_ids: list, learned: bool) -> list[dict]:
+        """Settle a counterfactual-replay verdict onto the memories that were RECALLED into the replay
+        (WIS1: adjudicated-only — the verdict comes from bets.signature_match against RECORDED ground
+        truth in replay.py, never the model's opinion of its own answer). This is the sibling of
+        `settle()`: same single-writer strength math (`_apply_credit`), but it opens no live bet and
+        needs no glue outcome — the replay IS the adjudication, already computed.
+
+          - learned=True  → each recalled memory gains REPLAY_CREDIT (it demonstrably TAUGHT the
+                            verified fix) and its int stat `replay_learned` is incremented — the
+                            cross-stream contract §5's curator reads to protect a load-bearing memory.
+          - learned=False → each takes a REPLAY_CREDIT LOSS (the guardrail that should have fired
+                            taught the OLD failure instead) and its int stat `replay_unlearned` is
+                            incremented — the "recalled-into-failure" signal the curator decays on.
+
+        A `divergent` replay (the model matched neither fix nor failure) calls this NOT AT ALL — it is
+        recorded by replay.py without settlement (honesty about what we can't score). Inert with the
+        bet-ledger flag off, so the whole replay settlement path is byte-identical when 2.3 is dark.
+        Returns one settlement dict per engram actually mutated (a pruned/absent id is skipped)."""
+        if not self.enabled:
+            return []
+        tick = int(tick)
+        state = self._load_state()
+        engs = state.setdefault("engrams", {})
+        credit = REPLAY_CREDIT if learned else -REPLAY_CREDIT
+        stat_key = "replay_learned" if learned else "replay_unlearned"
+        settlements: list[dict] = []
+        for eid in engram_ids or []:
+            if not isinstance(eid, str) or self.store.get(eid) is None:
+                continue
+            es = engs.setdefault(eid, _fresh_es())
+            # A replay is INDIVIDUAL evidence (the memory was tested on its own merits against ground
+            # truth), so it counts as a solo settlement — it lifts the freeloader damper like a strong
+            # live follow does, and never feeds the clique intersection.
+            es["solo"] = int(es.get("solo", 0)) + 1
+            es["last_tick"] = tick
+            applied = self._apply_credit(eid, credit, tick=tick, matched=True,
+                                         success=learned, es=es)
+            # Pin the cross-stream tally ON the memory through the single writer (§I6).
+            self.consolidator.bump_stats(eid, {stat_key: 1})
+            settlements.append({"eid": eid, "tick": tick, "credit": credit,
+                                "kind": "replay", "learned": learned,
+                                "strength": applied.get("strength")})
+        self._save_state(state)
+        return settlements
