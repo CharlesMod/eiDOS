@@ -211,6 +211,16 @@ class TestPersonaHook:
 # =================================================================================================
 class TestSetpointSprings:
     def _streaked(self, cfg, n_fail=60):
+        # Fixed germline (simdays' determinism fix, same rationale): without a genome.json the
+        # congenital caution BASELINE and the gene-scaled SPRING RATE birth from os.urandom, and
+        # a far-clamp baseline + a low spring-gene draw made the recovery bound flip run-to-run
+        # (~1-in-3 flake observed). One seed, reproducible congenitals, deterministic springs.
+        import json
+        import genome as _genome
+        gpath = cfg.workspace / _genome.GENOME_FILENAME
+        if not gpath.exists():
+            gpath.write_text(json.dumps({"v": 1, "seed": 7}), encoding="utf-8")
+            _genome._cache.pop(str(gpath), None)
         t = Temperament(cfg)
         for _ in range(n_fail):
             t.observe(success=False, failed=True, overridden=False)
