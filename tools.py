@@ -196,6 +196,18 @@ class PredictArgs(_ToolArgs):
         return v
 
 
+class GoArgs(_ToolArgs):
+    """WORLD_PLAN §5: `go {"place": "workshop"}` — move to a place in the truthful world.
+    `place` is a stable snake_case place id; adjudication (unknown / locked / open) is the world
+    module's, not the grammar's — the grammar only governs FORM."""
+    place: str = Field(validation_alias=AliasChoices("place", "to", "destination"))
+
+    @field_validator("place")
+    @classmethod
+    def _place_not_empty(cls, value: str) -> str:
+        return _trimmed_nonempty(value, "place")
+
+
 class RecallArgs(_ToolArgs):
     query: str
 
@@ -2765,6 +2777,52 @@ def tool_predict(args: dict, config: Config) -> ToolResult:
         full_output_path=None, success=True, duration_s=0)
 
 
+def tool_go(args: dict, config: Config) -> ToolResult:
+    """Move to a place in your world — `go {"place": "workshop"}`. The world is a truthful map of
+    the machine you live in; walking to a place FOREGROUNDS what belongs there (it never locks a
+    tool — every tool works everywhere). An unknown place is refused with the real place list; a
+    locked door names the real condition that opens it; a successful move tells you where you now
+    stand. (WORLD_PLAN §5.)"""
+    if not getattr(config, "world_enabled", False):
+        # DARK: unreachable in practice (the tool isn't registered when the flag is off) — the
+        # belt-and-suspenders guard so a direct dispatch can't move while the world is dark.
+        return ToolResult(output="There is nowhere to go yet.", full_output_path=None,
+                          success=False, duration_s=0, fail_kind="blocked")
+    place = (args.get("place") or "").strip()
+    if not place:
+        return ToolResult(output="Error: provide a 'place' — where you want to go.",
+                          full_output_path=None, success=False, duration_s=0, fail_kind="args")
+    try:
+        import world
+    except Exception:  # noqa: BLE001 - world module absent/broken: no movement, honest failure
+        return ToolResult(output="There is nowhere to go yet.", full_output_path=None,
+                          success=False, duration_s=0, fail_kind="blocked")
+    # Classify the refusal (ARCH #4 — an honest, learnable wall): an id the built world does not
+    # contain is an ARGS error and we list the REAL place ids; a known-but-closed exit is BLOCKED
+    # and move_to's message names the real unlock condition (§5, W6). move_to is the sole
+    # adjudicator + the only writer (it persists position on success).
+    try:
+        w = world.build_world(config)
+        known = set(getattr(w, "places", {}) or {})
+    except Exception:  # noqa: BLE001 - a build failure must not crash the tick; refuse honestly
+        return ToolResult(output="You can't find your way just now.", full_output_path=None,
+                          success=False, duration_s=0, fail_kind="blocked")
+    if place not in known:
+        listing = ", ".join(sorted(known)) if known else "(nowhere)"
+        return ToolResult(output=f"There's no place called \"{place}\". You can go to: {listing}.",
+                          full_output_path=None, success=False, duration_s=0, fail_kind="args")
+    try:
+        ok, message = world.move_to(config, place)
+    except Exception:  # noqa: BLE001 - adjudication error: honest blocked refusal, never a crash
+        return ToolResult(output="You can't get there right now.", full_output_path=None,
+                          success=False, duration_s=0, fail_kind="blocked")
+    if ok:
+        return ToolResult(output=message, full_output_path=None, success=True, duration_s=0)
+    # Known place but move_to refused → a locked door; its message names the real condition (W6).
+    return ToolResult(output=message, full_output_path=None, success=False, duration_s=0,
+                      fail_kind="blocked")
+
+
 TOOLS: dict[str, Callable[[dict, Config], ToolResult]] = {
     "bash": tool_bash,
     "write_file": tool_write_file,
@@ -2851,6 +2909,19 @@ def register_predict_tool(config: Config) -> bool:
     return "predict" in TOOLS
 
 
+def register_world_tool(config: Config) -> bool:
+    """WORLD_PLAN §5 (DARK by default): register the grammar-constrained `go` movement tool ONLY
+    when `world_enabled` is on. Idempotent; mirrors register_predict_tool — with the flag off `go`
+    is absent from TOOLS, so it never enters the tick grammar and the world stays fully dark (W7).
+    Returns True if `go` is present after the call."""
+    if getattr(config, "world_enabled", False):
+        TOOLS.setdefault("go", tool_go)
+        _TOOL_ARG_MODELS.setdefault("go", GoArgs)
+    else:
+        TOOLS.pop("go", None)
+    return "go" in TOOLS
+
+
 # Built-in tool names, snapshotted at import time — BEFORE any self-authored skill is hot-loaded into
 # TOOLS (skills.py adds them at runtime via TOOLS[name] = runner). Anything dispatched whose name is
 # NOT in this set is therefore a skill, and gets the wall-clock watchdog below.
@@ -2861,7 +2932,7 @@ _BUILTIN_TOOL_NAMES = frozenset(TOOLS)
 # `predict` registers via register_predict_tool (4.1) and belongs to the foresight unit; the
 # commission verbs register via register_commission_tools and belong to the commission unit.
 _FLAG_REGISTERED_BUILTINS = frozenset({"predict", "commission_add", "commission_done",
-                                       "weigh_options"})
+                                       "weigh_options", "go"})
 _EVER_BUILTIN_NAMES = _BUILTIN_TOOL_NAMES | _FLAG_REGISTERED_BUILTINS
 
 # Registry aliases: alias name -> the canonical tool it rides on. An alias exists exactly when its

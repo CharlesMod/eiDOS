@@ -990,6 +990,40 @@ def _read_learned_lessons(config, k=6):
     return _read_learned_file(config, "learned_lessons.json", k=k)
 
 
+# ---------------------------------------------------------------------------
+# The world block (WORLD_PLAN §4 — the "## Where you are" proprioception block)
+# ---------------------------------------------------------------------------
+
+def _world_block(config: Config, tick_number: int = 0) -> str:
+    """Render the WORLD_PLAN §4 "## Where you are" block — the creature's place proprioception,
+    a pure view over `world.build_world(...)` + `world.render_here(...)`.
+
+    Flag-gated on `world_enabled` (WORLD_PLAN §1 W7 — default false is byte-identical: no block).
+    `world` is imported LAZILY here and the whole path is exception-guarded, so a missing/broken
+    world module (the sibling builds it in parallel) or any derivation error yields an ABSENT block,
+    never a crashed tick (fail-open — §4/W7). Returns "" whenever the block should not render.
+
+    Placed in the durable SEMI tier by the caller: the place text changes only on movement or a
+    real state change (§4), so the KV prefix survives ordinary ticks; and living in the durable
+    blob's tail it is dropped cleanly under budget pressure like the other semi-stable sections
+    (never destabilising the stable head)."""
+    if not getattr(config, "world_enabled", False):
+        return ""
+    try:
+        import world  # lazy: the sibling module; absent in a flag-off world → ImportError → no block
+        persona = None
+        try:
+            import persona as _persona
+            persona = _persona.load_persona(config.workspace)
+        except Exception:  # noqa: BLE001 - flavor input only; a read glitch must not drop the block
+            persona = None
+        w = world.build_world(config, persona=persona, tick=tick_number)
+        block = world.render_here(w)
+        return block.strip() if block and block.strip() else ""
+    except Exception:  # noqa: BLE001 - W7 fail-open: any world failure → absent block, never a crash
+        return ""
+
+
 # --- KV-stable head (BIBLE §2.11 delta prompting) ---------------------------------------------------
 # The stable prefix is re-rendered only when a source file changes; otherwise the last render is reused
 # verbatim (byte-identical → llama.cpp prefix-KV reuse intact). A TTL forces an occasional rebuild so any
@@ -1245,6 +1279,15 @@ def _assemble_briefing(
     backlog = None if creature else _backlog_panel(config)
     if backlog:
         durable.append(backlog)
+
+    # ## Where you are (WORLD_PLAN §4, dark behind `world_enabled`): the creature's place
+    # proprioception — a pure view over the truthful world graph. SEMI tier: the place text
+    # changes only on movement or a real state change, so the KV prefix survives ordinary ticks;
+    # and riding the durable blob's tail it is dropped cleanly under budget pressure like the
+    # other semi-stable sections. Flag off (default) → "" → no block, byte-identical (W7).
+    _world = _world_block(config, tick_number)
+    if _world:
+        durable.append(_world)
 
     # Open notebook — your working notes for the current task (third memory tier). Always shown so
     # you build on them instead of re-memorizing the same fact or writing hidden JSON.
