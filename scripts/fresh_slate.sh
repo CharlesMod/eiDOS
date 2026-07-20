@@ -26,6 +26,20 @@ if [ "${1:-}" != "--yes" ]; then
     [ "$ans" = "fresh" ] || { echo "aborted"; exit 1; }
 fi
 
+# == 0/3 PUBLISH the retiring creature's heirloom BEFORE the wipe (WISDOM_PLAN §6: retirement is a
+# publication event — distill the replay-validated corpus into heirlooms/ so the next creature
+# inherits it). BEST-EFFORT: a failed export warns loudly but NEVER blocks the slate. The old
+# corpus is about to be cleared, so this is the last chance to publish it.
+echo "== 0/3 publish heirloom (lineage — best-effort, never blocks)"
+if PYTHONUTF8=1 "$PY" -c 'import sys, legacy; from config import load_config; \
+p = legacy.export_heirloom(load_config("config.toml")); \
+print("   heirloom:", p if p else "(nothing earned publication — no volume written)")'; then
+    :
+else
+    echo "!! heirloom export FAILED — proceeding with the slate anyway (the lineage misses this" >&2
+    echo "   creature's volume; the wipe is NOT blocked). Investigate legacy.py if this recurs." >&2
+fi
+
 echo "== 1/3 reset (stop, archive, clear, reseed — via reset_eidos.py)"
 PYTHONUTF8=1 "$PY" reset_eidos.py --yes
 
