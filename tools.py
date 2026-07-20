@@ -2284,10 +2284,16 @@ def tool_speak(args: dict, config: Config) -> ToolResult:
         with urllib.request.urlopen(req, timeout=6) as resp:
             info = _json.loads(resp.read() or b"{}")
     except Exception as e:  # noqa: BLE001
-        # The voice system being momentarily unreachable is NOT a reason to rebuild it — just move on.
-        return ToolResult(output=f"speak: submitted, but the dashboard voice system was unreachable "
-                          f"({type(e).__name__}). It will play when reachable; do not build your own TTS.",
-                          full_output_path=None, success=True, duration_s=0)
+        # ARCHITECTURE_PRINCIPLES #4 — the system never lies: nothing was spoken. The POST never
+        # reached the voice service, and the service queue is in-memory + connection-scoped (no
+        # persistent store), so there is NO "it'll play later" — that claim was a lie. Report the
+        # real network failure. The text IS still in Boss's chat (mirrored above), and the voice
+        # system being momentarily down is NOT a reason to rebuild it — just try again on a later tick.
+        return ToolResult(output=(f"speak FAILED — the voice service was unreachable ({type(e).__name__}), "
+                                  f"so nothing was spoken out loud (there is no queue that holds it for "
+                                  f"later). Your words ARE in Boss's chat as text. Try speaking again on a "
+                                  f"later tick; do NOT build your own TTS."),
+                          full_output_path=None, success=False, duration_s=0, fail_kind="network")
     listeners = info.get("delivered", 0)
     heard = f"playing on {listeners} open dashboard(s)" if listeners else \
             "queued (no dashboard has voice enabled right now — that's fine, keep working)"
