@@ -111,21 +111,25 @@ scripts/fresh_slate.sh
 
 ## The 32k window (WISDOM_PLAN §0) — DONE 2026-07-20; recipe + how it was landed
 
-The mind now serves at **`-c 32768`, q8_0 KV, `-fa on`, `-ngl` omitted** — live and verified
-(clean generation, ~1 GB free with the embedder co-loaded). This section is the recipe + the
-scars, in case of a rebuild. The serving change and the config budgets are a PAIR (coherence
-rule: `n_ctx >= max_total_chars/chars_per_token + response_reserve`).
+The mind now serves at **`-c 32768`, FULL-PRECISION f16 KV, `-fa on`, `-ngl` omitted** — live and
+verified (clean generation + 8k-prompt smoke, ~1.07 GB free with the embedder co-loaded). **This is
+the SYSTEM DEFAULT for gemma-4-12b @32k on any 16 GB card** (memory: `gemma-32k-16gb-serving-default`).
+The serving change and the config budgets are a PAIR (coherence rule:
+`n_ctx >= max_total_chars/chars_per_token + response_reserve`).
 
 **The gemma entry `cmd:` in `/home/cmod/llm/llama-swap/config.yaml` (as landed):**
 ```
 -c 32768 --parallel 1 -fa on
---cache-type-k q8_0 --cache-type-v q8_0
+--cache-type-k f16 --cache-type-v f16
 --jinja --reasoning-budget 1000
 ```
-Three hard-won gotchas on this llama.cpp build (all three cost a debugging loop — don't relearn them):
-- **q8_0 KV needs flash attention.** Gemma's sliding-window attention makes the KV tiny (~350 MiB
-  at 32k q8_0), so the win isn't cache size — it's that q8_0+fa leaves ~1 GB free where **32k f16
-  leaves only ~300 MiB** (OOM-prone; a short generation came back empty from VRAM starvation).
+**Why full-precision KV (not q8_0):** gemma's sliding-window attention makes the KV tiny (~700 MiB
+f16 @32k), so full precision fits without quantization — and it lands at the **same ~1 GB free as
+q8_0**, because q8_0's flash-attention compute buffer offsets its KV savings. So we keep the best
+attention quality at zero headroom cost. (q8_0 KV is a tested fallback; f16-without-`-fa` also works
+at identical VRAM. No reason to prefer either over f16+fa.)
+
+Three hard-won gotchas on this llama.cpp build (each cost a debugging loop — don't relearn them):
 - **`-fa on` is two tokens** ([on|off|auto]) on this build. Bare `-fa` eats the next arg
   (`error: unknown value for --flash-attn: '--cache-type-k'`).
 - **Omit `-ngl` entirely.** With `-fa on`, this build runs a memory auto-fitter that ABORTS if
@@ -133,11 +137,12 @@ Three hard-won gotchas on this llama.cpp build (all three cost a debugging loop 
   in ~265 ms; llama-swap only reports "upstream command exited prematurely" and swallows the real
   stderr — set `logLevel: debug` to see the spawned command). Without the pin the fitter places
   layers itself; the 12.7 GB model fits, so all layers still offload to GPU.
+- **`--reasoning-budget 1000` returns empty content for SHORT generations** (reasoning eats a small
+  `max_tokens`). Test with `max_tokens: 200`, not a tiny value — empty ≠ broken.
 
 Procedure for a rebuild: `sudo systemctl stop llama-swap.service` → edit the entry as above →
-`sudo systemctl start` → force a load (`curl … /v1/chat/completions` with `max_tokens:200`, not a
-tiny value — `--reasoning-budget 1000` returns empty content for short generations, which is NOT a
-failure) → `nvidia-smi` wants ≥ ~800 MiB free with the desktop up → one ~25k-token-prompt smoke.
+`sudo systemctl start` → force a load (`curl … /v1/chat/completions` with `max_tokens:200`) →
+`nvidia-smi` wants ≥ ~800 MiB free with the desktop up → one ~8k-token-prompt smoke.
 Fallback if headroom is thin on a busier desktop: `-c 24576`. Config backup: `config.yaml.bak-pre32k`.
 
 **The paired budgets** (dashboard Settings or `config.local.toml`), applied WITH the serving flip:
