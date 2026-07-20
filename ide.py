@@ -320,7 +320,15 @@ class StintManager:
             live = sum(1 for s in self.stints.values() if s.status == "running")
             if live >= int(getattr(self.config, "ide_max_stints", 8)):
                 return None, "too many live stints (close one first)"
-        sid = "s%d" % int(time.time() * 1000)
+        # Unique sid: two creates inside the same millisecond collided on the timestamp
+        # alone — the second silently OVERWROTE the first's stints[] slot (and dodged the
+        # live-stint cap, which is how the cap test flaked on fast runs).
+        base = "s%d" % int(time.time() * 1000)
+        sid, n = base, 1
+        with self.lock:
+            while sid in self.stints or (self.root / sid).exists():
+                n += 1
+                sid = f"{base}_{n}"
         sdir = self.root / sid
         work = sdir / "work"
         work.mkdir(parents=True, exist_ok=True)
