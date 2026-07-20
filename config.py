@@ -435,6 +435,13 @@ class Config:
     pillars_tool_unlocks_enabled: bool = False         # unit grants + visible_tools accessor + infant nap curve + stage-expressed alleles (unlocks.py); a locked tool does not exist (§0)
     pillars_commission_enabled: bool = False           # COMMISSION_PLAN.md: the standing-order organ — brief/todo/verdict settlement (commission.py)
 
+    # WORLD_PLAN W0 — the truthful world (world.py): a rendering layer over the real stores. Flag-dark
+    # (W7): world_enabled=False is byte-identical — no context block, no `go` tool, no writes. The
+    # soak-then-flip convention (like tool_unlocks/commission above): land the code dark, soak on the
+    # host, then flip `enabled = true` in config.toml once W1 wiring proves it out. Other modules read
+    # this via getattr(config, "world_enabled", False) / world.world_enabled(config).
+    world_enabled: bool = False
+
     @property
     def workspace(self) -> Path:
         return Path(self.workspace_dir)
@@ -831,6 +838,12 @@ def load_config(path: str = "config.toml") -> Config:
         config.pillars_quests_enabled = pillars.get("quests_enabled", config.pillars_quests_enabled)
         config.pillars_tool_unlocks_enabled = pillars.get("tool_unlocks_enabled", config.pillars_tool_unlocks_enabled)
         config.pillars_commission_enabled = pillars.get("commission_enabled", config.pillars_commission_enabled)
+
+        # [world] — WORLD_PLAN W0. An unmodeled section (typed_boundary ConfigDocument extra="allow"),
+        # like [pillars]; the only knob is the flag-dark gate. tomllib parses `enabled = false` to a
+        # real bool; bool() is a defensive no-op that also tolerates a stray truthy/falsy value.
+        world = data.get("world", {})
+        config.world_enabled = bool(world.get("enabled", config.world_enabled))
 
         paths = data.get("paths", {})
         config.workspace_dir = paths.get("workspace", config.workspace_dir)

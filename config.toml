@@ -298,6 +298,14 @@ shadow_capacity = 1               # 6 concurrent shadow slots at unlock; grows o
 generals_enabled = false          # 7 delegated LLM minds on mission contracts (slot-sharing substrate)
 max_generals = 5                  # DERIVED (0.5 spike): empirical 8-slot ceiling @8k − 2 headroom − the mind's slot
 
+[world]
+# WORLD_PLAN W0 — the truthful world (world.py): a rendering layer over the real stores (skills,
+# knowledge, expectations, objectives, commission, quests, news, services, metabolism). Every place,
+# object and exit maps to a real referent (W1); no cosmetic verbs (W2); flag-dark when off (W7).
+# SOAK-THEN-FLIP: this lands DARK. Leave it false until W1 wires the context block + `go` tool, soak
+# on the host, then flip to true. Off = byte-identical (no context block, no `go`, no writes).
+enabled = false
+
 [paths]
 # Relative paths anchor at the repo root (resolved in config.py), so this is portable across machines
 # and OSes. Use an absolute path or "~/..." only to put the mind's memory somewhere else.
