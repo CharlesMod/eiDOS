@@ -741,3 +741,32 @@ class Consolidator:
         target.validate()
         _commit_to_store(self.store, current)
         return target
+
+    def bump_stats(self, engram_id: str, deltas: dict) -> Optional[Engram]:
+        """Increment integer stats counters on a long-term engram through the SINGLE writer (§I6) —
+        WITHOUT touching strength or recall bookkeeping. This is the write half of the cross-stream
+        contracts that the recall-utility loop's `update_strength` does not carry: the wisdom §2
+        replay tallies (`replay_learned` / `replay_unlearned`) and §5 curation's per-memory grace
+        counter. Those are earned-utility bookkeeping the engram schema does not name, but they must
+        live ON the memory (the curator reads them next sleep) and be persisted through the one
+        sanctioned write path, never by a second writer bolting the store.
+
+        `deltas` maps a stats key → a numeric delta ADDED to the current value (missing keys start at
+        0; a non-numeric current value self-heals to 0). Integer deltas keep the counter an int.
+        Returns the updated engram, or None if the id is not in long-term. No merge/dedup — this only
+        mutates an existing atom's bookkeeping, so it cannot breach the single-writer contract."""
+        current = self.store.load()
+        target = next((e for e in current if e.id == engram_id), None)
+        if target is None:
+            return None
+        for key, delta in (deltas or {}).items():
+            try:
+                base = float(target.stats.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                base = 0.0
+            val = base + float(delta)
+            # An int delta keeps an int counter (replay tallies, grace counters); a float stays float.
+            target.stats[key] = int(round(val)) if isinstance(delta, int) else val
+        target.validate()
+        _commit_to_store(self.store, current)
+        return target
