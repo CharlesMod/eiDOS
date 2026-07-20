@@ -101,6 +101,30 @@ Judged against the pillar: **autonomy — persist toward a goal without derailin
 - Flag: `[pillars] portfolio_gates_enabled` (default false; requires mastery_gates_enabled). Flip is
   the operator's call after soak.
 
+## Pillar 12 — Wisdom: lived experience as pre-done thinking (2026-07-20) ✅ BUILT, flag-dark
+- [x] **§1** reflexes: trigger→action rules the platform fires below the model; mechanical promotion
+  (5 consecutive adjudicated same-situation successes), operator-gated arming, demote-on-failure +
+  scar, WIS2 economy exclusion `reflexes.py`/`eidos.py` (feature)
+- [x] **§2** counterfactual sleep replay scored against verified fixes; {learned, unlearned,
+  divergent} → `state/replay_history.jsonl` (D3's real number); settlement via
+  `bets.settle_replay` on pinned stats keys `replay.py`/`bets.py`/`compaction.py` (feature)
+- [x] **§3** the calling convention: decision-shaped "## Before you act" (case/guardrail/offer +
+  verify-transfer frame), similarity-gated, budget-shaved from prose recall
+  `memory_manager.py`/`context.py` (feature)
+- [x] **§4** the experience-curve instrument: frozen 23-task battery (immutable, hash-guarded) ×
+  three arms (naive-12b / wise-12b / naive-27b), operator-run, WIS6 refusal discipline
+  `wisdom_curve.py`/`exam_battery/` (feature)
+- [x] **§5** utility-grounded curation in the sleep prune: no demonstrated decision-improvement
+  across 10 sleeps → accelerated decay regardless of recall volume `replay.py` (feature)
+- [x] **§6** lineage: heirloom export at fresh-slate + inherited seeding (discounted, disarmed
+  reflex proposals) `legacy.py`/`seed_knowledge.py`/`scripts/fresh_slate.sh` (feature)
+- [x] **§0** 32k window runbook (serving + paired budgets; q8_0 KV required on the 16 GB card)
+  `RUNTIME_SPRINTER.md` (operator applies)
+- Known seam before `reflexes_enabled` flips live: the promotion scanner reads `episodes.jsonl`,
+  which the memory-manager path (live setting) doesn't write — bridge to the engram ring first
+  (tracked, wave-2).
+- Flags: `[wisdom]` (all default false; soak-then-flip independently).
+
 ---
 
 ### Legend / decisions deferred to operator (implemented with a safe default, flagged in-commit)
