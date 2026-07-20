@@ -108,3 +108,43 @@ scripts/fresh_slate.sh
   offload) leaves only ~3 GB. Check `nvidia-smi` before launching a second llama-server.
 - **CLAUDE.md is Windows-era.** Ignore its nssm/`Restart-Service`/`taskkill`/PowerShell instructions on
   Sprinter; this file supersedes them for the runtime.
+
+## The 32k window flip (WISDOM_PLAN §0 — operator runbook)
+
+The mind serves at `-c 16384` with **f16 KV** (`/home/cmod/llm/llama-swap/config.yaml`, entry
+`gemma4-12b`). The Q8_0 weights are **12.7 GB** on the 16 GB RTX 5080, so 32k does NOT fit with
+f16 KV — the flip requires KV quantization. The serving change and the config budgets are a PAIR
+(coherence rule: `n_ctx >= max_total_chars/chars_per_token + response_reserve`); apply them
+together or not at all.
+
+1. **Stop the stack** (creature already stopped, or dashboard Stop first):
+   `sudo systemctl stop llama-swap.service`.
+2. **Edit the gemma entry** in `/home/cmod/llm/llama-swap/config.yaml`:
+   `-c 16384` → `-c 32768`, and `--cache-type-k f16 --cache-type-v f16` →
+   `--cache-type-k q8_0 --cache-type-v q8_0 -fa` (q8_0 KV halves the cache at negligible
+   quality cost; `-fa` flash attention is required for a quantized V-cache).
+3. **Restart + verify**: `sudo systemctl start llama-swap.service`; force a load with one small
+   chat completion against `gemma4-12b`; check `nvidia-smi` — want ≥ 1.5 GB headroom AFTER load
+   with the desktop up. OOM or thin headroom → fall back to `-c 24576` (still +50%) rather than
+   shrinking KV further.
+4. **Long-context smoke**: one ~25k-token-prompt request must complete cleanly before trusting it.
+5. **Only then** apply the paired budgets (dashboard Settings or `config.local.toml`):
+   ```toml
+   [context]
+   obs_max_chars = 44000
+   memory_max_chars = 16000
+   intelligence_max_chars = 8000
+   interventions_max_chars = 8000
+   max_total_chars = 76000
+   [compaction]
+   token_threshold = 11000
+   obs_max_chars = 32000
+   [wisdom]
+   block_max_chars = 1400
+   ```
+   (~19k prompt tokens + ~5k response reserve under 32768 at chars_per_token 4.0 — the same
+   margin discipline as the 16k sizing.) Restart eidos (dashboard Start) to pick them up.
+6. **Rollback** = revert the yaml entry + remove the overlay keys. Two stale-doc notes while
+   you're in here: the committed `config.toml` `[llm]` block (:9292 / dual P100 / 262k ctx) is a
+   **cmod-s fossil** — the local overlay (:8080, `gemma4-12b`) is what serves on Sprinter; and
+   the "~6.5 GB gemma" figure above predates the Q8_0 model (12.7 GB). Trust `nvidia-smi`.
