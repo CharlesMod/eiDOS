@@ -106,6 +106,30 @@ class TestApplyAndPersist(unittest.TestCase):
         self.assertTrue(done)
 
 
+class TestDeferralSchedulesReminder(unittest.TestCase):
+    def test_deferred_directive_sets_a_reminder_that_fires(self):
+        import reminders
+        import time as _t
+        c = _cfg(reminders_enabled=True)
+        d = {"title": "check in with charlie", "why": "he asked", "deferral": "10m"}
+        obj = adm.apply_operator_directive(c, d, tick=1)
+        self.assertIsNotNone(obj)
+        pend = reminders.pending(c)
+        self.assertEqual(len(pend), 1)
+        self.assertEqual(pend[0]["origin"], "operator")
+        # nothing due yet; due after the fire time
+        self.assertEqual(reminders.due(c, _t.time()), [])
+        fired = reminders.due(c, pend[0]["fire_ts"] + 1)
+        self.assertEqual(len(fired), 1)
+        self.assertEqual(fired[0]["note"], "check in with charlie")
+
+    def test_no_deferral_schedules_nothing(self):
+        import reminders
+        c = _cfg(reminders_enabled=True)
+        adm.apply_operator_directive(c, {"title": "scan lan", "why": "w", "deferral": ""}, tick=1)
+        self.assertEqual(reminders.pending(c), [])
+
+
 class TestFlagDark(unittest.TestCase):
     def test_off_is_byte_identical_no_directive(self):
         c = _cfg(operator_directives_enabled=False)

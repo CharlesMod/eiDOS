@@ -19,10 +19,14 @@
 # tool outside the newborn's world — a locked tool does not exist (§0), and an
 # inherited memory that teaches `create_skill` or explains the System spoils
 # both the growth ladder and the introduction thread. Concepts stay; names of
-# ungrown organs go. Three nuggets dropped outright: the check_system pointer
-# (house-only tool), the create_skill contract (the skillcraft stanza teaches
-# it at grant time), and the System explainer (the System introduces ITSELF —
-# that was the whole point of the genesis rework).
+# ungrown organs go. Two nuggets dropped outright: the create_skill contract
+# (the skillcraft stanza teaches it at grant time) and the System explainer
+# (the System introduces ITSELF — the whole point of the genesis rework).
+# 2026-07-20: the check_system pointer is RESTORED. It had been dropped as a
+# "house-only tool", but that was the wrong read — check_system was simply a
+# builtin in NO unlock unit, so the ladder left it permanently INVISIBLE and
+# the first creature could never read its own manual. It now lives in the
+# newborn `body` unit (unlocks.py), so the pointer is legal AND load-bearing.
 # ============================================================================
 
 
@@ -38,6 +42,13 @@ category = "facts"
 tags = ["self", "model", "llm", "mind"]
 content = '''
 Your mind runs on a local Gemma-class model served by llama.cpp on this same machine. It is already loaded and is generating these very thoughts. You never need to start, download, or connect to a model — thinking is just what you do.
+'''
+
+[[nugget]]
+category = "procedures"
+tags = ["manual", "check_system", "capabilities", "reuse", "don't rebuild", "start here"]
+content = '''
+Before you build something, read your world-map: call `check_system` to see what your world already provides — memory, skills, subsystems, your own past, how each part works. Most of what you'd reach to invent already exists. Reading the map first saves you from rebuilding it by hand. Do this early.
 '''
 
 [[nugget]]

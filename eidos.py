@@ -787,6 +787,15 @@ class _Pillars:
             except Exception as e:  # noqa: BLE001
                 logger.warning("world go tool registration failed: %s", e)
 
+        # OPERATOR_DIRECTIVES — the `remind` tool joins the registry (register_reminders_tool is
+        # flag-gated on `reminders_enabled`). Flag off (default) → absent, dark.
+        if getattr(c, "reminders_enabled", False):
+            try:
+                from tools import register_reminders_tool
+                register_reminders_tool(c)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("remind tool registration failed: %s", e)
+
         # The Commission (COMMISSION_PLAN.md) — the standing-order organ: verbs join the registry
         # (register_commission_tools is itself flag-gated) and the engine settles verdicts/claims
         # at the after_outcome beat.
@@ -1798,6 +1807,31 @@ class _Pillars:
         except Exception as e:  # noqa: BLE001 - the trainer failing never wounds the tick
             logger.warning("operator directive pass failed: %s", e)
 
+    def _deliver_due_reminders(self, tick_number: int) -> None:
+        """OPERATOR_DIRECTIVES: fire any due reminders into the stream as high salience, so the
+        creature sees '⏰ REMINDER: …' this tick (the persistent, nap/restart-surviving replacement
+        for a fragile bg_run sleep). A reminder tied to an operator directive re-raises it to focus.
+        Event-driven in spirit: the fire-time is the event; we check due-ness at this one gate."""
+        if not getattr(self.config, "reminders_enabled", False):
+            return
+        try:
+            import reminders as _rem
+            fired = _rem.due(self.config, time.time())
+            for r in fired:
+                note = (r.get("note") or "").strip()
+                append_observation(self.config, {"tick": tick_number, "tool": "system_window",
+                                                 "success": True,
+                                                 "output": f"⏰ REMINDER: {note}"})
+                src = (r.get("source_key") or "").strip()
+                if r.get("origin") == "operator" and src:
+                    try:
+                        import objectives as _obj
+                        _obj.activate(self.config, src, tick=tick_number) or _obj.activate(self.config, note, tick=tick_number)
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception as e:  # noqa: BLE001 - a reminder fault never wounds the tick
+            logger.warning("reminder delivery failed: %s", e)
+
 
 def _reflex_stats(config, persona) -> dict:
     """The typed stats dict a reflex GUARD is checked against (WIS1 — the SAME Criterion vocabulary
@@ -2539,8 +2573,12 @@ def run_loop(config: Config, persona=None, wal=None):
         # OPERATOR_DIRECTIVES: before building context, let the System turn a pending Charlie
         # message into a priority focus, so this tick's context already carries it as the active
         # objective (and the creature still replies via the normal boss-waiting path). No-op unless
-        # operator_directives_enabled + a message is pending.
-        self._operator_directive(persona, tick_number)
+        # operator_directives_enabled + a message is pending. Both live on the pillars hub (they
+        # need its llm seam / config); no-ops when the hub is off or the flags are dark.
+        if pillars is not None:
+            pillars._operator_directive(persona, tick_number)
+            # A due reminder ("check in in 10 min") surfaces here too — persistent, restart-surviving.
+            pillars._deliver_due_reminders(tick_number)
 
         pillars_recall_block = ""
         if pillars is not None:

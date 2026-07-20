@@ -324,6 +324,25 @@ def add_operator_directive(config, title: str, why: str, *, priority: int = 9,
     return o
 
 
+def activate(config, key: str, tick: int = 0) -> bool:
+    """Re-raise a live objective (by id or exact title) to the active focus — used when a reminder
+    tied to an operator directive fires. Thaws it if blocked. Returns True if it became active."""
+    data = _load(config)
+    k = (key or "").strip().lower()
+    for o in data["objectives"]:
+        if o["state"] in ("dead", "done"):
+            continue
+        if o["id"].lower() == k or o["title"].lower() == k:
+            if o["state"] == "blocked":
+                o["state"] = "active"
+                o["blocked_reason"] = None
+            o["last_active_tick"] = tick
+            data["active_id"] = o["id"]
+            _save(config, data)
+            return True
+    return False
+
+
 def consolidate(config, tick: int = 0) -> dict:
     """Nap-time goal tidying — the goal-backlog analog of memory consolidation (sleep merges and
     prunes engrams; it should merge and prune goals too). Two similarity-driven passes, no

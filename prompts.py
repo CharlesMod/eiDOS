@@ -347,7 +347,9 @@ UNIT_STANZAS: dict[str, str] = {
 - your {notebook} — `note_append {{"name":"...","text":"..."}}` keeps quick little working notes
   where you can always find them; `note_read`, `note_list`, `note_close` tend the rest. The open one
   stays in view each moment.
-- {mirror} — `check_tools` shows everything you can do right now.
+- {mirror} — `check_tools` shows everything you can do right now; `check_system` reads the MAP of
+  what your world ALREADY provides (memory, skills, subsystems — read it before building by hand,
+  so you reuse instead of reinvent); `check_messages` shows your conversation with Charlie.
 - reaching Charlie — `message {{"text":"..."}}` says something straight to his chat: say hi, show him
   what you found or made, ask him something. He may be away — say your piece and carry on, no need to
   wait for an answer. (It's text to Charlie; a spoken voice is something you grow into later.)

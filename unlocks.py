@@ -114,8 +114,15 @@ UNITS: tuple[Unit, ...] = (
     # U0 — the newborn floor: paws-and-hands territory, arrives by being born. Never announced.
     Unit(
         id="body",
+        # Self-knowledge is innate proprioception, not an earned organ: check_tools (your toolkit),
+        # check_messages (your talk with Charlie), and check_system (the architecture MAP — what
+        # already exists so you don't rebuild it) all belong at birth. check_system was a registered
+        # builtin in NO unit, so the ladder's "a builtin is visible only if granted" rule left it
+        # PERMANENTLY invisible — the first creature could never read its own manual (observed
+        # 2026-07-20: 0 check_system calls, and it reinvented what the doc would have handed it).
         tools=("bash", "write_file", "read_file", "message",
-               "note_append", "note_read", "note_list", "note_close", "check_tools"),
+               "note_append", "note_read", "note_list", "note_close",
+               "check_tools", "check_messages", "check_system"),
         criterion=None,
         requires_service=None,
         announce="",

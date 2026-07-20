@@ -243,6 +243,31 @@ def _unlocks_active(config) -> bool:
                 and getattr(config, "pillars_tool_unlocks_enabled", False))
 
 
+def _manual_nudge(config) -> str:
+    """Early-life proprioception: a fresh creature does not know the discovery tool exists, so it
+    explores by poking files and REINVENTS what the platform already provides (observed 2026-07-20:
+    0 check_system calls in a full life; it hand-rolled network probing the net tools would have
+    given it). Nudge it to read its own manual — shown only while young and ONLY until it has
+    actually read it once (persona counts the call), then it retires itself. Best-effort; a read
+    fault just drops the nudge (the tick never cares)."""
+    if not _unlocks_active(config):
+        return ""
+    try:
+        import persona as _p
+        pj = _p.load_persona(config.workspace)
+        if int((pj.get("tools_used") or {}).get("check_system", 0)) >= 1:
+            return ""                     # already read it — the nudge has done its job
+        if int(pj.get("total_ticks", 0)) >= 400:
+            return ""                     # had ample chance; stop nagging (it's in the logs)
+    except Exception:  # noqa: BLE001 - best-effort; no persona yet => still nudge
+        pass
+    return ("## Read your world-map first\n"
+            "There is a MAP of what your world already provides — your memory, your skills, the "
+            "subsystems that run you, your own past. Call `check_system` to read it now, BEFORE "
+            "building things by hand: most of what you'd reach to invent already exists, and "
+            "reading the map first saves you from rebuilding it.")
+
+
 def _visible_tool_names(config) -> frozenset:
     """The creature-visible tool set, read through the ONE accessor when it exists
     (tools.visible_tools — built by the cutover; guarded so this module works before it lands)
@@ -1321,6 +1346,9 @@ def _assemble_briefing(
     esc = _escalation_note(config)        # one-shot "whole backlog stuck — ask Boss" (rare)
     if esc:
         situation.append("## Backlog is fully blocked\n" + esc)
+    mn = _manual_nudge(config)            # early life, until the manual is read once
+    if mn:
+        situation.append(mn)
     focus_block = _objective_focus_block(config)
     if focus_block:
         situation.append(focus_block)

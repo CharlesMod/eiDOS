@@ -46,7 +46,8 @@ from tools import TOOLS, execute_tool, tool_list_skills, tool_manual, visible_to
 _ROOT = Path(__file__).parent.parent
 
 _NEWBORN = frozenset({"bash", "write_file", "read_file", "message",
-                      "note_append", "note_read", "note_list", "note_close", "check_tools"})
+                      "note_append", "note_read", "note_list", "note_close",
+                      "check_tools", "check_messages", "check_system"})
 
 
 # --- rig (test_wiring.py's shape) -----------------------------------------------------------------
@@ -149,14 +150,22 @@ class TestVisibleTools:
         assert {"speak", "vision", "see"} <= vis      # the alias travels with its organ
 
     def test_house_only_tools_never_exist(self, tmp_path):
-        """Even a fully-grown creature never sees the excluded house tools (TOOL_PROGRESSION)."""
+        """Even a fully-grown creature never sees the excluded house tools (TOOL_PROGRESSION).
+        NOTE (2026-07-20): check_system + check_messages were MOVED OUT of this exclusion into the
+        newborn `body` unit — self-knowledge (the architecture map, the talk with Charlie) is innate
+        proprioception, not a house tool; leaving check_system unreachable meant the creature could
+        never read its own manual. The rest of this list remains an open design question (the docs
+        describe propose_self_edit / update_plan / bg_run / the net toolkit as creature capabilities,
+        yet the ladder excludes them — unresolved)."""
         cfg = _ladder_cfg(tmp_path)
         unlocks.seed_from_evidence(cfg, {k: 1 for k in unlocks.EVIDENCE_KEYS})
         vis = set(visible_tools(cfg))
         for name in ("http_request", "fetch", "http", "bg_run", "bg_check", "ask_ai",
                      "net_scan", "tcp_probe", "http_probe", "udp_listen", "update_plan",
-                     "update_self_guide", "propose_self_edit", "check_messages", "check_system"):
+                     "update_self_guide", "propose_self_edit"):
             assert name not in vis, f"house tool {name!r} leaked into the creature universe"
+        # ...but the self-knowledge tools ARE innate now:
+        assert {"check_system", "check_messages"} <= vis
 
     def test_self_authored_skill_never_locked(self, tmp_path):
         cfg = _ladder_cfg(tmp_path)
