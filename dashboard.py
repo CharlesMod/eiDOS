@@ -1147,6 +1147,12 @@ def _make_handler(config: Config):
                 # aggregated read-only from existing stores (growth.build_growth is fail-open).
                 self._respond(200, "application/json", json.dumps(build_growth(config)))
 
+            elif self.path == "/api/world":
+                # The shared map (WORLD_PLAN W3): the operator's view of the creature's world —
+                # a pure view over world.to_json(). Flag off / module absent / build error →
+                # {"enabled": false} with 200 (quiet dark panel; build_world is fail-open).
+                self._respond(200, "application/json", json.dumps(build_world(config)))
+
             elif self.path.startswith("/api/why"):
                 # Causal ledger (Pillars 0.3): the pressure field that produced a given tick —
                 # ?tick=N returns that tick's record; no tick returns the recent field for a panel.
@@ -2527,6 +2533,31 @@ def build_why(config, tick_q: str) -> dict:
         field = pressures.read_field_by_tick(config, tick)
         return {"tick": tick, "field": field, "enabled": enabled}
     return {"recent": pressures.read_recent_fields(config, n=30), "enabled": enabled}
+
+
+def build_world(config) -> dict:
+    """The shared map (WORLD_PLAN W3): the operator's view of the same truthful world.
+
+    Lazy-imports the world module (built in parallel; may be absent) and, when the
+    `world_enabled` flag is on, returns `world.to_json(world.build_world(config))` with
+    `{"enabled": True}` merged in. Flag off, module missing, or any build error →
+    `{"enabled": False}` with a 200 (honest and render-friendly — the panel goes quiet,
+    matching how the dark-organ panels report an absent subsystem).
+
+    W3 renderer-separation: this endpoint is a pure view over `to_json()`; it invents no
+    state. The map panel and any future 3D client are views over the same JSON.
+    """
+    if not getattr(config, "world_enabled", False):
+        return {"enabled": False}
+    try:
+        import world  # lazy: the module ships alongside the flag; may not exist yet
+        data = world.to_json(world.build_world(config))
+    except Exception:  # noqa: BLE001 — missing module / build failure → quiet dark panel
+        return {"enabled": False}
+    if not isinstance(data, dict):
+        return {"enabled": False}
+    data["enabled"] = True
+    return data
 
 
 def build_nervous(config):

@@ -136,6 +136,27 @@ body::after {
 .growth-vitals .gv { font-size: 10px; color: #9ab89a; border: 1px solid #16301a;
     border-radius: 3px; padding: 2px 7px; background: #0a0f0a; }
 .growth-vitals .gv b { color: #6ea8fe; font-family: monospace; }
+/* World map panel: the shared map (WORLD_PLAN W3) — places as a graph of labeled boxes */
+.world-weather { font-size: 10px; color: #9ab89a; margin-bottom: 8px; }
+.world-weather b { color: #6ea8fe; font-family: monospace; }
+.world-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.world-place { border: 1px solid #16301a; border-radius: 4px; background: #0a0f0a;
+    padding: 6px 8px; min-width: 128px; flex: 1 1 128px; }
+.world-place.here { border-color: #2a6a2a; background: #0c180c;
+    box-shadow: 0 0 0 1px #2a6a2a inset; }
+.world-place .wp-name { color: #9ab89a; font-size: 11px; font-weight: normal; }
+.world-place.here .wp-name { color: #7CFC9B; }
+.world-place .wp-kind { color: #5f7a5f; font-size: 9px; letter-spacing: 0.4px; float: right; }
+.world-place .wp-here { color: #7CFC9B; font-size: 9px; margin-left: 4px; }
+.world-place .wp-objs { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 3px; }
+.world-obj { font-size: 9px; color: #9ab89a; border: 1px solid #16301a; border-radius: 3px;
+    padding: 1px 5px; background: #0a0f0a; cursor: default; white-space: nowrap; }
+.world-obj b { color: #6ea8fe; font-family: monospace; }
+.world-place .wp-exits { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 3px; }
+.world-exit { font-size: 9px; color: #6ea8fe; border: 1px solid #27437a; border-radius: 3px;
+    padding: 1px 5px; background: #0a0f14; white-space: nowrap; }
+.world-exit.locked { color: #8a8a8a; border-color: #333; background: #0d0d0d; cursor: help; }
+.world-notice { font-size: 9px; color: #5f7a5f; margin-top: 4px; font-style: italic; }
 .quest-tag {
     color: #6ea8fe; border: 1px solid #27437a; border-radius: 3px;
     padding: 0 4px; font-size: 9px; margin-right: 3px; white-space: nowrap;
@@ -1321,6 +1342,13 @@ function toggleVoice(){
         <div id="growth-vitals" class="growth-vitals"></div>
     </div>
 
+    <!-- World: the shared map (WORLD_PLAN W3) — operator's view of the creature's world (full width) -->
+    <div class="panel" style="grid-column: 1 / -1;">
+        <div class="panel-title">World — the shared map <span id="world-status" style="float:right;font-size:10px;color:#555;"></span></div>
+        <div id="world-weather" class="world-weather"></div>
+        <div id="world-grid" class="world-grid"></div>
+    </div>
+
     <!-- Operator Chat: full width -->
     <div class="panel" style="grid-column: 1 / -1;">
         <div class="panel-title">Operator Chat
@@ -1942,6 +1970,78 @@ async function loadGrowth() {
     } catch(e) { if (st) st.textContent = 'unavailable'; }
 }
 
+// --- World panel: the shared map (WORLD_PLAN W3) — a graph of labeled place boxes ---
+// Pure view over /api/world (world.to_json): the creature's place is highlighted, locked
+// exits carry their real unlock condition on hover, per-place object counts show state on hover.
+// Simple by design (W3): CSS-only boxes, no external libs (strict same-origin) — a legible
+// operator mirror of render_here, not a game client. §2 is the canonical graph; this invents nothing.
+function renderWorld(data) {
+    var grid = document.getElementById('world-grid');
+    var wthr = document.getElementById('world-weather');
+    var st = document.getElementById('world-status');
+    if (!grid) return;
+    if (!data || !data.enabled) {
+        if (wthr) wthr.innerHTML = '';
+        grid.innerHTML = '<div style="color:#333;text-align:center;padding:12px;">'
+            + 'World dark — no map this build.</div>';
+        if (st) st.textContent = 'dark';
+        return;
+    }
+    var places = (data && data.places) || {};
+    var here = data.here || '';
+    if (wthr) {
+        wthr.innerHTML = data.weather
+            ? 'Weather: <b>' + escapeHtml(String(data.weather)) + '</b>'
+            : '';
+    }
+    var ids = Object.keys(places);
+    var boxes = ids.map(function(pid) {
+        var p = places[pid] || {};
+        var isHere = (pid === here);
+        var objs = (p.objects || []).map(function(o) {
+            var title = [o.name, o.state, o.detail].filter(Boolean).join(' — ');
+            return '<span class="world-obj" title="' + escapeHtml(String(title)) + '">'
+                + escapeHtml(String(o.name || o.id || '?'))
+                + ' <b>' + escapeHtml(String(o.state || '')) + '</b></span>';
+        }).join('');
+        var exits = (p.exits || []).map(function(e) {
+            var toName = (places[e.to] && places[e.to].name) || e.to || '?';
+            if (e.open) {
+                return '<span class="world-exit">&rarr; ' + escapeHtml(String(toName)) + '</span>';
+            }
+            var reason = e.locked_reason || 'locked';
+            return '<span class="world-exit locked" title="' + escapeHtml(String(reason)) + '">'
+                + '&#128274; ' + escapeHtml(String(toName)) + '</span>';
+        }).join('');
+        var notices = (p.notices || []).map(function(n) {
+            return '<div class="world-notice">' + escapeHtml(String(n)) + '</div>';
+        }).join('');
+        var objCount = (p.objects || []).length;
+        return '<div class="world-place' + (isHere ? ' here' : '') + '">'
+            + '<span class="wp-kind">' + escapeHtml(String(p.kind || '')) + '</span>'
+            + '<span class="wp-name">' + escapeHtml(String(p.name || pid)) + '</span>'
+            + (isHere ? '<span class="wp-here">&#9679; here</span>' : '')
+            + (objCount ? '<div class="wp-objs" title="' + objCount + ' object'
+                + (objCount === 1 ? '' : 's') + '">' + objs + '</div>' : '')
+            + (exits ? '<div class="wp-exits">' + exits + '</div>' : '')
+            + notices
+            + '</div>';
+    }).join('');
+    grid.innerHTML = boxes || '<div style="color:#333;text-align:center;padding:12px;">'
+        + 'No places this build.</div>';
+    if (st) st.textContent = ids.length + ' place' + (ids.length === 1 ? '' : 's');
+}
+async function loadWorld() {
+    var st = document.getElementById('world-status');
+    try {
+        let resp = await fetch('/api/world');
+        if (resp.ok) {
+            let data = await resp.json();
+            renderWorld(data);
+        }
+    } catch(e) { if (st) st.textContent = 'unavailable'; }
+}
+
 function renderDreams(dreams) {
     let el = document.getElementById('dream-list');
     if (!el) return;
@@ -2515,6 +2615,9 @@ setInterval(loadGitLog, 15000); loadGitLog();
 
 // --- Growth panel (slow-moving; poll every 15s) ---
 setInterval(loadGrowth, 15000); loadGrowth();
+
+// --- World map (slow-moving; place text changes only on movement/state — poll every 15s) ---
+setInterval(loadWorld, 15000); loadWorld();
 
 // --- Self-edit proposals (eiDOS proposes source changes; you approve) ---
 var _seBtn = 'border-radius:4px;padding:2px 9px;cursor:pointer;font-size:10px;margin-right:5px;';
