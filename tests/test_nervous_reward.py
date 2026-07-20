@@ -98,7 +98,9 @@ class TestRisklessSuccessChannel(unittest.TestCase):
         self.assertAlmostEqual(v_ok, 0.0, places=4)        # the leak: no free +0.40 for a successful read
         rl.observe(situation="calm", action='read_file {"path": "ghost.txt"}',
                    success=False, made_progress=False)
-        v_fail = [e for e in rl.values.values() if "ghost" in e["action"]][0]["v"]
+        # The value cache now keys on the content-free ACTION SHAPE (read_file(path=str:s)), so both
+        # reads share one entry; the failed read overwrote it to the -0.40 penalty (alpha=1.0).
+        v_fail = [e for e in rl.values.values() if e["action"].startswith("read_file")][0]["v"]
         self.assertAlmostEqual(v_fail, -0.40, places=4)    # a genuine failed read still teaches
 
     def test_result_novelty_gates_re_reads_across_any_verb(self):
@@ -117,7 +119,8 @@ class TestRisklessSuccessChannel(unittest.TestCase):
         # a self-authored skill returning the SAME bytes: stale cross-verb -> success channel 0
         rl.observe(situation="explore", action="nest_check {}", success=True,
                    made_progress=False, result_sig=sig("NOTES CONTENT"))
-        v_skill = [e for e in rl.values.values() if e["action"] == "nest_check {}"][0]["v"]
+        # action is stored as its content-free shape now ("nest_check()", empty-args form)
+        v_skill = [e for e in rl.values.values() if e["action"].startswith("nest_check")][0]["v"]
         self.assertAlmostEqual(v_skill, 0.0, places=4)
 
     def test_result_novelty_leaves_new_content_and_failures_alone(self):
