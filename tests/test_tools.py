@@ -66,11 +66,14 @@ class TestTools(unittest.TestCase):
     def test_speak_logs_to_operator_chat(self):
         # Every spoken call-out must also appear in the operator chat (chat_replies.jsonl), marked
         # spoken=True — voice and chat should never diverge. Logged BEFORE the voice POST, so a
-        # closed voice port doesn't prevent the chat entry.
+        # closed voice port doesn't prevent the chat entry. But an unreachable voice service means
+        # NOTHING was spoken aloud: ARCHITECTURE_PRINCIPLES #4 — that's a visible network failure,
+        # NOT a success (the "will play when reachable" claim was a lie; there is no persistent queue).
         from tools import tool_speak
         self.config.voice_port = 9  # closed -> POST fails fast; chat-log happens regardless
         res = tool_speak({"text": "Cutover complete, Boss."}, self.config)
-        self.assertTrue(res.success)
+        self.assertFalse(res.success)             # nothing was spoken -> honest failure
+        self.assertEqual(res.fail_kind, "network")
         rp = self.config.workspace / "chat_replies.jsonl"
         self.assertTrue(rp.exists())
         entries = [json.loads(ln) for ln in rp.read_text(encoding="utf-8").splitlines() if ln.strip()]
