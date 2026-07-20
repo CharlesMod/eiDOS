@@ -1,5 +1,6 @@
 """LLM client for llama.cpp / LM Studio / any OpenAI-compatible endpoint."""
 
+import http.client
 import json
 import logging
 import time
@@ -235,6 +236,14 @@ def complete(
             usage = data.get("usage", {})
     except (KeyError, IndexError) as e:
         raise LLMError(f"Unexpected response format") from e
+    except json.JSONDecodeError as e:
+        raise LLMError(f"Malformed response body: {e}") from e
+    except (TimeoutError, http.client.HTTPException, OSError) as e:
+        # A socket that dies MID-stream (reset, timeout, IncompleteRead) must stay
+        # inside the LLMError taxonomy just like a failed connect — otherwise a
+        # network blip escapes run_loop's handlers and costs a full crash-restart
+        # cycle instead of one counted LLM failure.
+        raise LLMError(f"Stream interrupted: {e!r}") from e
     finally:
         resp.close()
 
