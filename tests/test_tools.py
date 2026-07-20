@@ -100,7 +100,9 @@ class TestTools(unittest.TestCase):
 
     def test_bash_truncation(self):
         self.config.output_truncation_chars = 50
-        result = tool_bash({"cmd": "python -c \"print('x' * 200)\"", "wait": True},
+        # sys.executable, not bare "python": Sprinter (like most modern Linux) ships
+        # only `python3`, so a bare-python command fails the whole test on PATH luck.
+        result = tool_bash({"cmd": f"\"{sys.executable}\" -c \"print('x' * 200)\"", "wait": True},
                            self.config)
         self.assertTrue(result.success)
         self.assertIn("[truncated", result.output)

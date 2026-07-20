@@ -38,7 +38,8 @@ class TestPydanticToolArgs(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_bash_command_alias_still_works(self):
-        result = tool_bash({"command": "python -c \"print('typed-ok')\"", "wait": True}, self.config)
+        # sys.executable, not bare "python" — Sprinter ships only `python3` on PATH.
+        result = tool_bash({"command": f"\"{sys.executable}\" -c \"print('typed-ok')\"", "wait": True}, self.config)
 
         self.assertTrue(result.success, result.output)
         self.assertIn("typed-ok", result.output)

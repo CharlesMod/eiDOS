@@ -1,0 +1,28 @@
+# The suite (1800+ tests) previously ran only when someone remembered to run it locally.
+# This is the "any CI at all" gate: every push/PR to main runs the full unit suite on Linux.
+# Live-LLM tests are opt-in (--live) and never run here; EIDOS_NO_DASHBOARD in conftest
+# keeps tests from ever reaching a real dashboard/model.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt pytest
+      - name: git identity for git_safety tests
+        run: |
+          git config --global user.email "ci@eidos"
+          git config --global user.name "eidos-ci"
+      - run: PYTHONUTF8=1 pytest tests -q
