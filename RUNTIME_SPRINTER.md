@@ -109,26 +109,38 @@ scripts/fresh_slate.sh
 - **CLAUDE.md is Windows-era.** Ignore its nssm/`Restart-Service`/`taskkill`/PowerShell instructions on
   Sprinter; this file supersedes them for the runtime.
 
-## The 32k window flip (WISDOM_PLAN §0 — operator runbook)
+## The 32k window (WISDOM_PLAN §0) — DONE 2026-07-20; recipe + how it was landed
 
-The mind serves at `-c 16384` with **f16 KV** (`/home/cmod/llm/llama-swap/config.yaml`, entry
-`gemma4-12b`). The Q8_0 weights are **12.7 GB** on the 16 GB RTX 5080, so 32k does NOT fit with
-f16 KV — the flip requires KV quantization. The serving change and the config budgets are a PAIR
-(coherence rule: `n_ctx >= max_total_chars/chars_per_token + response_reserve`); apply them
-together or not at all.
+The mind now serves at **`-c 32768`, q8_0 KV, `-fa on`, `-ngl` omitted** — live and verified
+(clean generation, ~1 GB free with the embedder co-loaded). This section is the recipe + the
+scars, in case of a rebuild. The serving change and the config budgets are a PAIR (coherence
+rule: `n_ctx >= max_total_chars/chars_per_token + response_reserve`).
 
-1. **Stop the stack** (creature already stopped, or dashboard Stop first):
-   `sudo systemctl stop llama-swap.service`.
-2. **Edit the gemma entry** in `/home/cmod/llm/llama-swap/config.yaml`:
-   `-c 16384` → `-c 32768`, and `--cache-type-k f16 --cache-type-v f16` →
-   `--cache-type-k q8_0 --cache-type-v q8_0 -fa` (q8_0 KV halves the cache at negligible
-   quality cost; `-fa` flash attention is required for a quantized V-cache).
-3. **Restart + verify**: `sudo systemctl start llama-swap.service`; force a load with one small
-   chat completion against `gemma4-12b`; check `nvidia-smi` — want ≥ 1.5 GB headroom AFTER load
-   with the desktop up. OOM or thin headroom → fall back to `-c 24576` (still +50%) rather than
-   shrinking KV further.
-4. **Long-context smoke**: one ~25k-token-prompt request must complete cleanly before trusting it.
-5. **Only then** apply the paired budgets (dashboard Settings or `config.local.toml`):
+**The gemma entry `cmd:` in `/home/cmod/llm/llama-swap/config.yaml` (as landed):**
+```
+-c 32768 --parallel 1 -fa on
+--cache-type-k q8_0 --cache-type-v q8_0
+--jinja --reasoning-budget 1000
+```
+Three hard-won gotchas on this llama.cpp build (all three cost a debugging loop — don't relearn them):
+- **q8_0 KV needs flash attention.** Gemma's sliding-window attention makes the KV tiny (~350 MiB
+  at 32k q8_0), so the win isn't cache size — it's that q8_0+fa leaves ~1 GB free where **32k f16
+  leaves only ~300 MiB** (OOM-prone; a short generation came back empty from VRAM starvation).
+- **`-fa on` is two tokens** ([on|off|auto]) on this build. Bare `-fa` eats the next arg
+  (`error: unknown value for --flash-attn: '--cache-type-k'`).
+- **Omit `-ngl` entirely.** With `-fa on`, this build runs a memory auto-fitter that ABORTS if
+  n_gpu_layers is pinned (`failed to fit params ... ngl already set to 99, abort` → upstream dies
+  in ~265 ms; llama-swap only reports "upstream command exited prematurely" and swallows the real
+  stderr — set `logLevel: debug` to see the spawned command). Without the pin the fitter places
+  layers itself; the 12.7 GB model fits, so all layers still offload to GPU.
+
+Procedure for a rebuild: `sudo systemctl stop llama-swap.service` → edit the entry as above →
+`sudo systemctl start` → force a load (`curl … /v1/chat/completions` with `max_tokens:200`, not a
+tiny value — `--reasoning-budget 1000` returns empty content for short generations, which is NOT a
+failure) → `nvidia-smi` wants ≥ ~800 MiB free with the desktop up → one ~25k-token-prompt smoke.
+Fallback if headroom is thin on a busier desktop: `-c 24576`. Config backup: `config.yaml.bak-pre32k`.
+
+**The paired budgets** (dashboard Settings or `config.local.toml`), applied WITH the serving flip:
    ```toml
    [context]
    obs_max_chars = 44000
