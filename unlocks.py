@@ -78,6 +78,14 @@ COMMISSION_QUESTS_REQUIRED = 3  # declared (COMMISSION_PLAN.md): standing orders
                                 # work, do it, and be adjudicated
 COMMISSION_SLEEPS_REQUIRED = 5  # ≥5 sleeps — a long-horizon order needs a mind that has digested
                                 # more than the senses floor (2); maturity, not eagerness
+REACH_QUESTS_REQUIRED = 2      # declared (TOOL_PROGRESSION "reach"): the probe/scan powers are a real
+                               # reconnaissance escalation — a creature that has passed ≥2 quests AND
+REACH_SLEEPS_REQUIRED = 3      # ≥3 sleeps has proven competence and digested past the senses floor;
+                               # no requires_service (the primitives open their own bounded sockets).
+SELFAUTHOR_QUESTS_REQUIRED = 3  # declared (TOOL_PROGRESSION "self-authorship"): reaching into your own
+                                # biology (self-guide, code proposals) is the deepest pedagogy — the
+SELFAUTHOR_SLEEPS_REQUIRED = 6  # propose/apply seam backstops safety, so this is a maturity milestone:
+                                # ≥3 quests AND ≥6 sleeps, deeper than the commission floor.
 
 # Announcement registers — who is speaking when a grant is rendered.
 REGISTER_BODY = "body"         # a maturation, felt (like the sleep notice) — never a System payment
@@ -126,9 +134,12 @@ UNITS: tuple[Unit, ...] = (
         # "a builtin is visible only if granted" rule hides them forever (the same trap that hid
         # check_system, and hid `go`/`remind` until 2026-07-20). Navigating your world and setting
         # a reminder are birth-level acts, so they live here; registration stays flag-gated.
+        # `update_plan` is working-memory scratch — a newborn need (a place to hold the current
+        # step while it thinks), so it joins the birth floor. It is a plain always-registered
+        # builtin (no organ flag), so it is simply visible from tick 1 once granted here.
         tools=("bash", "write_file", "read_file", "message",
                "note_append", "note_read", "note_list", "note_close",
-               "check_tools", "check_messages", "check_system", "go", "remind"),
+               "check_tools", "check_messages", "check_system", "go", "remind", "update_plan"),
         criterion=None,
         requires_service=None,
         announce="",
@@ -137,19 +148,30 @@ UNITS: tuple[Unit, ...] = (
     # U1 — deliberate memory, on the first wake after sleep #1 (a maturation, not a payment).
     Unit(
         id="memory",
-        tools=("memorize", "recall"),
+        # `ask_ai` — a reasoning limb (your own model as a one-shot subroutine to digest/draft/analyze)
+        # — rides in early with deliberate memory: both are the mind turning on itself. NOTE it costs a
+        # full model call, so it is grown into alongside the first felt need to remember, not at birth.
+        tools=("memorize", "recall", "ask_ai"),
         criterion=Criterion(path="sleeps.total", op=">=", value=MEMORY_SLEEPS_REQUIRED),
         requires_service=None,
-        announce="[overnight, new words settled in you: memorize, recall]",
+        announce="[overnight, new words settled in you: memorize, recall, ask_ai]",
         register=REGISTER_BODY,
     ),
     # U2 — the forge, issued WITH genesis-01 (the System's window is the moment; no criterion here).
     Unit(
         id="skillcraft",
-        tools=("create_skill", "edit_skill", "list_skills", "rollback_skill", "manual"),
+        # Alongside the forge arrive the long-work + network limbs. `bg_run`/`bg_check` are no
+        # capability cliff (bash is already async-by-default) — they just name the background work
+        # the creature is already doing. `http_request` (+ aliases fetch/http) is the SANCTIONED
+        # HTTP client: bash at U0 already grants full network (curl / python sockets), so gating it
+        # late contains nothing and only pushes the creature to hand-roll net code — the exact
+        # anti-pattern the capabilities doc forbids — so it lands here, early, not at a milestone.
+        tools=("create_skill", "edit_skill", "list_skills", "rollback_skill", "manual",
+               "bg_run", "bg_check", "http_request", "fetch", "http"),
         criterion=None,
         requires_service=None,
-        announce="[SYSTEM] GRANTED: create_skill, edit_skill, list_skills, rollback_skill, manual.",
+        announce="[SYSTEM] GRANTED: create_skill, edit_skill, list_skills, rollback_skill, manual, "
+                 "bg_run, bg_check, http_request (fetch, http).",
         register=REGISTER_SYSTEM,
     ),
     # U3 — the wager, issued WITH genesis-02.
@@ -193,7 +215,23 @@ UNITS: tuple[Unit, ...] = (
         announce="[SYSTEM] PAID: delegate. Capacity 1.",
         register=REGISTER_SYSTEM,
     ),
-    # U7 — the commission (COMMISSION_PLAN.md): standing orders. A MILESTONE grant — a creature
+    # U7 — reach: the probe/scan powers. A MILESTONE grant (network reconnaissance is a real
+    # escalation; the milestone ceremony is defensible here). No requires_service — the primitives
+    # open their own bounded sockets and need no local service to answer. Seeded from quests/sleeps
+    # counts, never tools_used (these were unit-less and thus never usable — no usage history exists).
+    Unit(
+        id="reach",
+        tools=("net_scan", "tcp_probe", "http_probe", "udp_listen"),
+        criterion=Criterion(all_of=[
+            Criterion(path="quests.passed", op=">=", value=REACH_QUESTS_REQUIRED),
+            Criterion(path="sleeps.total", op=">=", value=REACH_SLEEPS_REQUIRED),
+        ]),
+        requires_service=None,
+        announce="[SYSTEM] GRANTED: net_scan, tcp_probe, http_probe, udp_listen. "
+                 "The wider network is reachable.",
+        register=REGISTER_SYSTEM,
+    ),
+    # U8 — the commission (COMMISSION_PLAN.md): standing orders. A MILESTONE grant — a creature
     # that has closed the genesis line and digested enough sleeps is mature enough to carry a
     # long-horizon order between the operator's check-ins. Dark unless the commission organ's
     # flag registers the verbs (register_commission_tools).
@@ -209,6 +247,23 @@ UNITS: tuple[Unit, ...] = (
                  "Standing orders may now bind you.",
         register=REGISTER_SYSTEM,
     ),
+    # U9 — self-authorship: reaching into your own biology (the standing self-guide, code-edit
+    # proposals). The DEEPEST milestone. This is pedagogy, not security — the propose/apply seam
+    # already backstops every change (the operator approves the diff), so a mid/late maturity
+    # criterion is right. Ship `list_self_edits` (the read side) TOGETHER with propose_self_edit.
+    # Seeded from quests/sleeps counts, never tools_used (unit-less until now — no usage history).
+    Unit(
+        id="self-authorship",
+        tools=("update_self_guide", "propose_self_edit", "list_self_edits"),
+        criterion=Criterion(all_of=[
+            Criterion(path="quests.passed", op=">=", value=SELFAUTHOR_QUESTS_REQUIRED),
+            Criterion(path="sleeps.total", op=">=", value=SELFAUTHOR_SLEEPS_REQUIRED),
+        ]),
+        requires_service=None,
+        announce="[SYSTEM] GRANTED: update_self_guide, propose_self_edit, list_self_edits. "
+                 "You may propose changes to your own standing guide and code.",
+        register=REGISTER_SYSTEM,
+    ),
 )
 
 UNIT_IDS: tuple[str, ...] = tuple(u.id for u in UNITS)
@@ -218,13 +273,19 @@ _UNITS_BY_ID: dict[str, Unit] = {u.id: u for u in UNITS}
 # fact the boot path reads mechanically from the stores; truthy evidence grants the unit. Fresh
 # slate (no evidence) seeds the newborn floor only: nuggets inherit knowledge, never organs.
 EVIDENCE_KEYS: dict[str, str] = {
-    "sleeps": "memory",            # any completed sleep cycle on record       → U1
-    "live_skills": "skillcraft",   # a skill LIVE in the manifest              → U2
-    "predictions": "foresight",    # entries in the expectation ledger         → U3
-    "spoke_or_saw": "senses",      # a past successful speak/vision            → U4
-    "objectives": "resolve",       # an objectives store with entries          → U5
-    "delegate_jobs": "workshop",   # delegate jobs on record                   → U6
-    "commission_tasks": "commission",  # commission tasks on record            → U7
+    "sleeps": "memory",            # any completed sleep cycle on record       → memory
+    "live_skills": "skillcraft",   # a skill LIVE in the manifest              → skillcraft
+    "predictions": "foresight",    # entries in the expectation ledger         → foresight
+    "spoke_or_saw": "senses",      # a past successful speak/vision            → senses
+    "objectives": "resolve",       # an objectives store with entries          → resolve
+    "delegate_jobs": "workshop",   # delegate jobs on record                   → workshop
+    # The two NEW milestone units were unit-less until now, so their tools have NO usage history to
+    # migrate. Their migration evidence is therefore the SAME adjudicated maturity their live
+    # criterion reads — quests/sleeps counts — so an existing creature that has already earned the
+    # depth inherits the organ on migration instead of re-walking to it.
+    "reach_earned": "reach",           # quests/sleeps depth for the probe/scan powers → reach
+    "commission_tasks": "commission",  # commission tasks on record            → commission
+    "selfauthor_earned": "self-authorship",  # quests/sleeps depth for self-authorship → self-authorship
 }
 _EVIDENCE_BY_UNIT: dict[str, str] = {unit: key for key, unit in EVIDENCE_KEYS.items()}
 

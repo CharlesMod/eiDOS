@@ -1505,6 +1505,7 @@ class _Pillars:
         """The migration evidence dict (unlocks.EVIDENCE_KEYS): every count an ADJUDICATED record —
         the same stores _quest_stats reads, plus the lived tools_used facts for organ use that
         predates the ladder. Fail-open per key: missing store = no evidence, never a crash."""
+        import unlocks as _unlocks
         ev: dict = {}
         stats = {}
         try:
@@ -1519,6 +1520,16 @@ class _Pillars:
             + int(used.get("see", 0) or 0)
         ev["objectives"] = int(used.get("objective_add", 0) or 0)
         ev["delegate_jobs"] = int(used.get("delegate", 0) or 0)
+        # The two NEW milestone units (reach, self-authorship) were unit-less until now, so their
+        # tools have NO tools_used history to migrate from. Their evidence is the SAME adjudicated
+        # maturity their live criterion reads — quests passed + sleeps — so a creature that has
+        # already earned the depth inherits the organ on migration instead of re-walking to it.
+        q_passed = int((stats.get("quests") or {}).get("passed", 0) or 0)
+        sleeps_total = int((stats.get("sleeps") or {}).get("total", 0) or 0)
+        ev["reach_earned"] = int(q_passed >= _unlocks.REACH_QUESTS_REQUIRED
+                                 and sleeps_total >= _unlocks.REACH_SLEEPS_REQUIRED)
+        ev["selfauthor_earned"] = int(q_passed >= _unlocks.SELFAUTHOR_QUESTS_REQUIRED
+                                      and sleeps_total >= _unlocks.SELFAUTHOR_SLEEPS_REQUIRED)
         try:
             ev["commission_tasks"] = (len(self.commission.load())
                                       if self.commission is not None else 0)

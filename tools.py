@@ -2347,8 +2347,10 @@ def tool_speak(args: dict, config: Config) -> ToolResult:
 
 # Each manual topic page, gated by the ONE tool it teaches (§0: the manual has no page for a tool
 # that does not exist in the creature's world; house mode shows everything). Declared order = the
-# manual's own. `cpu` rides on bg_run and `devices` on http_probe — pages built on primitives the
-# creature universe excludes entirely, so in creature mode those pages never render.
+# manual's own. Every gate tool is now tiered into a unit (2026-07-20): `ask_ai`→memory,
+# `network`(net_scan)/`devices`(http_probe)→reach, `cpu`(bg_run)→skillcraft — so each page appears
+# exactly once its granting organ lands, and stays absent (indistinguishable from a page that never
+# existed) until then.
 _MANUAL_TOPIC_GATES: dict[str, str] = {
     "tts": "speak", "vision": "vision", "ask_ai": "ask_ai", "network": "net_scan",
     "devices": "http_probe", "cpu": "bg_run", "delegate": "delegate",

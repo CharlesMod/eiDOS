@@ -28,8 +28,10 @@ check here and with `check_tools` to confirm it doesn't already exist. It almost
 - For ANY HTTP — GET/POST/PUT/DELETE, JSON bodies, custom headers, binary downloads — use the
   **`http_request`** tool (aliases `fetch`/`http`). It is stdlib-based: returns JSON/text inline and
   auto-SAVES binary responses (audio/images) to a file. → **Never `import requests` in a skill** — the
-  skill runner can lack it (a recurring trap); `http_request` always works. e.g. to POST to a device API
-  or hit the TTS endpoint, ONE `http_request` call does it — no skill, no requests.
+  skill runner can lack it (a recurring trap); `http_request` is the sanctioned client (granted at the
+  skillcraft rung — with the tool-progression ladder ON it appears once that unit lands, not at birth).
+  e.g. to POST to a device API or hit the TTS endpoint, ONE `http_request` call does it — no skill, no
+  requests.
 - `create_skill(skill_name, skill_code)` validates, saves, and hot-loads a skill — callable next tick as
   `<tool>name</tool>` (NOT via bash). `edit_skill` improves one; `rollback_skill` reverts.
 - → Skills run IN YOUR HOME: a relative path in skill code (`nest/journal.md`, `./data.txt`) is the

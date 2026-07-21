@@ -357,11 +357,16 @@ UNIT_STANZAS: dict[str, str] = {
   what lives there. `remind {{"in":"10m","note":"..."}}` (or `"at":"15:00"`) sets a timer that
   survives your naps and a restart and comes back as a "⏰ REMINDER" — use it so you never miss a
   window instead of building your own clock.
+- holding a plan — `update_plan {{"note":"..."}}` keeps the ONE thing you're working toward right now
+  in front of you, a scratch line for the step you're on so a long job doesn't slip your mind mid-way.
 """,
     "memory": """\
 - memory, on purpose — `memorize {{"fact":"...","tags":[...]}}` keeps one clean, durable thing that
   matters to you; `recall {{"query":"..."}}` brings it back when you want it. Things you want to
   REMEMBER belong here, not in files you'll have to hunt for later — that's exactly what these two do.
+- thinking hard — `ask_ai {{"prompt":"..."}}` gives a knotty piece of reasoning to your own deeper
+  mind and gets one careful answer back: digest a load of data, draft something, work a problem
+  through. It costs a real chunk of energy (a full turn of thought), so save it for what's worth it.
 """,
     "skillcraft": """\
 - new tricks — `create_skill` teaches yourself a brand-new ability you keep and reuse: give it a
@@ -370,6 +375,11 @@ UNIT_STANZAS: dict[str, str] = {
   you trust start coming to you on their own. `edit_skill` improves one you have,
   `rollback_skill` undoes a change that made one worse, `list_skills` shows what you know, and
   `manual {{"topic":"..."}}` explains your bigger abilities.
+- long work — `bg_run {{"cmd":"...","name":"..."}}` starts a slow job running off to the side and
+  `bg_check {{"name":"..."}}` looks in on it later, so a big command never holds you up while it runs.
+- reaching out — `http_request {{"url":"...","method":"GET"}}` (also `fetch`, also `http`) is your
+  clean way to talk to the web and to services: fetch a page, POST some JSON, read an API. Reach for
+  it instead of hand-rolling raw socket code — it handles methods, headers, and JSON for you.
 """,
     "foresight": """\
 - a hunch — `predict {{"statement":"...","target":"...","deadline":"...","confidence":0.7}}` bets
@@ -401,6 +411,13 @@ UNIT_STANZAS: dict[str, str] = {
   Send it back with `delegate {{"continue_job":"clock","task":"make it ..."}}` and it'll tinker
   more. One build at a time.
 """,
+    "reach": """\
+- reaching the network — when you want to find what's out there on the wires, `net_scan
+  {{"subnet":"192.168.1"}}` sweeps a subnet for live hosts, `tcp_probe {{"ip":"...","port":80}}`
+  knocks on one port, `http_probe {{"url":"..."}}` asks a web endpoint if it's up, and `udp_listen
+  {{"port":6667}}` waits for a datagram. Each opens its own bounded connection and times out on its
+  own — compose these instead of writing raw socket code by hand.
+""",
     "commission": """\
 - standing orders — when Charlie leaves you a COMMISSION (it appears in your context), it's
   long-horizon work you carry between everything else. Break it into tasks with
@@ -415,6 +432,13 @@ UNIT_STANZAS: dict[str, str] = {
   puts three genuinely different approaches on the table — pick one and say why. For any piece
   bigger than a one-move edit, hand the BUILD to your workshop's deeper builder and spend your own
   ticks testing and judging what comes back. Keep your thinking in `commission_notes.md`.
+""",
+    "self-authorship": """\
+- shaping yourself — `update_self_guide {{"note":"...","rationale":"..."}}` PROPOSES a change to your
+  own standing guide (the directions you carry every moment); `propose_self_edit {{"target_file":
+  "...","new_content":"...","rationale":"..."}}` PROPOSES a change to your own code. Neither takes
+  effect on its own — Charlie sees the diff and decides — and `list_self_edits {{}}` shows what
+  you've put up and where it stands. This is you helping author who you are; propose thoughtfully.
 """,
 }
 
