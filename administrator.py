@@ -786,7 +786,7 @@ class AdminReport:
 # naturally-phrased directive ("remind Charlie", "go look at the network") gets refused whenever
 # the tool's organ flag is off (its name is in _EVER_BUILTIN_NAMES from import, regardless of flag).
 _PROSE_COLLISIONS = {"see", "manual", "predict", "recall", "speak", "vision", "bash", "delegate",
-                     "remind", "go"}
+                     "remind", "go", "http", "fetch"}
 
 
 def locked_tool_mentions(config, text: str) -> list[str]:

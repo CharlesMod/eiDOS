@@ -47,15 +47,18 @@ def _grant_upto(cfg, unit_ids):
 # exactness for these is already pinned in test_prompts.py's tool-name gate; here we scan only
 # the unambiguous names.
 _PROSE_COLLISIONS = {"see", "manual", "predict", "recall", "speak", "vision", "bash", "delegate",
-                     "go", "remind"}   # `go`/`remind` are ordinary words too; per-stanza exactness
-                                       # is pinned in test_prompts.py's tool-name gate.
+                     "go", "remind",    # `go`/`remind` are ordinary words too; per-stanza exactness
+                                        # is pinned in test_prompts.py's tool-name gate.
+                     "http", "fetch"}   # http_request's aliases are ordinary words ("fetch a page").
 
 LADDER_POINTS = [
     ("newborn", []),
     ("mid", ["memory", "skillcraft"]),
-    ("grown", ["memory", "skillcraft", "foresight", "senses", "resolve", "workshop"]),
+    ("grown", ["memory", "skillcraft", "foresight", "senses", "resolve", "workshop", "reach"]),
     ("commissioned", ["memory", "skillcraft", "foresight", "senses", "resolve", "workshop",
-                      "commission"]),
+                      "reach", "commission"]),
+    ("self-authoring", ["memory", "skillcraft", "foresight", "senses", "resolve", "workshop",
+                        "reach", "commission", "self-authorship"]),
 ]
 
 

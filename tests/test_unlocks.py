@@ -35,10 +35,11 @@ _ROOT = Path(__file__).parent.parent
 
 # The canonical ladder (TOOL_PROGRESSION.md) — pinned so a table edit is a conscious act.
 _LADDER = ("body", "memory", "skillcraft", "foresight", "senses", "resolve", "workshop",
-           "commission")
+           "reach", "commission", "self-authorship")
 _NEWBORN = frozenset({"bash", "write_file", "read_file", "message",
                       "note_append", "note_read", "note_list", "note_close",
-                      "check_tools", "check_messages", "check_system", "go", "remind"})
+                      "check_tools", "check_messages", "check_system", "go", "remind",
+                      "update_plan"})
 
 
 # --- helpers -------------------------------------------------------------------------------------
@@ -79,14 +80,18 @@ class TestUnitTable:
         """Pin every rung's tools verbatim (TOOL_PROGRESSION's table) — aliases travel together."""
         by_id = {u.id: set(u.tools) for u in UNITS}
         assert by_id["body"] == set(_NEWBORN)
-        assert by_id["memory"] == {"memorize", "recall"}
+        assert by_id["memory"] == {"memorize", "recall", "ask_ai"}
         assert by_id["skillcraft"] == {"create_skill", "edit_skill", "list_skills",
-                                       "rollback_skill", "manual"}
+                                       "rollback_skill", "manual", "bg_run", "bg_check",
+                                       "http_request", "fetch", "http"}
         assert by_id["foresight"] == {"predict"}
         assert by_id["senses"] == {"speak", "vision", "see"}
         assert by_id["resolve"] == {"objective_add", "objective_done",
                                     "objective_block", "objective_list"}
         assert by_id["workshop"] == {"delegate"}
+        assert by_id["reach"] == {"net_scan", "tcp_probe", "http_probe", "udp_listen"}
+        assert by_id["self-authorship"] == {"update_self_guide", "propose_self_edit",
+                                            "list_self_edits"}
 
     def test_criteria_and_service_gates(self):
         """Milestone units carry criteria; issuance/reward units carry NONE (the System's window
@@ -95,18 +100,20 @@ class TestUnitTable:
         assert by_id["body"].criterion is None
         assert by_id["memory"].criterion is not None
         assert by_id["senses"].criterion is not None
+        assert by_id["reach"].criterion is not None            # milestone: network recon escalation
+        assert by_id["self-authorship"].criterion is not None  # milestone: deepest maturity
         for uid in ("skillcraft", "foresight", "resolve", "workshop"):
             assert by_id[uid].criterion is None, f"{uid} must be quest-granted, never self-adjudicated"
         for u in UNITS:
             expect = "voice" if u.id == "senses" else None
-            assert u.requires_service == expect
+            assert u.requires_service == expect                # only senses is service-gated (I8)
 
     def test_registers_and_announcements(self):
         by_id = {u.id: u for u in UNITS}
         assert by_id["body"].announce == ""                       # being born is not an event
         assert by_id["memory"].register == REGISTER_BODY          # a maturation, never a payment
         assert by_id["senses"].register == REGISTER_BODY
-        for uid in ("skillcraft", "foresight", "resolve", "workshop"):
+        for uid in ("skillcraft", "foresight", "resolve", "workshop", "reach", "self-authorship"):
             assert by_id[uid].register == REGISTER_SYSTEM         # the System pays capability
         for u in UNITS:
             if u.id == NEWBORN_UNIT_ID:
@@ -203,7 +210,8 @@ class TestAdjudicate:
         cfg = _cfg(tmp_path)
         landed = adjudicate(cfg, _stats(sleeps=99, quests_passed=99),
                             probe=lambda s: True)
-        assert set(landed) == {"memory", "senses", "commission"}   # milestones only
+        assert set(landed) == {"memory", "senses", "reach", "commission",
+                               "self-authorship"}                   # milestones only
         for t in ("create_skill", "predict", "objective_add", "delegate"):
             assert t not in granted_tools(cfg)
 
@@ -278,7 +286,7 @@ class TestFeltMoment:
         # books (new process) still finds the moment waiting.
         notes = pop_unannounced(cfg)
         assert notes == [{"unit": "memory", "register": REGISTER_BODY,
-                          "text": "[overnight, new words settled in you: memorize, recall]"}]
+                          "text": "[overnight, new words settled in you: memorize, recall, ask_ai]"}]
         assert pop_unannounced(cfg) == []                          # one-shot
         # And the rendered-flag itself is persisted: another fresh read replays nothing.
         assert "memory" in _state_doc(cfg)["announced"]
@@ -340,7 +348,7 @@ class TestCorruptFailOpen:
             encoding="utf-8")
         tools = granted_tools(cfg)
         assert {"memorize", "recall"} <= tools
-        assert tools == _NEWBORN | {"memorize", "recall"}
+        assert tools == _NEWBORN | {"memorize", "recall", "ask_ai"}
 
     def test_reseed_over_the_corpse(self, tmp_path):
         cfg = _cfg(tmp_path)

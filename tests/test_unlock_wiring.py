@@ -47,7 +47,8 @@ _ROOT = Path(__file__).parent.parent
 
 _NEWBORN = frozenset({"bash", "write_file", "read_file", "message",
                       "note_append", "note_read", "note_list", "note_close",
-                      "check_tools", "check_messages", "check_system", "go", "remind"})
+                      "check_tools", "check_messages", "check_system", "go", "remind",
+                      "update_plan"})
 
 
 # --- rig (test_wiring.py's shape) -----------------------------------------------------------------
@@ -152,23 +153,46 @@ class TestVisibleTools:
         vis = set(visible_tools(cfg))
         assert {"speak", "vision", "see"} <= vis      # the alias travels with its organ
 
-    def test_house_only_tools_never_exist(self, tmp_path):
-        """Even a fully-grown creature never sees the excluded house tools (TOOL_PROGRESSION).
-        NOTE (2026-07-20): check_system + check_messages were MOVED OUT of this exclusion into the
-        newborn `body` unit — self-knowledge (the architecture map, the talk with Charlie) is innate
-        proprioception, not a house tool; leaving check_system unreachable meant the creature could
-        never read its own manual. The rest of this list remains an open design question (the docs
-        describe propose_self_edit / update_plan / bg_run / the net toolkit as creature capabilities,
-        yet the ladder excludes them — unresolved)."""
-        cfg = _ladder_cfg(tmp_path)
-        unlocks.seed_from_evidence(cfg, {k: 1 for k in unlocks.EVIDENCE_KEYS})
-        vis = set(visible_tools(cfg))
-        for name in ("http_request", "fetch", "http", "bg_run", "bg_check", "ask_ai",
-                     "net_scan", "tcp_probe", "http_probe", "udp_listen", "update_plan",
-                     "update_self_guide", "propose_self_edit"):
-            assert name not in vis, f"house tool {name!r} leaked into the creature universe"
-        # ...but the self-knowledge tools ARE innate now:
-        assert {"check_system", "check_messages"} <= vis
+    def test_every_ever_builtin_is_reachable_via_some_unit(self, tmp_path):
+        """No PERMANENTLY-INVISIBLE builtin (2026-07-20 tiering): every ever-registered builtin —
+        the import-time set PLUS the flag-registered organs — now belongs to exactly one ladder
+        unit, so the grammar can emit it, check_tools/manual/dispatch see it, and a fully-grown
+        creature that has walked the whole ladder reaches ALL of them.
+
+        This test formerly PINNED a hidden set (http_request / ask_ai / bg_run / the net toolkit /
+        update_plan / the self-authorship tools were unit-less and thus invisible forever — a bug the
+        test had frozen, not a spec). Those tools are now tiered: update_plan→body, ask_ai→memory,
+        bg_run/bg_check/http_request(+fetch/http)→skillcraft, the net probe/scan powers→reach,
+        update_self_guide/propose_self_edit/list_self_edits→self-authorship. The residual house-only
+        set is EMPTY. This test now pins that membership: a newly-added unit-less builtin fails here,
+        forcing a conscious tiering decision instead of silently vanishing from the creature's world."""
+        # Every ever-registered builtin name is claimed by exactly one unit (also pinned in
+        # test_ladder_consistency.test_every_unit_tool_exists_in_the_registry, from the other side).
+        import tools as tools_mod
+        unit_tools = {t for u in unlocks.UNITS for t in u.tools}
+        residual = tools_mod._EVER_BUILTIN_NAMES - unit_tools
+        assert residual == set(), f"unit-less (permanently invisible) builtins: {sorted(residual)}"
+
+        # A fully-grown creature (all flag-gated organs on) reaches the once-hidden tools.
+        cfg = _ladder_cfg(tmp_path, pillars_expectations_enabled=True,
+                          pillars_commission_enabled=True, world_enabled=True,
+                          reminders_enabled=True)
+        tools_mod.register_predict_tool(cfg)
+        tools_mod.register_commission_tools(cfg)
+        tools_mod.register_world_tool(cfg)
+        tools_mod.register_reminders_tool(cfg)
+        try:
+            unlocks.seed_from_evidence(cfg, {k: 1 for k in unlocks.EVIDENCE_KEYS})
+            vis = set(visible_tools(cfg))
+            for name in ("http_request", "fetch", "http", "bg_run", "bg_check", "ask_ai",
+                         "net_scan", "tcp_probe", "http_probe", "udp_listen", "update_plan",
+                         "update_self_guide", "propose_self_edit", "list_self_edits",
+                         "check_system", "check_messages"):
+                assert name in vis, f"once-hidden tool {name!r} still unreachable when fully grown"
+        finally:
+            for n in ("predict", "commission_add", "commission_done", "weigh_options",
+                      "go", "remind"):
+                tools_mod.TOOLS.pop(n, None)
 
     def test_self_authored_skill_never_locked(self, tmp_path):
         cfg = _ladder_cfg(tmp_path)
@@ -397,13 +421,13 @@ class TestAnnouncementRegisters:
         body = _obs(cfg, "dream")
         system = _obs(cfg, "system_window")
         assert len(body) == 1 and len(system) == 1
-        assert body[0]["output"] == "overnight, new words settled in you: memorize, recall"
+        assert body[0]["output"] == "overnight, new words settled in you: memorize, recall, ask_ai"
         assert system[0]["output"] == "[SYSTEM] PAID: delegate. Capacity 1."
         thread = context_mod._build_history_thread(cfg)
         rendered = [m for m in thread if m["role"] == "user"]
         assert any(m["content"] == "[SYSTEM] PAID: delegate. Capacity 1." for m in rendered)
         assert any(m["content"] == "[you rested and consolidated memory — overnight, new words "
-                                   "settled in you: memorize, recall]" for m in rendered)
+                                   "settled in you: memorize, recall, ask_ai]" for m in rendered)
 
     def test_one_shot_never_replays(self, tmp_path):
         cfg = _ladder_cfg(tmp_path)
@@ -512,9 +536,11 @@ class TestCheckToolsSurface:
     def test_locked_names_absent_and_empty_state_generic(self, tmp_path):
         cfg = _ladder_cfg(tmp_path)
         out = tool_list_skills({}, cfg).output
-        for name in ("memorize", "recall", "create_skill", "bg_run", "update_plan"):
-            assert name not in out, f"check_tools names the locked/house tool {name!r}"
+        for name in ("memorize", "recall", "create_skill", "bg_run", "ask_ai", "http_request",
+                     "net_scan", "propose_self_edit"):
+            assert name not in out, f"check_tools names the locked tool {name!r}"
         assert "bash" in out
+        assert "update_plan" in out                   # a body-unit tool — granted at birth
         assert "(none yet)" in out                    # generic — the forge is not teased
 
     def test_grant_grows_the_listing(self, tmp_path):
@@ -539,23 +565,34 @@ class TestManualSurface:
 
     def test_locked_topic_indistinguishable_from_unknown(self, tmp_path):
         cfg = _ladder_cfg(tmp_path)
-        unlocks.grant(cfg, "skillcraft", "test")      # the manual itself exists, its pages don't
+        # memory grants ask_ai but NOT its page's siblings; a still-locked page (tts/speak) is
+        # indistinguishable from an unknown topic. (skillcraft would surface the cpu page — memory
+        # keeps only ask_ai, and tts stays locked, so the indistinguishability holds cleanly.)
+        unlocks.grant(cfg, "memory", "test")
         locked = tool_manual({"topic": "tts"}, cfg).output
         unknown = tool_manual({"topic": "zzz"}, cfg).output
         assert locked.replace("tts", "@") == unknown.replace("zzz", "@")
         assert "delegate" not in locked               # the topic list names only what exists
-        assert tool_manual({}, cfg).output == "The manual has no pages yet."
+        assert "## ask_ai" in tool_manual({}, cfg).output   # ask_ai's page arrives with its organ
 
     def test_pages_appear_with_their_organs(self, tmp_path):
         cfg = _ladder_cfg(tmp_path)
-        unlocks.grant(cfg, "skillcraft", "test")
-        unlocks.grant(cfg, "senses", "test")
-        unlocks.grant(cfg, "workshop", "test")
+        unlocks.grant(cfg, "memory", "test")          # → ask_ai page
+        unlocks.grant(cfg, "skillcraft", "test")      # → cpu page (bg_run)
+        unlocks.grant(cfg, "senses", "test")          # → tts, vision pages
+        unlocks.grant(cfg, "reach", "test")           # → network (net_scan), devices (http_probe)
+        unlocks.grant(cfg, "workshop", "test")        # → delegate page
         tts = tool_manual({"topic": "tts"}, cfg).output
         assert tts.startswith("## tts")
         whole = tool_manual({}, cfg).output
-        assert "## tts" in whole and "## vision" in whole and "## delegate" in whole
-        for gone in ("## network", "## devices", "## cpu", "## ask_ai", "_When something here"):
-            assert gone not in whole, f"{gone!r} rendered without its organ"
+        for present in ("## tts", "## vision", "## delegate", "## ask_ai", "## network",
+                        "## devices", "## cpu"):
+            assert present in whole, f"{present!r} missing though its organ is granted"
         miss = tool_manual({"topic": "zzz"}, cfg).output
-        assert "Topics: tts, vision, delegate." in miss
+        assert "Topics: tts, vision, ask_ai, network, devices, cpu, delegate." in miss
+
+    def test_page_absent_until_its_organ_lands(self, tmp_path):
+        """The inverse: a newborn (no units granted) has NO manual pages — every gate tool locked."""
+        cfg = _ladder_cfg(tmp_path)
+        whole = tool_manual({}, cfg).output
+        assert whole == "The manual has no pages yet."
