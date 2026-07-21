@@ -55,7 +55,9 @@ from prompts import (
 # The legacy constants are the FLAG-OFF surface: byte-identical rendering is doctrine, so their
 # bytes are pinned. Changing either is a conscious act: update the hash in the same commit that
 # proves flag-off behavior was meant to change.
-_LEGACY_CREATURE_SHA256 = "94da241b3784e5254ac16e0e975b69d71410057201c8e85c7a1a5c41c4f413a1"
+# 2026-07-20: reworded "the code that makes you go" → "…keeps you running" — `go` is now the world
+# movement tool (body unit), so it may not appear as prose in the timeless being-text (tool-name gate).
+_LEGACY_CREATURE_SHA256 = "081eec16a823221b455bd1642c032af94ff0572c7e8c95d6ea475caf6f06cfcf"
 _LEGACY_LOOP_SHA256 = "39d237e1bf0ca5befef58a031fc39e1d0575c6455362e0bb4d532e227b96dd01"
 
 # Every tool of every unit, mapped to its owning unit (unlocks is the single source of truth).

@@ -656,6 +656,10 @@ _PILLARS_WIRED_FLAGS = (
                                          #     moment, stage-expressed alleles + phenotype artifact
     "pillars_commission_enabled",        # COMMISSION_PLAN.md: standing orders — verbs registered,
                                          #     verdicts/claims settled at the after_outcome beat
+    "operator_directives_enabled",       # OPERATOR_DIRECTIVES: the System frames Charlie's command
+                                         #     as a priority objective (needs the hub for _live_llm)
+    "reminders_enabled",                 # the `remind` primitive: tool registration + per-tick
+                                         #     due-check both live behind the hub construction
 )
 
 

@@ -294,32 +294,45 @@ def add(config, title: str, why: str, priority: int = 5, tick: int = 0) -> dict:
 
 
 def add_operator_directive(config, title: str, why: str, *, priority: int = 9,
-                           tick: int = 0, source_key: str = "") -> dict:
-    """Charlie asked for something (via the System's directive path) — adopt it as the creature's
-    PRIORITY focus (OPERATOR_DIRECTIVES). Unlike `add`, this: (a) is origin="operator" (exempt from
-    park/death, sorts first), (b) PREEMPTS — becomes active_id even if another objective is active,
-    and (c) bypasses the hatchling stage carrying-cap (Charlie's word overrides pedagogy). Idempotent:
-    a re-emitted directive (same title, still live) is re-raised to active, not duplicated."""
+                           tick: int = 0, source_key: str = "", defer: bool = False) -> dict:
+    """Charlie asked for something (via the System's directive path) — adopt it (OPERATOR_DIRECTIVES).
+    origin="operator": exempt from park/death, sorts first, bypasses the hatchling stage cap.
+    NOW (defer=False): becomes active_id, PREEMPTING current focus. LATER (defer=True, e.g. "check in
+    in 10 minutes"): created BLOCKED on its reminder — it does NOT preempt now; the reminder's
+    `activate()` thaws it to focus at fire time. Idempotent: a re-emitted live directive is re-raised."""
     data = _load(config)
     live = [x for x in data["objectives"] if x.get("state") in ("active", "blocked")]
     for x in live:
         if x["title"].lower() == title.strip().lower():
+            if x.get("origin") != "operator":
+                # promoting a self-goal to Charlie's word: clean slate, don't inherit its
+                # accumulated frustration/exposure history (it's a fresh directive now).
+                x["frustration"] = 0
+                x["exposures"] = 0
             x["origin"] = "operator"
-            x["state"] = "active"
-            x["blocked_reason"] = None
             x["priority"] = max(int(x.get("priority", 5)), int(priority))
             if source_key:
                 x["source_key"] = source_key
             x["last_active_tick"] = tick
-            data["active_id"] = x["id"]          # re-raised directive preempts
+            if defer:
+                x["state"] = "blocked"
+                x["wake_condition"] = "reminder"     # thawed when its reminder fires
+            else:
+                x["state"] = "active"
+                x["blocked_reason"] = None
+                data["active_id"] = x["id"]          # re-raised directive preempts
             _save(config, data)
             return x
     o = _new(title, why, priority, tick, origin="operator")
     o["id"] = _unique_id(data, o["id"])
     if source_key:
         o["source_key"] = source_key
+    if defer:
+        o["state"] = "blocked"
+        o["wake_condition"] = "reminder"             # waits for its reminder — no preempt yet
     data["objectives"].append(o)
-    data["active_id"] = o["id"]                  # PREEMPT current focus
+    if not defer:
+        data["active_id"] = o["id"]                  # PREEMPT current focus
     _save(config, data)
     return o
 
@@ -360,8 +373,10 @@ def consolidate(config, tick: int = 0) -> dict:
         live = [o for o in objs if o.get("state") in ("active", "blocked")]
         merged, archived = [], []
 
-        def momentum(o):   # most progress, least frustration, most recent creation = the survivor
-            return (o.get("last_progress_tick", 0) - o.get("frustration", 0),
+        def momentum(o):   # operator directives ALWAYS survive a merge (Charlie's word never dies at
+                           # a nap — OD1/OD3); else most progress, least frustration, most recent.
+            return (1 if o.get("origin") == "operator" else 0,
+                    o.get("last_progress_tick", 0) - o.get("frustration", 0),
                     -o.get("created_tick", 0))
         survivors: list[dict] = []
         for o in sorted(live, key=momentum, reverse=True):
@@ -373,6 +388,15 @@ def consolidate(config, tick: int = 0) -> dict:
             if o.get("why") and o["why"].lower() not in (hit.get("why") or "").lower():
                 hit["why"] = ((hit.get("why") or "") + " / " + o["why"]).strip(" /")[:400]
             hit["attempts"] = int(hit.get("attempts", 0)) + int(o.get("attempts", 0))
+            if o.get("origin") == "operator":
+                # Belt-and-braces (the momentum sort already makes an operator obj the survivor):
+                # if one is ever the loser, carry its operator standing to the keeper so the
+                # exemptions + preemption transfer rather than dying with the merged row.
+                hit["origin"] = "operator"
+                hit["priority"] = max(int(hit.get("priority", 5)), int(o.get("priority", 5)))
+                if o.get("source_key"):
+                    hit["source_key"] = o["source_key"]
+                data["active_id"] = hit["id"]
             o["state"] = "dead"
             o["blocked_reason"] = f"merged into '{hit['title']}'"
             merged.append(o["id"])
@@ -387,7 +411,9 @@ def consolidate(config, tick: int = 0) -> dict:
                 # (exposures == 0) gets force-thawed at the nap instead of archived — exposure
                 # therapy: "you've avoided this for a long time; wake and test it." Only a block
                 # that HAS been re-tested and stayed stuck (exposures ≥ 1) earns the archive.
-                if int(o.get("exposures", 0)) < 1:
+                # An operator directive is NEVER auto-archived-dead (OD3): a stale one is force-thawed
+                # (re-tested), same as an untested block — only completion or an explicit block closes it.
+                if int(o.get("exposures", 0)) < 1 or o.get("origin") == "operator":
                     _thaw(o, tick)
                     exposed.append(o["id"])
                 else:

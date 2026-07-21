@@ -46,7 +46,9 @@ def _grant_upto(cfg, unit_ids):
 # text ("see", "manual", "predict", "recall" can all appear as ordinary words). The per-stanza
 # exactness for these is already pinned in test_prompts.py's tool-name gate; here we scan only
 # the unambiguous names.
-_PROSE_COLLISIONS = {"see", "manual", "predict", "recall", "speak", "vision", "bash", "delegate"}
+_PROSE_COLLISIONS = {"see", "manual", "predict", "recall", "speak", "vision", "bash", "delegate",
+                     "go", "remind"}   # `go`/`remind` are ordinary words too; per-stanza exactness
+                                       # is pinned in test_prompts.py's tool-name gate.
 
 LADDER_POINTS = [
     ("newborn", []),
@@ -60,6 +62,13 @@ LADDER_POINTS = [
 @pytest.mark.parametrize("label,extra_units", LADDER_POINTS)
 def test_three_surfaces_tell_one_story(tmp_path, label, extra_units):
     cfg = _cfg(tmp_path)
+    # `go`/`remind` are body-unit tools (granted at every point) but flag-REGISTERED organs
+    # (world_enabled / reminders_enabled). Enable + register them so they're VISIBLE to match the
+    # birth grant — the same pattern as commission below. Restored in the finally.
+    cfg.world_enabled = True
+    cfg.reminders_enabled = True
+    tools_mod.register_world_tool(cfg)
+    tools_mod.register_reminders_tool(cfg)
     if "commission" in extra_units:
         # The commission verbs are flag-registered builtins (like predict): the fully-grown point
         # exercises them VISIBLE; the registry is restored in the finally so no test inherits them.
@@ -69,6 +78,8 @@ def test_three_surfaces_tell_one_story(tmp_path, label, extra_units):
     try:
         _assert_one_story(cfg, label)
     finally:
+        tools_mod.TOOLS.pop("go", None)
+        tools_mod.TOOLS.pop("remind", None)
         if "commission" in extra_units:
             tools_mod.TOOLS.pop("commission_add", None)
             tools_mod.TOOLS.pop("commission_done", None)

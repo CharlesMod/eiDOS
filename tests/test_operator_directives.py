@@ -130,6 +130,52 @@ class TestDeferralSchedulesReminder(unittest.TestCase):
         self.assertEqual(reminders.pending(c), [])
 
 
+class TestDeferredDoesNotActNow(unittest.TestCase):
+    def test_deferred_directive_is_blocked_not_active(self):
+        c = _cfg(reminders_enabled=True)
+        objectives.add(c, "tend the nest", "cozy", priority=5, tick=1)  # a self-goal is active
+        obj = adm.apply_operator_directive(c, {"title": "check in with charlie",
+                                               "why": "he asked", "deferral": "10m"}, tick=2)
+        # deferred → created BLOCKED, does NOT preempt the current focus
+        self.assertEqual(obj["state"], "blocked")
+        self.assertNotEqual(objectives.get_active(c)["title"], "check in with charlie")
+        # ...until its reminder fires and activate() thaws it
+        import reminders
+        pend = reminders.pending(c)
+        objectives.activate(c, obj["id"], tick=99)
+        act = objectives.get_active(c)
+        self.assertEqual(act["title"], "check in with charlie")
+        self.assertEqual(act["state"], "active")
+
+    def test_unparseable_deferral_acts_now_with_a_note(self):
+        c = _cfg(reminders_enabled=True)
+        obj = adm.apply_operator_directive(c, {"title": "phone home", "why": "w",
+                                               "deferral": "whenever you feel like it"}, tick=1)
+        self.assertEqual(obj["state"], "active")            # not lost — acts now
+        self.assertIn("couldn't set a timer", obj["why"])   # intent preserved (ARCH #4)
+
+
+class TestConsolidateKeepsOperator(unittest.TestCase):
+    def test_operator_survives_merge_with_similar_self_goal(self):
+        c = _cfg()
+        objectives.add(c, "map the local network topology", "curiosity", priority=5, tick=1)
+        op = adm.apply_operator_directive(c, {"title": "map the local network", "why": "charlie"},
+                                          tick=2)
+        objectives.consolidate(c, tick=50)
+        act = objectives.get_active(c)
+        self.assertIsNotNone(act)
+        self.assertEqual(act["origin"], "operator")         # Charlie's word is the survivor
+        self.assertNotEqual(act["state"], "dead")
+
+
+class TestRemindVisibleUnderLadder(unittest.TestCase):
+    def test_remind_and_go_are_granted_by_a_unit(self):
+        import unlocks
+        body = next(u for u in unlocks.UNITS if u.id == "body")
+        self.assertIn("remind", body.tools)
+        self.assertIn("go", body.tools)
+
+
 class TestFlagDark(unittest.TestCase):
     def test_off_is_byte_identical_no_directive(self):
         c = _cfg(operator_directives_enabled=False)

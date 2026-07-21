@@ -47,7 +47,7 @@ _ROOT = Path(__file__).parent.parent
 
 _NEWBORN = frozenset({"bash", "write_file", "read_file", "message",
                       "note_append", "note_read", "note_list", "note_close",
-                      "check_tools", "check_messages", "check_system"})
+                      "check_tools", "check_messages", "check_system", "go", "remind"})
 
 
 # --- rig (test_wiring.py's shape) -----------------------------------------------------------------
@@ -136,7 +136,10 @@ class TestVisibleTools:
         cfg = _ladder_cfg(tmp_path)
         before = dict(TOOLS)
         vis = visible_tools(cfg)
-        assert set(vis) == _NEWBORN
+        # `go`/`remind` are GRANTED by the body unit but are flag-REGISTERED builtins (world_enabled /
+        # reminders_enabled) — with those organs off (as here) they aren't in TOOLS, so visible_tools
+        # correctly excludes them. granted_tools (the unit layer) still lists them; see those tests.
+        assert set(vis) == _NEWBORN - {"go", "remind"}
         assert dict(TOOLS) == before          # pure filter — no global mutation
         assert "memorize" in TOOLS            # the registry itself keeps every organ
 

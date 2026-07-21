@@ -120,9 +120,15 @@ UNITS: tuple[Unit, ...] = (
         # builtin in NO unit, so the ladder's "a builtin is visible only if granted" rule left it
         # PERMANENTLY invisible — the first creature could never read its own manual (observed
         # 2026-07-20: 0 check_system calls, and it reinvented what the doc would have handed it).
+        # `go` (world movement) and `remind` (persistent timer) are innate too: both are
+        # flag-REGISTERED builtins (world_enabled / reminders_enabled), so they only exist when
+        # their organ flag is on — but they must ALSO be granted by a unit or `visible_tools`'
+        # "a builtin is visible only if granted" rule hides them forever (the same trap that hid
+        # check_system, and hid `go`/`remind` until 2026-07-20). Navigating your world and setting
+        # a reminder are birth-level acts, so they live here; registration stays flag-gated.
         tools=("bash", "write_file", "read_file", "message",
                "note_append", "note_read", "note_list", "note_close",
-               "check_tools", "check_messages", "check_system"),
+               "check_tools", "check_messages", "check_system", "go", "remind"),
         criterion=None,
         requires_service=None,
         announce="",

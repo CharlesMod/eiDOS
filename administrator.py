@@ -782,7 +782,11 @@ class AdminReport:
 
 # Short common-word tool names the ladder's capstone gate also exempts: "see what changed" is
 # prose, not a leak. Kept in sync with tests/test_ladder_consistency.py.
-_PROSE_COLLISIONS = {"see", "manual", "predict", "recall", "speak", "vision", "bash", "delegate"}
+# Tool names that are ALSO ordinary English — never lint them as "locked door" leaks, or a
+# naturally-phrased directive ("remind Charlie", "go look at the network") gets refused whenever
+# the tool's organ flag is off (its name is in _EVER_BUILTIN_NAMES from import, regardless of flag).
+_PROSE_COLLISIONS = {"see", "manual", "predict", "recall", "speak", "vision", "bash", "delegate",
+                     "remind", "go"}
 
 
 def locked_tool_mentions(config, text: str) -> list[str]:
@@ -929,8 +933,9 @@ Output JSON only, matching the grammar:
   local network", "check in with Charlie"). Under ~80 chars. Use ONLY capabilities the creature
   actually has (see creature_tools in the context); never name a tool it lacks.
 - why: one plain sentence — the purpose, in Charlie's spirit. Under ~200 chars.
-- deferral: if Charlie asked for it LATER ("in 10 minutes", "in an hour", "at 3pm"), put the delay
-  or time here EXACTLY as a short token ("10m", "1h", "at 15:00"); otherwise empty string.
+- deferral: if Charlie asked for it LATER, put the delay/time here as a machine token — a relative
+  duration ("10m", "90s", "2h", "1h30m") or a 24-HOUR clock time ("at 15:00", NOT "3pm"); otherwise
+  empty string. Prefer a relative duration when he said "in N minutes/hours".
 """
 
 
@@ -1000,23 +1005,46 @@ def apply_operator_directive(config, directive: dict, *, tick: int = 0,
     Best-effort and fail-open — a books hiccup must never wound the tick."""
     if not directive or not directive.get("title"):
         return None
-    try:
-        import objectives as _obj
-        obj = _obj.add_operator_directive(config, directive["title"], directive.get("why", ""),
-                                          tick=tick, source_key=source_key)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("administrator: apply operator directive failed: %s", e)
-        return None
+    title = directive["title"]
+    why = directive.get("why", "")
     deferral = (directive.get("deferral") or "").strip()
+
+    # Resolve the deferral FIRST — a directive we can schedule is created BLOCKED (it waits on its
+    # reminder, no preempt now, so "check in in 10 minutes" does NOT act immediately). A deferral we
+    # cannot honour (unparseable, or reminders off) is NOT silently dropped (ARCH #4): we fold the
+    # timing into the `why` so the intent survives, log it, and fall back to acting now.
+    fire_ts = None
     if deferral and getattr(config, "reminders_enabled", False):
         try:
             import reminders as _rem
             fire_ts = _rem.parse_when(deferral)
-            if fire_ts:
-                _rem.set_reminder(config, directive["title"], fire_ts=fire_ts,
-                                  origin="operator", source_key=obj.get("id", ""))
-        except Exception as e:  # noqa: BLE001 - a reminder fault never blocks the objective
-            logger.warning("administrator: directive reminder failed: %s", e)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("administrator: deferral parse errored (%r): %s", deferral, e)
+            fire_ts = None
+    if deferral and not fire_ts:
+        why = (why + f" (Charlie asked for this {deferral}; couldn't set a timer — do it when apt.)").strip()
+        logger.info("administrator: directive '%s' deferral %r unschedulable — active now with a note",
+                    title, deferral)
+
+    try:
+        import objectives as _obj
+        obj = _obj.add_operator_directive(config, title, why, tick=tick,
+                                          source_key=source_key, defer=bool(fire_ts))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("administrator: apply operator directive failed: %s", e)
+        return None
+
+    if fire_ts:
+        try:
+            import reminders as _rem
+            _rem.set_reminder(config, title, fire_ts=fire_ts,
+                              origin="operator", source_key=obj.get("id", ""))
+        except Exception as e:  # noqa: BLE001 - a reminder fault: fall the objective back to active
+            logger.warning("administrator: directive reminder failed, activating now: %s", e)
+            try:
+                _obj.activate(config, obj.get("id", ""), tick=tick)
+            except Exception:  # noqa: BLE001
+                pass
     return obj
 
 

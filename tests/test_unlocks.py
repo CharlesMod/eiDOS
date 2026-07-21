@@ -38,7 +38,7 @@ _LADDER = ("body", "memory", "skillcraft", "foresight", "senses", "resolve", "wo
            "commission")
 _NEWBORN = frozenset({"bash", "write_file", "read_file", "message",
                       "note_append", "note_read", "note_list", "note_close",
-                      "check_tools", "check_messages", "check_system"})
+                      "check_tools", "check_messages", "check_system", "go", "remind"})
 
 
 # --- helpers -------------------------------------------------------------------------------------

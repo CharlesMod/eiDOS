@@ -1495,8 +1495,14 @@ def tool_check_system(args: dict, config: Config) -> ToolResult:
         nsk = len(_ls(config).get("skills", {}))
     except Exception:  # noqa: BLE001
         nsk = 0
-    header = (f"You have {len(TOOLS)} built-in tools and {nsk} authored skills "
-              f"(call check_tools for the full list).\n\n")
+    # Count what the creature can ACTUALLY reach right now (ARCH #4 — the manual must not claim
+    # tools the ladder currently hides). visible_tools is the one accessor every surface reads.
+    try:
+        nbuilt = len(visible_tools(config))
+    except Exception:  # noqa: BLE001
+        nbuilt = len(TOOLS)
+    header = (f"You have {nbuilt} built-in tools available right now and {nsk} authored skills "
+              f"(call check_tools for the exact list — some capabilities below unlock as you grow).\n\n")
     doc_path = Path(__file__).resolve().parent / "eidos_capabilities.md"
     try:
         doc = doc_path.read_text(encoding="utf-8", errors="replace")
