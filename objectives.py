@@ -193,7 +193,12 @@ def _by_id(data: dict, oid: Optional[str]) -> Optional[dict]:
 
 def get_active(config) -> Optional[dict]:
     data = _load(config)
-    return _by_id(data, data.get("active_id"))
+    o = _by_id(data, data.get("active_id"))
+    # Belt for a stale pointer: active_id must only ever surface a genuinely ACTIVE objective. A
+    # blocked/done/dead row left in active_id (e.g. a manually-blocked goal that nothing rotated off)
+    # must read as "no active focus", never be re-presented as the thing to work on — otherwise the
+    # creature re-blocks the same parked goal forever (the 2026-07-22 objective_block loop).
+    return o if o and o.get("state") == "active" else None
 
 
 def list_objectives(config) -> list[dict]:
@@ -581,6 +586,12 @@ def record_tick(config, made_progress: bool, tool_failed: bool, tick_number: int
             _save(config, data)
             return {"rotated": True, "parked": False, "escalate": False, "active": nxt,
                     "refuted_block": None}
+        # Active is blocked/stale and nothing else is workable. CLEAR the pointer — a blocked
+        # objective must never remain active_id, or get_active keeps surfacing it as the focus and
+        # the creature re-blocks the SAME parked goal every tick (the 2026-07-22 objective_block loop:
+        # a manually-blocked operator goal, wake-gated so _thaw_candidate skips it, stayed active_id
+        # and was re-parked 300+ times). Mirrors the park-branch (data["active_id"] = None) below.
+        data["active_id"] = None
         esc = _maybe_escalate(data, tick_number)
         _save(config, data)
         return {"rotated": False, "parked": False, "escalate": esc, "active": None}
