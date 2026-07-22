@@ -630,6 +630,53 @@ def _normalize_workspace_path(path: str, config: Config) -> Path:
 
 
 
+_NEST_SIGNPOST = """# START HERE
+
+Your nest (this folder) holds what YOU make. Your deeper docs, abilities, and memory
+are NOT files in here — you reach them by CALLING a tool, the same way you call any tool:
+
+- check_tools            — everything you can do RIGHT NOW. Start here whenever you're unsure.
+- check_system           — the map of what your platform already provides; read it before you
+                           build something, so you don't rebuild what already exists.
+- recall {"query":"..."} — search everything you have learned and been told.
+- manual {"topic":"..."} — verified how-to guides for your bigger abilities, e.g.
+                           manual {"topic":"skills"}. These pages open up as you grow into the
+                           tools they describe; call manual {} to see which pages are open to you.
+
+This file is a signpost, not a document to edit — it is read-only. If you ever find yourself
+trying to READ "the manual" (or any doc) as a FILE, that is your cue to call the tool instead.
+"""
+
+
+def ensure_nest_signpost(config: "Config") -> None:
+    """Seed (and refresh) a tiny read-only START_HERE signpost in the creature's nest. The nest holds
+    only what the creature makes; its deeper docs live behind TOOLS (manual/check_system/recall), not
+    files (see _creature_root). But the creature's instinct is to `ls`/`read` its home — and an operator
+    naturally refers to a doc by name — so a young creature can hunt fruitlessly for a 'manual' file
+    (the 2026-07-22 loop). One signpost meets that instinct and converts it into the right tool call,
+    WITHOUT copying gated, drift-prone content into a writable folder. Read-only so the creature can't
+    clobber it; rewritten each boot so template edits propagate and a deleted signpost self-heals.
+    Creature-mode only; best-effort — a signpost must never wound boot."""
+    if not getattr(config, "creature_mode", False):
+        return
+    try:
+        import stat as _stat
+        p = _creature_root(config) / "START_HERE.md"
+        if p.exists():
+            try:
+                p.chmod(_stat.S_IWUSR | _stat.S_IRUSR)   # make writable so we can refresh it
+                p.unlink()
+            except OSError:
+                pass
+        p.write_text(_NEST_SIGNPOST, encoding="utf-8")
+        try:
+            p.chmod(0o444)                                # a signpost, not a scratch file
+        except OSError:
+            pass
+    except Exception:  # noqa: BLE001 - never let a signpost fault break the boot
+        pass
+
+
 def _kill_pid_tree(pid: int) -> None:
     """Kill a process tree by PID (Windows-safe).
 

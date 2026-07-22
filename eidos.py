@@ -2015,6 +2015,14 @@ def run_loop(config: Config, persona=None, wal=None):
     except Exception as _e:  # noqa: BLE001
         logger.warning("objective seed failed: %s", _e)
 
+    # Nest signpost: a read-only START_HERE.md that points the creature's ls/read instinct at the
+    # doc TOOLS (manual/check_system/recall) instead of hunting for files that live outside its world.
+    try:
+        import tools as _tools
+        _tools.ensure_nest_signpost(config)
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("nest signpost seed failed: %s", _e)
+
     pfx = _pfx(persona, config)
     print(f"{pfx} Starting tick loop (interval={config.tick_interval_s}s, mock={config.mock_mode})")
 
