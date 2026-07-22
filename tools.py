@@ -1196,6 +1196,17 @@ def tool_read_file(args: dict, config: Config) -> ToolResult:
     path = parsed.path
 
     start = time.monotonic()
+    # The OPERATING_MANUAL is NOT a file in the creature's world — it's served by the `manual` TOOL, and
+    # it lives in the source tree the creature can't reach. A creature told to "read OPERATING_MANUAL.md"
+    # otherwise loops forever ls-ing its home for a file that isn't there (observed 2026-07-22). Redirect
+    # to the real access method (§never-lie: a typed failure carrying the real rule, not a bare errno-2).
+    if getattr(config, "creature_mode", False):
+        _base = os.path.basename(str(path)).strip().lower()
+        if _base.startswith("operating_manual") or _base in ("manual", "manual.md", "the_manual.md"):
+            return ToolResult(
+                output=("The manual isn't a file you read — it's the `manual` TOOL. Call it with a topic, "
+                        "e.g. manual {\"topic\":\"skills\"} for how to author skills, or manual {} for all of it."),
+                full_output_path=None, success=False, duration_s=time.monotonic() - start, fail_kind="args")
     try:
         p = _normalize_workspace_path(path, config)
         # Prevent path traversal outside workspace
