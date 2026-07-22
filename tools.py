@@ -2354,6 +2354,7 @@ def tool_speak(args: dict, config: Config) -> ToolResult:
 _MANUAL_TOPIC_GATES: dict[str, str] = {
     "tts": "speak", "vision": "vision", "ask_ai": "ask_ai", "network": "net_scan",
     "devices": "http_probe", "cpu": "bg_run", "delegate": "delegate",
+    "skills": "create_skill",   # the skill-authoring page — lands with the skillcraft rung (same as `manual`)
 }
 
 
@@ -2374,7 +2375,7 @@ def _manual_section_topic(s: str) -> str:
 
 def tool_manual(args: dict, config: Config) -> ToolResult:
     """Read your OPERATING MANUAL — tested how-to (exact endpoints, payloads, working examples) for your
-    big-lift features. Pass 'topic' (tts/vision/ask_ai/network/devices/cpu/delegate) for one section, or nothing
+    big-lift features. Pass 'topic' (tts/vision/ask_ai/network/devices/cpu/delegate/skills) for one section, or nothing
     for the whole thing. READ THIS before reverse-engineering a feature — the recipes are verified, so
     you skip the 405/404/500 dead-ends. e.g. manual {"topic":"tts"} before you try to speak."""
     import re
@@ -2405,7 +2406,9 @@ def tool_manual(args: dict, config: Config) -> ToolResult:
            "plug": "devices", "printer": "devices", "octoprint": "devices",
            "background": "cpu", "worker": "cpu", "script": "cpu", "bash": "cpu",
            "pi": "delegate", "coder": "delegate", "agent": "delegate",
-           "offload": "delegate", "handoff": "delegate", "coding": "delegate"}
+           "offload": "delegate", "handoff": "delegate", "coding": "delegate",
+           "skill": "skills", "create_skill": "skills", "edit_skill": "skills",
+           "author": "skills", "authoring": "skills", "make_skill": "skills", "tool": "skills"}
     want = syn.get(topic, topic)
     # §0 indistinguishability: a topic whose page does not exist in this world answers EXACTLY
     # like a topic that never existed — same wording, and the topic list names only what IS.

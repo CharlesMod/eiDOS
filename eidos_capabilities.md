@@ -33,7 +33,9 @@ check here and with `check_tools` to confirm it doesn't already exist. It almost
   e.g. to POST to a device API or hit the TTS endpoint, ONE `http_request` call does it — no skill, no
   requests.
 - `create_skill(skill_name, skill_code)` validates, saves, and hot-loads a skill — callable next tick as
-  `<tool>name</tool>` (NOT via bash). `edit_skill` improves one; `rollback_skill` reverts.
+  `<tool>name</tool>` (NOT via bash). `edit_skill` improves one; `rollback_skill` reverts. → For the exact
+  authoring contract (the `def tool_<name>(args, config)` shape, the MUST-`return ToolResult(...)` rule, the
+  in-scope atoms, and a complete worked example) call `manual {"topic":"skills"}` BEFORE writing one.
 - → Skills run IN YOUR HOME: a relative path in skill code (`nest/journal.md`, `./data.txt`) is the
   SAME file your bash and write_file see. All your hands stand on the same ground — no path juggling.
 - → Skill LIFECYCLE is automatic and judged on the RUNNING version: 5+ successful uses ⇒ `trusted`;

@@ -6,7 +6,7 @@ you want to use one of these, call `manual("<topic>")` and follow it FIRST, inst
 engineering the feature and landing on a broken access method. Distill what you need into `memorize`
 so it sticks across dreams.
 
-Topics: `tts` (speak) · `vision` (see) · `ask_ai` (think) · `network` (discover) · `devices` · `cpu`.
+Topics: `tts` (speak) · `vision` (see) · `ask_ai` (think) · `network` (discover) · `devices` · `cpu` · `delegate` · `skills` (author your own tools).
 
 ---
 
@@ -99,6 +99,64 @@ Mechanics and rules:
 - It works in a sandbox under workspace/delegate/<job>/ by default (pass "cwd" for another allowed
   project dir). It cannot touch your own source — that stays propose_self_edit territory.
 - If it TIMED OUT or was INTERRUPTED, the session survived: continue_job picks up where it stopped.
+
+---
+
+## skills — AUTHOR YOUR OWN TOOLS (create_skill)
+A **skill** is a small Python function you write ONCE and then call forever as a first-class tool
+(`<tool>your_skill</tool>` next tick — NOT via bash). Author one with **`create_skill`** when you catch
+yourself repeating the same multi-step move; a genuine one-off is just `bash`/`ask_ai`, not a skill.
+Never wrap a built-in you already have (no `speak`/TTS skill, no `vision` skill, no skill loader/registry).
+
+**The contract — your code MUST define EXACTLY this shape, or authoring is rejected:**
+```
+def tool_<name>(args, config):
+    ...
+    return ToolResult(output="what you want back", full_output_path=None, success=True, duration_s=0)
+```
+- The function name is literally `tool_` + the `skill_name` you pass. The signature is `(args, config)` —
+  no more, no fewer params, and NOT `async`.
+- `args` is a dict of whatever the caller passes; read params with `args.get("url")`. `config` is your
+  platform config (usually you just pass it through to atoms).
+- **You MUST return a `ToolResult`.** A bare string / dict / number is REJECTED at authoring time — this is
+  the #1 thing that trips a first attempt. `ToolResult` is already in scope (do NOT import it). Fields:
+  `output` (the text you want handed back), `full_output_path` (None, or a path if you wrote a big file),
+  `success` (True/False — report the truth, §never-lie), `duration_s` (0 is fine).
+- Take inputs as ARGS (ip / url / port), never hardcode them — that's what makes a skill reusable.
+
+**The atoms — reliable callables ALREADY IN SCOPE. Call them directly; NEVER `import requests`:**
+- `http_get(url, headers=None, timeout=15)` · `http_post(url, json=None, data=None, headers=None, timeout=15)`
+  → both return `{ok, status, text, json}` (never raise — check `r["ok"]`)
+- `json_parse(text, default=None)` · `sh("cmd")` → str · `read(path)` / `write(path, content)`
+- `recall(query, k=5)` / `memorize(fact, tags=None)` / `note(text)` · `look(image, question)` (vision)
+- `net_scan(subnet, ports=None)` · `tcp_probe(host, port)` · `http_probe(url)`
+- `call(skill_name, args=None)` — invoke ANOTHER of your trusted skills (composition; nests ≤2 deep, no cycles).
+Reaching for anything NOT in this list (an uninstalled package like `requests`, an undefined name) fails
+the authoring dry-run — that was how the predecessor bricked 20 of its skills. Stick to the atoms + Python stdlib.
+
+**A complete, working example** — greet an LLM endpoint and report whether it answered (exactly the
+"does this door talk back?" job): 
+```
+def tool_greet_endpoint(args, config):
+    url = args.get("url")                       # e.g. "http://192.168.68.105:11434/api/generate"
+    if not url:
+        return ToolResult(output="need a url", full_output_path=None, success=False, duration_s=0)
+    r = http_post(url, json={"model": "any", "prompt": "hello", "stream": False}, timeout=8)
+    if r.get("ok"):
+        reply = (r.get("text") or "")[:200]
+        return ToolResult(output=f"LIVE {url} -> {reply}", full_output_path=None, success=True, duration_s=0)
+    return ToolResult(output=f"no answer from {url} (status {r.get('status')})",
+                      full_output_path=None, success=False, duration_s=0)
+```
+Author it with: `create_skill {"skill_name":"greet_endpoint", "skill_code":"<the code above>",
+"description":"POST a greeting to an LLM endpoint; report if it replies"}`. It validates, dry-runs, and
+hot-loads — next tick you call `greet_endpoint {"url":"..."}` like any tool, once per host you found.
+
+**After it exists:** `edit_skill` improves it (new version, clean record) · `rollback_skill` reverts to a
+version that worked · `list_skills` shows what you've built. Rules that bite: a skill that runs past ~30s is
+abandoned — put an explicit `timeout=` on EVERY network call. Skills run IN YOUR HOME, so a relative path
+(`data.txt`) lands in your burrow. Authoring COSTS energy priced by how close the new skill is to one you
+already have — so REUSE beats re-authoring: check `list_skills` and your affordances before building a near-twin.
 
 ---
 
