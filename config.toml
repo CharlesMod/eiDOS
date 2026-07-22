@@ -180,7 +180,7 @@ embedding_model_dir = "models/all-MiniLM-L6-v2"   # in-process ONNX fallback whe
 # Pause/STOP stop it — so the embedder's resident GPU VRAM is freed whenever the creature is parked
 # and restored when it runs (unlike the llama-swap mind, this server does NOT idle-unload). The
 # dashboard manages it best-effort via `sudo -n systemctl` (POSIX only; empty = don't touch it).
-embedding_service = "llama-embedding.service"
+embedding_service = "eidos-embed.service"   # the live unit on Sprinter (was "llama-embedding.service", which doesn't exist)
 
 [delegate]
 # Hand long-horizon coding/investigation tasks to the pi coding agent (background job,
