@@ -492,11 +492,29 @@ def _pick_next(data: dict, exclude_id: str) -> Optional[dict]:
     return None
 
 
+def _wake_gated(o: dict) -> bool:
+    """A blocked OPERATOR objective the creature explicitly parked with a wake_condition it cannot
+    satisfy on its own (waiting on Charlie / an external event) — NOT a plain stall. Such an objective
+    is exempt from the exposure death valve (OD3: Charlie's word never auto-dies), so cooldown-thawing
+    it every THAW_COOLDOWN ticks makes the creature re-park the SAME 'over to you, Boss' report on a
+    loop — the world hasn't changed, only Charlie can change it (the 2026-07-22 park-churn: attempts
+    climbed past 300, frustration to 40, the creature saying 'parking this for real' a dozen ticks
+    running). It rests until a fresh operator spark re-raises it (add/add_operator_directive thaw on a
+    re-articulated directive) or a nap re-tests it (OD3 'never buried untested' still holds). A plain
+    stall (no wake_condition) stays eligible for exposure re-test; 'reminder' is handled by activate()."""
+    if o.get("origin") != "operator":
+        return False
+    wc = (o.get("wake_condition") or "").strip().lower()
+    return bool(wc) and wc != "reminder"
+
+
 def _thaw_candidate(data: dict, tick: int) -> Optional[dict]:
     """When nothing is active, retry a parked objective that has cooled down — lowest frustration,
-    oldest park. (A genuine 'come back to it later'.)"""
+    oldest park. (A genuine 'come back to it later'.) An operator objective resting on an unmet
+    wake_condition (_wake_gated) is skipped: re-thawing it tests nothing until Charlie sparks."""
     parked = [o for o in data["objectives"]
-              if o["state"] == "blocked" and (tick - o.get("last_active_tick", 0)) >= THAW_COOLDOWN]
+              if o["state"] == "blocked" and not _wake_gated(o)
+              and (tick - o.get("last_active_tick", 0)) >= THAW_COOLDOWN]
     if not parked:
         return None
     parked.sort(key=lambda o: (o["frustration"], o["last_active_tick"]))
